@@ -107,9 +107,7 @@ def main(
 async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
     """Async main loop for the LangGraph orchestration."""
     mode_label = "MOCK" if use_mock else "REAL"
-    print("=" * 60)
-    print(f"  VLM-RL Multi-Agent Grasping System  [{mode_label} MODE]")
-    print("=" * 60)
+    logger.info(f"Starting VLM-RL system [{'MOCK' if use_mock else 'REAL'} MODE]")
 
     trace_logger = TraceLogger(log_file=log_path)
     orchestrator = Orchestrator(trace_logger=trace_logger, use_mock=use_mock)
@@ -117,6 +115,7 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
     # Build initial LangGraph state
     context_id = uuid.uuid4().hex
     initial_state = {
+        "task_description": "",  # filled by input_node
         "current_observation": {"description": "System initialising..."},
         "reasoning": "",
         "call_module": "",

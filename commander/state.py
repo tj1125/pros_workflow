@@ -14,6 +14,9 @@ class CommanderState(TypedDict):
     Tracks the full lifecycle of an observation-reason-act cycle.
     """
 
+    # Human task description: set once at the start by the operator
+    task_description: str
+
     # Current environment observation (image data or mock description)
     current_observation: Dict[str, Any]
 

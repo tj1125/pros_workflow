@@ -43,6 +43,7 @@ class Orchestrator:
         workflow = StateGraph(CommanderState)
 
         # Core nodes
+        workflow.add_node("input_node", self._input_node)
         workflow.add_node("observe_node", self._observe_node)
         workflow.add_node("reason_node", self._reason_node)
         workflow.add_node("update_memory_node", self._update_memory_node)
@@ -53,10 +54,11 @@ class Orchestrator:
         workflow.add_node("approach_node", self._approach_node)
         workflow.add_node("view_node", self._view_node)
 
-        # Entry point
-        workflow.set_entry_point("observe_node")
+        # Entry point: wait for human input first
+        workflow.set_entry_point("input_node")
 
         # Fixed edges
+        workflow.add_edge("input_node", "observe_node")
         workflow.add_edge("observe_node", "reason_node")
         workflow.add_edge("nav_node", "update_memory_node")
         workflow.add_edge("grasp_node", "update_memory_node")
@@ -80,22 +82,60 @@ class Orchestrator:
         return workflow.compile()
 
     # ------------------------------------------------------------------
+    # Node: human input (runs ONCE at graph start)
+    # ------------------------------------------------------------------
+
+    async def _input_node(self, state: CommanderState) -> Dict[str, Any]:
+        """
+        Block and wait for a human task description from stdin.
+        If task_description is already set (e.g. injected by tests), skip stdin.
+        """
+        # Allow tests or programmatic callers to pre-fill task_description
+        existing = state.get("task_description", "").strip()
+        if existing:
+            logger.info(f"[input_node] Task pre-filled: {existing}")
+            return {"task_description": existing, "current_status": "INPUT_RECEIVED"}
+
+        loop = asyncio.get_event_loop()
+
+        print("\n" + "=" * 60)
+        print("  VLM-RL 多代理人抓取系統")
+        print("=" * 60)
+        task_desc = await loop.run_in_executor(
+            None,
+            lambda: input("\n請輸入任務指令（例如：抓取桌上的紅色杯子）：\n> "),
+        )
+
+        task_desc = task_desc.strip() or "請抓取桌上的目標物件"
+        logger.info(f"[input_node] Task received: {task_desc}")
+        print(f"\n✅ 任務已確認：{task_desc}")
+        print("-" * 60)
+
+        return {
+            "task_description": task_desc,
+            "current_status": "INPUT_RECEIVED",
+        }
+
+    # ------------------------------------------------------------------
     # Node: observe
     # ------------------------------------------------------------------
 
     async def _observe_node(self, state: CommanderState) -> Dict[str, Any]:
         """Fetch current environment observation (mock or Rosbridge)."""
+        task_desc = state.get("task_description", "抓取目標物件")
+
         if self.use_mock:
             obs = {
                 "description": (
-                    f"Mock scene at step {state.get('retry_count', 0)}: "
+                    f"任務：{task_desc} "
+                    f"| Mock scene at step {state.get('retry_count', 0)}: "
                     "Target object visible on table with partial occlusion."
                 ),
                 "image_path": None,
             }
         else:
             # TODO (Day-2): subscribe to /camera/rgb/image_raw via Rosbridge WebSocket
-            obs = state.get("current_observation", {"description": "No observation"})
+            obs = state.get("current_observation", {"description": task_desc})
 
         logger.info("[observe_node] Observation captured.")
         return {"current_observation": obs, "current_status": "OBSERVED"}

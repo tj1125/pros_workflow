@@ -52,6 +52,7 @@ async def test_mock_langgraph_loop() -> bool:
 
     context_id = uuid.uuid4().hex
     initial_state = {
+        "task_description": "Test: grab the red cup on the table",  # bypass input_node stdin
         "current_observation": {"description": "Test scene: red cup on white table"},
         "reasoning": "",
         "call_module": "",
