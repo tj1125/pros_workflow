@@ -1,0 +1,45 @@
+services:
+  vlm_rl_system:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: vlm-rl-system:latest
+    container_name: vlm_rl_system
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override MOCK_MODE here or in .env
+      MOCK_MODE: "${MOCK_MODE:-true}"
+
+      # VLM provider
+      VLM_PROVIDER: "${VLM_PROVIDER:-google}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+      GEMINI_MODEL: "${GEMINI_MODEL:-gemini-2.0-flash}"
+
+      # Ollama (optional)
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-}"
+
+      # RTX 3090 Inference Servers (A2A Servers — external network)
+      # Set these to the actual IP:Port of your GPU server
+      INF_NAV_URL: "${INF_NAV_URL:-}"
+      INF_GRASP_URL: "${INF_GRASP_URL:-}"
+      INF_VIEW_URL: "${INF_VIEW_URL:-}"
+
+      # Rosbridge (Unity digital twin — external network)
+      ROSBRIDGE_URL: "${ROSBRIDGE_URL:-ws://host.docker.internal:9090}"
+
+      # Logging
+      TRACE_LOG_FILE: "/app/logs/trace_logger.jsonl"
+
+    volumes:
+      # Persist trace logs outside the container
+      - ./logs:/app/logs
+
+    # No ports exposed — this container only makes outbound A2A calls to RTX 3090
+    # and optional Rosbridge WebSocket connections
+
+    # Ensure container can reach the external RTX 3090 host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

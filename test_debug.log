@@ -1,0 +1,12 @@
+/tmp/test_a2a_debug.py:11: DeprecationWarning: A2AClient is deprecated and will be removed in a future version. Use ClientFactory to create a client with a JSON-RPC transport.
+  client = A2AClient(httpx_client=hc, agent_card=card)
+Raw dump:
+{
+  "error": {
+    "code": -32001,
+    "data": null,
+    "message": "Task 4bf14f81e201497ab6eea9fb8ed31ad7 was specified but does not exist"
+  },
+  "id": null,
+  "jsonrpc": "2.0"
+}

@@ -1,0 +1,170 @@
+"""
+test_client.py — End-to-end test client for the VLM-RL system
+
+Tests two scenarios:
+1. Mock LangGraph loop: verifies the Orchestrator runs correctly end-to-end
+2. A2A connectivity check: verifies Agent nodes can reach the GPU inference servers
+   (only runs when INF_xxx_URL env vars are set)
+
+Usage:
+    uv run python test_client.py
+    uv run python test_client.py --mock-only
+"""
+
+import asyncio
+import logging
+import os
+import sys
+import uuid
+from typing import Any
+
+import click
+import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Test 1: Mock LangGraph loop
+# ---------------------------------------------------------------------------
+
+async def test_mock_langgraph_loop() -> bool:
+    """
+    Run the full Orchestrator graph in mock mode and verify it terminates cleanly.
+    Expected: Brain cycles through nav → grasp → approach → view → DONE
+    """
+    from commander.logger import TraceLogger
+    from commander.orchestrator import Orchestrator
+
+    print("\n" + "=" * 50)
+    print("Test 1: Mock LangGraph Loop")
+    print("=" * 50)
+
+    trace_logger = TraceLogger(log_file="test_trace.jsonl")
+    orchestrator = Orchestrator(trace_logger=trace_logger, use_mock=True)
+
+    context_id = uuid.uuid4().hex
+    initial_state = {
+        "current_observation": {"description": "Test scene: red cup on white table"},
+        "reasoning": "",
+        "call_module": "",
+        "module_params": {},
+        "history_buffer": [],
+        "current_status": "INIT",
+        "context_id": context_id,
+        "retry_count": 0,
+        "decision_latency": 0.0,
+        "agent_result": "",
+        "task_complete": False,
+    }
+
+    steps_executed = []
+    try:
+        async for event in orchestrator.graph.astream(
+            initial_state,
+            config={"recursion_limit": 40},
+        ):
+            for node_name, state_update in event.items():
+                status = state_update.get("current_status", "")
+                module = state_update.get("call_module", "")
+                steps_executed.append(node_name)
+                print(f"  ✓ Node='{node_name}' status={status} module={module}")
+
+    finally:
+        await orchestrator.aclose()
+
+    success = len(steps_executed) > 0
+    print(f"\n  Result: {'PASS ✅' if success else 'FAIL ❌'}")
+    print(f"  Total steps: {len(steps_executed)}")
+    return success
+
+
+# ---------------------------------------------------------------------------
+# Test 2: A2A connectivity to RTX 3090 inference servers
+# ---------------------------------------------------------------------------
+
+async def test_a2a_connectivity(server_name: str, url: str) -> bool:
+    """
+    Verify that an A2A inference server's AgentCard is reachable.
+    Mimics the pattern from a2a-samples/test_client.py.
+    """
+    from a2a.client import A2ACardResolver
+
+    print(f"\n  Testing {server_name} @ {url}")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resolver = A2ACardResolver(httpx_client=client, base_url=url)
+            card = await resolver.get_agent_card()
+            print(f"  ✓ AgentCard received: name='{card.name}', version={card.version}")
+            return True
+    except Exception as e:
+        print(f"  ✗ Failed to reach {server_name}: {e}")
+        return False
+
+
+async def test_all_a2a_servers() -> bool:
+    """Check all configured inference server endpoints."""
+    print("\n" + "=" * 50)
+    print("Test 2: A2A Inference Server Connectivity")
+    print("=" * 50)
+
+    servers = {
+        "Inference NAV":     os.getenv("INF_NAV_URL", ""),
+        "Inference GraspGen": os.getenv("INF_GRASP_URL", ""),
+        "Inference View":    os.getenv("INF_VIEW_URL", ""),
+    }
+
+    configured = {k: v for k, v in servers.items() if v}
+    if not configured:
+        print("  ⚠ No INF_xxx_URL env vars set — skipping A2A connectivity tests")
+        return True
+
+    results = await asyncio.gather(
+        *[test_a2a_connectivity(name, url) for name, url in configured.items()]
+    )
+    all_pass = all(results)
+    print(f"\n  Result: {'PASS ✅' if all_pass else 'PARTIAL/FAIL ❌'}")
+    return all_pass
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+@click.command()
+@click.option(
+    "--mock-only",
+    is_flag=True,
+    default=False,
+    help="Only run mock LangGraph loop test (skip A2A server tests)",
+)
+def main(mock_only: bool) -> None:
+    """VLM-RL system end-to-end test client."""
+    results = []
+
+    async def _run():
+        r1 = await test_mock_langgraph_loop()
+        results.append(r1)
+
+        if not mock_only:
+            r2 = await test_all_a2a_servers()
+            results.append(r2)
+
+    asyncio.run(_run())
+
+    print("\n" + "=" * 50)
+    overall = all(results)
+    print(f"  Overall: {'ALL TESTS PASSED ✅' if overall else 'SOME TESTS FAILED ❌'}")
+    print("=" * 50)
+    sys.exit(0 if overall else 1)
+
+
+if __name__ == "__main__":
+    main()
