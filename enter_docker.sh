@@ -1,42 +1,45 @@
 #!/bin/bash
 # VLM-RL System — Enter ROS Container
 #
-# First run : automatically installs uv + Python dependencies into .venv
-# Subsequent runs : .venv already exists, skips setup
+# Uses pros_rl_image (ROS 2 environment)
+# Python dependencies are installed into .venv_linux (Linux-compatible, separate from macOS .venv)
 #
 # Usage: ./enter_docker.sh
 
-SETUP_CMD='
-# --- VLM-RL auto-setup (runs only if .venv is missing) ---
-if [ ! -d /workspaces/VLM_RL/.venv ]; then
-  echo "⚙️  First run: setting up Python environment..."
-  pip install -q uv
-  cd /workspaces/VLM_RL && uv sync --frozen --no-dev
-  echo "✅ Setup complete!"
-fi
+# Inner bash script executed inside the container
+read -r -d '' INNER << 'EOF'
+echo "📦 Installing uv..."
+pip install -q uv
 
-# Aliases
-alias r="colcon build --symlink-install"
-alias run="cd /workspaces/VLM_RL && uv run python main.py"
-alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
-alias t="cd /workspaces/VLM_RL && uv run python test_client.py --mock-only"
-alias logs="cat /workspaces/VLM_RL/logs/trace_logger.jsonl | python3 -m json.tool 2>/dev/null || echo (no logs yet)"
-
-echo ""
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║  VLM-RL  |  ROS Container  |  /workspaces/VLM_RL  ║"
-echo "╠══════════════════════════════════════════════════════╣"
-echo "║  mock  → run main.py in mock mode                   ║"
-echo "║  run   → run main.py in real mode (needs .env)      ║"
-echo "║  t     → run test_client.py (mock-only)             ║"
-echo "║  r     → colcon build --symlink-install              ║"
-echo "║  logs  → print trace log                            ║"
-echo "╚══════════════════════════════════════════════════════╝"
-echo ""
-
+echo "📦 Syncing Python dependencies (Linux venv)..."
+export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
 cd /workspaces/VLM_RL
+uv sync --frozen --no-dev
+
+# Write persistent settings to bashrc
+cat >> ~/.bashrc << 'BASHRC'
+export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
+export PATH="$HOME/.local/bin:$PATH"
+alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
+alias run="cd /workspaces/VLM_RL && uv run python main.py --no-mock"
+alias t="cd /workspaces/VLM_RL && uv run python test_client.py --mock-only"
+alias r="colcon build --symlink-install"
+alias logs='cat /workspaces/VLM_RL/logs/trace_logger.jsonl | python3 -m json.tool 2>/dev/null || echo "no logs yet"'
+BASHRC
+
+echo ""
+echo "╔═══════════════════════════════════════════════════╗"
+echo "║  VLM-RL  |  ROS Container  |  /workspaces/VLM_RL ║"
+echo "╠═══════════════════════════════════════════════════╣"
+echo "║  mock   → main.py --mock                         ║"
+echo "║  run    → main.py --no-mock (needs real .env)    ║"
+echo "║  t      → test_client.py --mock-only             ║"
+echo "║  r      → colcon build --symlink-install         ║"
+echo "║  logs   → print trace log                        ║"
+echo "╚═══════════════════════════════════════════════════╝"
+
 exec bash
-'
+EOF
 
 docker run -it --rm \
   -v "$(pwd):/workspaces/VLM_RL" \
@@ -46,4 +49,4 @@ docker run -it --rm \
   --env OLLAMA_URL="http://140.116.82.233:11434" \
   --env OLLAMA_BASE_URL="http://140.116.82.233:11434" \
   registry.screamtrumpet.csie.ncku.edu.tw/unity_env/pros_rl_image:latest \
-  /bin/bash -c "$SETUP_CMD"
+  /bin/bash -c "$INNER"
