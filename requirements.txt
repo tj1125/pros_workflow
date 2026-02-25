@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-langgraph
-langchain
-httpx
-pydantic
-python-dotenv
