@@ -5,6 +5,8 @@ services:
       dockerfile: Containerfile
     image: vlm-rl-system:latest
     container_name: vlm_rl_system
+    tty: true
+    stdin_open: true
     restart: unless-stopped
     env_file:
       - .env

@@ -93,7 +93,7 @@ def main(
     else:
         use_mock = os.getenv("MOCK_MODE", "true").lower() == "true"
 
-    log_path = log_file or os.getenv("TRACE_LOG_FILE", "trace_logger.jsonl")
+    log_path = log_file or os.getenv("TRACE_LOG_FILE", "logs/trace_logger.jsonl")
 
     try:
         _validate_env(use_mock)
