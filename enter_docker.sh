@@ -14,7 +14,7 @@ pip install -q uv
 echo "📦 Syncing Python dependencies (Linux venv)..."
 export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
 cd /workspaces/VLM_RL
-uv sync --frozen --no-dev
+uv sync --frozen --no-dev --python 3.12
 
 # Write persistent settings to bashrc
 cat >> ~/.bashrc << 'BASHRC'
