@@ -11,6 +11,9 @@ read -r -d '' INNER << 'EOF'
 echo "📦 Installing uv..."
 pip install -q uv
 
+echo "📦 Downloading Python 3.12 (if missing)..."
+uv python install 3.12
+
 echo "📦 Syncing Python dependencies (Linux venv)..."
 export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
 cd /workspaces/VLM_RL
