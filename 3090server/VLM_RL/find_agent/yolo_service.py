@@ -18,7 +18,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = Path(__file__).parent.parent / "models" / "yolo11n.pt"
+_DEFAULT_MODEL = Path(__file__).parent.parent / "models" / "pure720.pt"
 
 
 class YoloService:
