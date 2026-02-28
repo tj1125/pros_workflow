@@ -8,7 +8,7 @@ Role in the system:
 
 Server (3090) responsibilities:
   - Run YOLO on each image
-  - Draw numbered bounding boxes (globally numbered 1, 2, 3...) on each image
+  - Draw globally-numbered bounding boxes (1, 2, 3...) on each image
   - Return: annotated images (base64) + detection metadata per number
 
 Commander responsibilities:
@@ -18,6 +18,7 @@ Commander responsibilities:
 """
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -108,34 +109,47 @@ class FindAgent:
 
     async def _a2a_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
         """
-        Real: capture all camera images, send to A2A Find Server, receive YOLO detections.
+        Real mode:
+          1. Capture images from all cameras via camera.py (Python 3.10 ROS subprocess).
+          2. Bundle as {camera_name: base64_string} and send to Find A2A Server on 3090.
+          3. Server runs YOLO, annotates images, returns yolo_detections dict.
         """
         from commander.camera import get_camera_image_base64
 
         cameras = _load_cameras()
-        image_payloads = []
+
+        # -- Step 1: Capture images from all cameras -------------------------
+        camera_images: Dict[str, str] = {}   # {camera_name: base64}
         for cam in cameras:
+            logger.info(f"[{self.AGENT_NAME}] Capturing image from {cam['name']} ...")
             b64 = await get_camera_image_base64(cam["name"], timeout_sec=15.0)
             if b64:
-                image_payloads.append({"camera": cam["name"], "image_base64": b64})
-                logger.info(f"[{self.AGENT_NAME}] Captured image from {cam['name']}.")
+                camera_images[cam["name"]] = b64
+                logger.info(f"[{self.AGENT_NAME}] ✅ {cam['name']} captured ({len(b64)//1024} KB).")
             else:
-                logger.warning(f"[{self.AGENT_NAME}] No image from {cam['name']}, skipping.")
+                logger.warning(f"[{self.AGENT_NAME}] ⚠ {cam['name']} returned no image, skipping.")
 
-        if not image_payloads:
+        if not camera_images:
             logger.error(f"[{self.AGENT_NAME}] No images captured from any camera.")
             return {"result": {"yolo_detections": {}}, "success": False}
 
+        # -- Step 2: Send to 3090 Find A2A Server ----------------------------
         try:
             resolver = A2ACardResolver(httpx_client=self._http_client, base_url=self._inf_url)
             agent_card = await resolver.get_agent_card()
             client = A2AClient(httpx_client=self._http_client, agent_card=agent_card)
 
-            import json
+            # Payload: see 3090server/VLM_RL/find_agent/agent_executor.py for schema
+            request_body = {
+                "camera_images": camera_images,
+                "task_description": params.get("task_description", ""),
+                "target_object": params.get("target_object", {}),
+            }
+
             payload = {
                 "message": {
                     "role": "user",
-                    "parts": [{"kind": "text", "text": json.dumps(image_payloads)}],
+                    "parts": [{"kind": "text", "text": json.dumps(request_body)}],
                     "message_id": uuid.uuid4().hex,
                     "context_id": context_id,
                 }
@@ -145,7 +159,9 @@ class FindAgent:
                 params=MessageSendParams(**payload),
             )
 
-            logger.info(f"[{self.AGENT_NAME}] Sending A2A request to {self._inf_url}")
+            logger.info(
+                f"[{self.AGENT_NAME}] Sending {len(camera_images)} image(s) to {self._inf_url}"
+            )
             response = await client.send_message(request)
             return {"result": self._parse_response(response), "success": True}
 
@@ -156,7 +172,6 @@ class FindAgent:
     @staticmethod
     def _parse_response(response: Any) -> Dict[str, Any]:
         """Parse YOLO detections from A2A artifact response."""
-        import json
         try:
             result = response.root.result
             if hasattr(result, "artifacts") and result.artifacts:

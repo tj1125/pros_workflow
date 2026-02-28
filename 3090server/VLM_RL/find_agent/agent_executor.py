@@ -24,7 +24,7 @@ class FindAgentExecutor(AgentExecutor):
     """
 
     def __init__(self):
-        self.yolo_service = YoloService("yolo11n.pt")
+        self.yolo_service = YoloService()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         try:
@@ -37,15 +37,19 @@ class FindAgentExecutor(AgentExecutor):
             body = json.loads(parts[0].root.text)
             camera_images: dict = body.get("camera_images", {})
             task_desc: str = body.get("task_description", "")
+            target_object: dict = body.get("target_object", {})
 
             if not camera_images:
                 await event_queue.enqueue_event(**build_error_artifact("No camera images provided"))
                 return
 
-            logger.info(f"Find request received for {len(camera_images)} images. Task: {task_desc}")
+            logger.info(f"Find request received for {len(camera_images)} images. Target: {target_object}")
 
             # Run detection
-            yolo_detections = self.yolo_service.detect_and_annotate(camera_images)
+            yolo_detections = self.yolo_service.detect_and_annotate(
+                camera_images=camera_images, 
+                target_object=target_object
+            )
 
             # Return as standard A2A artifact
             logger.info(f"Returning {len(yolo_detections)} detections.")

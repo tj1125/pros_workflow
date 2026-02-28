@@ -31,7 +31,7 @@ class YoloService:
             logger.error(f"[YoloService] Failed to load YOLO or weights not found: {e}")
             self._model = None
 
-    def detect_and_annotate(self, camera_images: Dict[str, str]) -> Dict[str, Any]:
+    def detect_and_annotate(self, camera_images: Dict[str, str], target_object: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Input: { "Camera1": "<base64_img>", "Camera2": "<base64_img>" }
         Output: { "1": {bbox, label, conf, camera, annotated_image_base64}, "2": ... }
@@ -68,8 +68,17 @@ class YoloService:
                     x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
                     conf = float(box.conf[0])
                     cls_id = int(box.cls[0])
-                    label = self._model.names[cls_id]
+                    label = self._model.names[cls_id].lower()  # Force lowercase for easier matching
                     
+                    # If target_object is specified, only find that specific object
+                    if target_object:
+                        target_id = target_object.get("id", "").lower()
+                        target_label = target_object.get("label", "")
+                        
+                        # E.g. pure720.pt might output 'doll', 'apple', 'wine'. Match with id.
+                        if label != target_id and label not in target_label:
+                            continue
+
                     logger.info(f"  - ID {global_id}: {label} ({conf:.2f}) at [{x1}, {y1}, {x2}, {y2}]")
 
                     # Draw red bounding box and ID text

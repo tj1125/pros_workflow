@@ -140,6 +140,10 @@ class Orchestrator:
 
         return {
             "task_description": task_desc,
+            "target_object": {
+                "id": selected.get("id"),
+                "label": selected.get("label")
+            },
             "current_status": "INPUT_RECEIVED",
         }
 
@@ -155,9 +159,14 @@ class Orchestrator:
         """
         task_desc = state.get("task_description", "")
 
+        target_obj = state.get("target_object", {})
+
         from agents.find_agent import FindAgent
         agent = FindAgent(http_client=self.http_client)
-        result = await agent.execute({"task_description": task_desc})
+        result = await agent.execute({
+            "task_description": task_desc,
+            "target_object": target_obj
+        })
         yolo_detections: Dict[int, Any] = result.get("result", {}).get("yolo_detections", {})
 
         # Save annotated images if server returned them
