@@ -36,6 +36,8 @@ agent_card = AgentCard(
             id="yolo_detect",
             name="YOLO Object Detection",
             description="Run YOLO on multi-camera images and return detections.",
+            tags=["vision", "yolo", "detection"],
+            examples=["detect objects in my cameras"],
             input_modes=["text"],
             output_modes=["text"],
         )

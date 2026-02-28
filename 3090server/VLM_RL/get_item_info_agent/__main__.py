@@ -36,6 +36,8 @@ agent_card = AgentCard(
             id="estimate_3d",
             name="3D Object Estimation",
             description="Estimate 3D world position and size from 2D bounding box.",
+            tags=["3d", "spatial"],
+            examples=["get 3d position of the detected object"],
             input_modes=["text"],
             output_modes=["text"],
         )
