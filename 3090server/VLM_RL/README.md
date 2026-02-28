@@ -33,7 +33,7 @@
 | A2A 代理人模組 (`python -m`) | Conda 虛擬環境名稱 | 負責功能 / 推論內容 | 主要特定依賴 |
 |-----------------------------|-------------------|------------------|------------|
 | `find_agent` | **`a2a_vlm_find`** | 接收多相機影像，進行 YOLO 目標辨識並畫框 | `ultralytics`, `Pillow` |
-| `get_item_info_agent` | **`a2a_vlm_info`** | 針對所選目標，推算 3D 空間位置與大小 | 目前與 find 共用依賴 |
+| `get_item_info_agent` | **`a2a_vlm_find`** | 針對所選目標，推算 3D 空間位置與大小 | 目前與 find 共用依賴，故使用相同的環境 |
 | `nav_agent` *(未來規劃)* | **`a2a_vlm_nav`** | 接收避障與相機資訊，推論底盤移動點 | *(待定)* |
 | `grasp_agent` *(未來規劃)* | **`a2a_vlm_grasp`**| 接收點雲，生成 6D 抓取姿態 (GraspGen) | PointNet 等 3D 庫 |
 | `approach_agent` *(未來規劃)* | **`a2a_vlm_approach`**| 接收抓取姿態，產生最後靠近的手臂控制策略 | *(待定)* |
