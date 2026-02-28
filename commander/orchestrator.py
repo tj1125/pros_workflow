@@ -98,7 +98,7 @@ class Orchestrator:
 
     async def _input_node(self, state: CommanderState) -> Dict[str, Any]:
         """
-        Block and wait for a human task description from stdin.
+        Display available objects from config/objects.yaml and wait for user selection.
         If task_description is already set (e.g. injected by tests), skip stdin.
         """
         # Allow tests or programmatic callers to pre-fill task_description
@@ -107,15 +107,31 @@ class Orchestrator:
             logger.info(f"[input_node] Task pre-filled: {existing}")
             return {"task_description": existing, "current_status": "INPUT_RECEIVED"}
 
-        loop = asyncio.get_event_loop()
+        from agents.find_agent import _load_objects
+        objects = _load_objects()
 
         print("\n" + "=" * 60)
         print("  VLM-RL 多代理人抓取系統")
         print("=" * 60)
-        task_desc = await loop.run_in_executor(
+        print("請選擇你要抓取的目標物：")
+        for i, obj in enumerate(objects, 1):
+            print(f"  {i}. {obj.get('label', obj.get('id', '未知'))}")
+        print("=" * 60)
+
+        loop = asyncio.get_event_loop()
+        choice_str = await loop.run_in_executor(
             None,
-            lambda: input("\n請輸入任務指令（例如：抓取桌上的紅色杯子）：\n> "),
+            lambda: input(f"\n請輸入目標物編號 (1-{len(objects)})：\n> "),
         )
+
+        try:
+            idx = int(choice_str.strip()) - 1
+            selected = objects[idx]
+        except (ValueError, IndexError):
+            print("輸入無效，預設選擇第一項。")
+            selected = objects[0] if objects else {"label": "未知的物品"}
+
+        task_desc = f"抓取{selected.get('label', selected.get('id', '目標物'))}"
 
         task_desc = task_desc.strip() or "請抓取桌上的目標物件"
         logger.info(f"[input_node] Task received: {task_desc}")
