@@ -1,39 +1,126 @@
+"""
+commander/camera.py — On-demand Unity Camera Image Retrieval
+
+Two responsibilities in one file:
+  1. When IMPORTED by the Python 3.12 venv (main app):
+     `get_camera_image_base64()` spawns this file as a subprocess using the
+     system Python 3.10 (which has rclpy compiled against it).
+
+  2. When run DIRECTLY via `/usr/bin/python3 camera.py <camera_name>`:
+     Acts as a ROS 2 client, fires the Trigger service, waits for the
+     CompressedImage topic, and prints the Base64 string to stdout.
+"""
+
 import asyncio
 import logging
-import subprocess
 import os
+import subprocess
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-async def get_camera_image_base64(camera_name: str = "Camera_Car", timeout_sec: float = 10.0) -> Optional[str]:
+
+# ---------------------------------------------------------------------------
+# Public API — called by orchestrator (Python 3.12 context)
+# ---------------------------------------------------------------------------
+
+async def get_camera_image_base64(
+    camera_name: str = "Camera_Car",
+    timeout_sec: float = 10.0,
+) -> Optional[str]:
     """
-    Run a separate Python 3.10 process to invoke rclpy (since our venv uses Python 3.12).
-    This cleanly avoids C-extension version conflicts (rclpy compiled for 3.10 but running in 3.12).
+    Spawn a Python 3.10 subprocess to fetch a single ROS 2 camera image.
+    Returns the image as a Base64-encoded string, or None on failure.
     """
     loop = asyncio.get_event_loop()
-    
-    def _capture():
-        script_path = os.path.join(os.path.dirname(__file__), "camera_310.py")
-        
-        logger.info(f"[Camera] Requesting image from Unity ({camera_name}) via Python 3.10 subprocess...")
+
+    def _capture() -> Optional[str]:
+        script = os.path.abspath(__file__)
         try:
-            # We explicitly call the system python which has ROS 2 packages installed
             result = subprocess.run(
-                ["/usr/bin/python3", script_path, camera_name],
+                ["/usr/bin/python3", script, camera_name],
                 capture_output=True,
                 text=True,
-                timeout=timeout_sec + 2.0
+                timeout=timeout_sec + 2.0,
             )
-            
             if result.returncode == 0 and result.stdout.strip():
                 logger.info("[Camera] Image received successfully.")
                 return result.stdout.strip()
-            else:
-                logger.error(f"[Camera] Failed to capture image. Error Output: {result.stderr.strip()}")
-                return None
-        except Exception as e:
-            logger.error(f"[Camera] Subprocess exception: {e}")
+            logger.error(f"[Camera] Capture failed: {result.stderr.strip()}")
             return None
-            
+        except Exception as exc:
+            logger.error(f"[Camera] Subprocess error: {exc}")
+            return None
+
     return await loop.run_in_executor(None, _capture)
+
+
+# ---------------------------------------------------------------------------
+# ROS 2 client — runs in Python 3.10 subprocess
+# ---------------------------------------------------------------------------
+
+def _camera_key(name: str) -> str:
+    key = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name.strip())
+    if not key:
+        return "camera"
+    return f"cam_{key}" if key[0].isdigit() else key
+
+
+if __name__ == "__main__":
+    import base64
+    import sys
+    import time
+
+    import rclpy
+    from rclpy.node import Node
+    from sensor_msgs.msg import CompressedImage
+    from std_srvs.srv import Trigger
+
+    class _Client(Node):
+        def __init__(self, camera_name: str, timeout: float):
+            super().__init__(f"vlm_cam_{int(time.time())}")
+            key = _camera_key(camera_name)
+            self._svc = f"/capture_image/{key}"
+            self._topic = f"/capture_image/{key}/rgb/compressed"
+            self._timeout = timeout
+            self._client = self.create_client(Trigger, self._svc)
+            self._msg: Optional[CompressedImage] = None
+            self._waiting = False
+            self.create_subscription(CompressedImage, self._topic, self._cb, 10)
+
+        def _cb(self, msg):
+            if self._waiting and self._msg is None:
+                self._msg = msg
+
+        def capture_base64(self) -> str:
+            if not self._client.wait_for_service(timeout_sec=self._timeout):
+                print(f"ERROR: {self._svc} not available", file=sys.stderr)
+                return ""
+            self._waiting = True
+            future = self._client.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(self, future, timeout_sec=self._timeout)
+            resp = future.result()
+            if not resp or not resp.success:
+                print(f"ERROR: Trigger failed — {getattr(resp, 'message', 'timeout')}", file=sys.stderr)
+                return ""
+            deadline = time.monotonic() + self._timeout
+            while time.monotonic() < deadline:
+                if self._msg is not None:
+                    break
+                rclpy.spin_once(self, timeout_sec=0.1)
+            self._waiting = False
+            if self._msg is None:
+                print("ERROR: Image topic timed out", file=sys.stderr)
+                return ""
+            return base64.b64encode(bytes(self._msg.data)).decode()
+
+    cam = sys.argv[1] if len(sys.argv) > 1 else "Camera_Car"
+    rclpy.init()
+    node = _Client(cam, timeout=10.0)
+    try:
+        result = node.capture_base64()
+        if result:
+            print(result)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
