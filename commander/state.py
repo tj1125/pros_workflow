@@ -50,3 +50,13 @@ class CommanderState(TypedDict):
 
     # Whether the task has been marked complete
     task_complete: bool
+
+    # Confirmed target object (set by find_node after user confirmation)
+    # Contains: id, label, position_3d, camera
+    target_object: Dict[str, Any]
+
+    # Candidate objects returned by find_node (before user confirmation)
+    candidate_objects: List[Dict[str, Any]]
+
+    # Whether find_node has been completed (prevents re-running)
+    find_complete: bool

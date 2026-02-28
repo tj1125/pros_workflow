@@ -4,9 +4,6 @@ __pycache__/
 .env
 .venv_linux/
 logs/
-build/
-install/
-log/
 *.jsonl
 *.log
 .venv/

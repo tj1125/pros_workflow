@@ -86,6 +86,7 @@ class Brain:
         obs = state.get("current_observation", {})
         history = state.get("history_buffer", [])
         retry = state.get("retry_count", 0)
+        target = state.get("target_object", {})
 
         history_summary = "\n".join(
             [
@@ -96,8 +97,11 @@ class Brain:
         ) or "  (no history yet)"
 
         obs_desc = obs.get("description", "Camera image unavailable (mock mode)")
+        target_label = target.get("label") or target.get("id") or "unspecified"
+        target_pos = target.get("position_3d", "unknown")
 
         text_content = (
+            f"## Target Object\nLabel: {target_label}\n3D Position (approx): {target_pos}\n\n"
             f"## Current Observation\n{obs_desc}\n\n"
             f"## Action History (last 3)\n{history_summary}\n\n"
             f"## Retry Count\n{retry}\n\n"

@@ -1,0 +1,16 @@
+# objects.yaml — Graspable object registry
+# List all objects in the Unity scene that the robot may be asked to grasp.
+
+graspable_objects:
+  - id: doll
+    label: 褐色小熊玩偶
+  - id: apple
+    label: 紅色蘋果
+  - id: wine
+    label: 綠色玻璃酒瓶
+  # - id: banana
+  #   label: 香蕉
+  # - id: water
+  #   label: 水瓶
+    
+    

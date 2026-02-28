@@ -44,6 +44,7 @@ class Orchestrator:
 
         # Core nodes
         workflow.add_node("input_node", self._input_node)
+        workflow.add_node("find_node", self._find_node)
         workflow.add_node("observe_node", self._observe_node)
         workflow.add_node("reason_node", self._reason_node)
         workflow.add_node("update_memory_node", self._update_memory_node)
@@ -58,7 +59,8 @@ class Orchestrator:
         workflow.set_entry_point("input_node")
 
         # Fixed edges
-        workflow.add_edge("input_node", "observe_node")
+        workflow.add_edge("input_node", "find_node")
+        workflow.add_edge("find_node", "observe_node")
         workflow.add_edge("observe_node", "reason_node")
         workflow.add_edge("nav_node", "update_memory_node")
         workflow.add_edge("grasp_node", "update_memory_node")
@@ -114,6 +116,52 @@ class Orchestrator:
         return {
             "task_description": task_desc,
             "current_status": "INPUT_RECEIVED",
+        }
+
+    # ------------------------------------------------------------------
+    # Node: find (runs once to locate the target object)
+    # ------------------------------------------------------------------
+
+    async def _find_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Locate all candidate objects using multi-camera images, then ask human to confirm target."""
+        task_desc = state.get("task_description", "")
+
+        from agents.find_agent import FindAgent
+        agent = FindAgent(http_client=self.http_client)
+        result = await agent.execute({"task_description": task_desc})
+        candidates = result.get("result", [])
+
+        # Present candidates to human
+        print("\n" + "=" * 50)
+        print("  找到以下可能的目標物：")
+        print("=" * 50)
+        for i, obj in enumerate(candidates, 1):
+            print(f"  {i}. {obj.get('label', obj.get('id', '未知'))}")
+        print("="* 50)
+
+        loop = asyncio.get_event_loop()
+        choice_str = await loop.run_in_executor(
+            None,
+            lambda: input(f"請輸入目標物編號 (1-{len(candidates)})：\n> "),
+        )
+
+        try:
+            idx = int(choice_str.strip()) - 1
+            target = candidates[idx]
+        except (ValueError, IndexError):
+            logger.warning("[find_node] Invalid choice, defaulting to first candidate.")
+            target = candidates[0] if candidates else {}
+
+        label = target.get('label', target.get('id', '目標物'))
+        logger.info(f"[find_node] Target confirmed: {label}")
+        print(f"\n✅ 目標確認：{label}")
+        print("-" * 50)
+
+        return {
+            "candidate_objects": candidates,
+            "target_object": target,
+            "find_complete": True,
+            "current_status": "TARGET_FOUND",
         }
 
     # ------------------------------------------------------------------
