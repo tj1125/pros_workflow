@@ -1,0 +1,5 @@
+a2a-sdk>=0.2.0
+ultralytics>=8.0.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+Pillow>=10.0.0
