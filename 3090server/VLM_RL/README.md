@@ -6,7 +6,6 @@
 
 ```
 3090server/VLM_RL/
-├── requirements.txt       # 共用依賴套件 (a2a-sdk, YOLO 等)
 ├── README.md
 ├── a2a_utils/             # A2A 回應生成工具
 │   ├── __init__.py
@@ -15,6 +14,7 @@
 ├── models/                # 模型權重存放區 (.pt, .onnx 等)
 │
 ├── find_agent/            # Find Server (Port 8005)
+│   ├── requirements.txt   # (主要依賴：a2a-sdk, YOLO 等)
 │   ├── __init__.py
 │   ├── __main__.py        # uvicorn API 啟動點
 │   ├── agent_executor.py  # A2A 執行緒
@@ -33,23 +33,23 @@
 | A2A 代理人模組 (`python -m`) | Conda 虛擬環境名稱 | 負責功能 / 推論內容 | 主要特定依賴 |
 |-----------------------------|-------------------|------------------|------------|
 | `find_agent` | **`a2a_vlm_find`** | 接收多相機影像，進行 YOLO 目標辨識並畫框 | `ultralytics`, `Pillow` |
-| `get_item_info_agent` | **`a2a_vlm_find`** | 針對所選目標，推算 3D 空間位置與大小 | 目前與 find 共用依賴，故使用相同的環境 |
+| `get_item_info_agent` | **`a2a_vlm_find`** | 針對所選目標，推算 3D 空間位置與大小 | 共用依賴環境 |
 | `nav_agent` *(未來規劃)* | **`a2a_vlm_nav`** | 接收避障與相機資訊，推論底盤移動點 | *(待定)* |
 | `grasp_agent` *(未來規劃)* | **`a2a_vlm_grasp`**| 接收點雲，生成 6D 抓取姿態 (GraspGen) | PointNet 等 3D 庫 |
 | `approach_agent` *(未來規劃)* | **`a2a_vlm_approach`**| 接收抓取姿態，產生最後靠近的手臂控制策略 | *(待定)* |
 
 > **💡 實務提醒：** 
-> 由於目前 `find_agent` 與 `get_item_info_agent` 的 Python 版本需求 (3.10+) 相同，且依賴完全相容，為了省事，你**可以直接共用 `a2a_vlm_find` 這個環境**來跑這兩個 Agent。
+> 由於目前 `find_agent` 與 `get_item_info_agent` 的核心依賴相同且相容，為了簡化環境管理，**可以直接共用 `a2a_vlm_find` 這個環境**。
 
 ### 1. 建立環境與安裝 (只需執行一次)
 ```bash
-# 建立專屬虛擬環境 (加上 a2a_vlm_ 前綴以利辨識本專案)
+# 1. 建立專屬虛擬環境 (Python 3.11)
 conda create -n a2a_vlm_find python=3.11 -y
 conda activate a2a_vlm_find
 
-# 安裝所需依賴套件
+# 2. 安裝所需依賴套件 (路徑位於 find_agent 資料夾下)
 cd 3090server/VLM_RL
-pip install -r requirements.txt
+pip install -r find_agent/requirements.txt
 ```
 
 ### 2. 啟動服務
