@@ -28,34 +28,44 @@
 
 ## 虛擬環境與啟動方式
 
-對於依賴高度重疊且 Python 版本相同的 Agent（例如目前的 `find_agent` 與 `get_item_info_agent`），
-我們建立一個共用的 Conda 虛擬環境 `vlm_a2a`。如果未來有依賴完全衝突的新 Agent，再另外建專屬環境。
+為了與系統其他專案區分，並為未來的各個 Agent 保留擴展性，我們採用 `a2a_vlm_<agent_name>` 的命名規則。以下是本專案 3090 伺服器端的 Agent 對應表：
 
-### 1. 建立並安裝共用環境 (只需執行一次)
+| A2A 代理人模組 (`python -m`) | Conda 虛擬環境名稱 | 負責功能 / 推論內容 | 主要特定依賴 |
+|-----------------------------|-------------------|------------------|------------|
+| `find_agent` | **`a2a_vlm_find`** | 接收多相機影像，進行 YOLO 目標辨識並畫框 | `ultralytics`, `Pillow` |
+| `get_item_info_agent` | **`a2a_vlm_info`** | 針對所選目標，推算 3D 空間位置與大小 | 目前與 find 共用依賴 |
+| `nav_agent` *(未來規劃)* | **`a2a_vlm_nav`** | 接收避障與相機資訊，推論底盤移動點 | *(待定)* |
+| `grasp_agent` *(未來規劃)* | **`a2a_vlm_grasp`**| 接收點雲，生成 6D 抓取姿態 (GraspGen) | PointNet 等 3D 庫 |
+| `approach_agent` *(未來規劃)* | **`a2a_vlm_approach`**| 接收抓取姿態，產生最後靠近的手臂控制策略 | *(待定)* |
+
+> **💡 實務提醒：** 
+> 由於目前 `find_agent` 與 `get_item_info_agent` 的 Python 版本需求 (3.10+) 相同，且依賴完全相容，為了省事，你**可以直接共用 `a2a_vlm_find` 這個環境**來跑這兩個 Agent。
+
+### 1. 建立環境與安裝 (只需執行一次)
 ```bash
-# 建立共用虛擬環境
-conda create -n vlm_a2a python=3.10 -y
-conda activate vlm_a2a
+# 建立專屬虛擬環境 (加上 a2a_vlm_ 前綴以利辨識本專案)
+conda create -n a2a_vlm_find python=3.10 -y
+conda activate a2a_vlm_find
 
-# 安裝所有 Agent 共用的依賴套件
+# 安裝所需依賴套件
 cd 3090server/VLM_RL
 pip install -r requirements.txt
 ```
 
 ### 2. 啟動服務
-開啟不同的終端機視窗，皆確保處於 `vlm_a2a` 環境中：
+開啟兩個終端機視窗，都確認在 `a2a_vlm_find` 環境下：
 
 **視窗 A: Find Agent Server (Port 8005)**
 ```bash
 cd 3090server/VLM_RL
-conda activate vlm_a2a
+conda activate a2a_vlm_find
 python -m find_agent
 ```
 
 **視窗 B: Get Item Info Agent Server (Port 8006)**
 ```bash
 cd 3090server/VLM_RL
-conda activate vlm_a2a
+conda activate a2a_vlm_find
 python -m get_item_info_agent
 ```
 
