@@ -14,17 +14,21 @@ from typing import Dict, Any
 
 from PIL import Image, ImageDraw, ImageFont
 
+from pathlib import Path
+
 logger = logging.getLogger(__name__)
+
+_DEFAULT_MODEL = Path(__file__).parent.parent / "models" / "yolo11n.pt"
 
 
 class YoloService:
-    def __init__(self, model_path: str = "yolo11n.pt"):
+    def __init__(self, model_path: str = str(_DEFAULT_MODEL)):
         try:
             from ultralytics import YOLO
             self._model = YOLO(model_path)
             logger.info(f"[YoloService] Loaded model: {model_path}")
         except Exception as e:
-            logger.error(f"[YoloService] Failed to load YOLO: {e}")
+            logger.error(f"[YoloService] Failed to load YOLO or weights not found: {e}")
             self._model = None
 
     def detect_and_annotate(self, camera_images: Dict[str, str]) -> Dict[str, Any]:

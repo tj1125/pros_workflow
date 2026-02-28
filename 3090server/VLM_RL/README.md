@@ -12,6 +12,8 @@
 │   ├── __init__.py
 │   └── response.py
 │
+├── models/                # 模型權重存放區 (.pt, .onnx 等)
+│
 ├── find_agent/            # Find Server (Port 8005)
 │   ├── __init__.py
 │   ├── __main__.py        # uvicorn API 啟動點
