@@ -6,6 +6,7 @@
 
 ```
 3090server/VLM_RL/
+├── requirements.txt       # 共用依賴套件 (a2a-sdk, YOLO 等)
 ├── README.md
 ├── a2a_utils/             # A2A 回應生成工具
 │   ├── __init__.py
@@ -14,14 +15,12 @@
 ├── models/                # 模型權重存放區 (.pt, .onnx 等)
 │
 ├── find_agent/            # Find Server (Port 8005)
-│   ├── requirements.txt   # (包含 YOLO 等依賴)
 │   ├── __init__.py
 │   ├── __main__.py        # uvicorn API 啟動點
 │   ├── agent_executor.py  # A2A 執行緒
 │   └── yolo_service.py    # YOLO 推論封裝
 │
 └── get_item_info_agent/   # Get Item Info Server (Port 8006)
-    ├── requirements.txt   # (基礎 A2A 依賴)
     ├── __init__.py
     ├── __main__.py
     └── agent_executor.py
@@ -29,38 +28,34 @@
 
 ## 虛擬環境與啟動方式
 
-強烈建議**為每一個 Agent 建立專屬的 Conda 虛擬環境**，避免套件衝突。
-我們統一採用的命名規則為 `vlm_env_<agent_name>`。
+對於依賴高度重疊且 Python 版本相同的 Agent（例如目前的 `find_agent` 與 `get_item_info_agent`），
+我們建立一個共用的 Conda 虛擬環境 `vlm_a2a`。如果未來有依賴完全衝突的新 Agent，再另外建專屬環境。
 
-### 1. 啟動 Find Agent (環境：vlm_env_find)
-負責運行 YOLO 推論，並將標記的圖片回傳。
-
+### 1. 建立並安裝共用環境 (只需執行一次)
 ```bash
-# 1. 建立並進入專屬環境 (只需執行一次)
-conda create -n vlm_env_find python=3.10 -y
-conda activate vlm_env_find
+# 建立共用虛擬環境
+conda create -n vlm_a2a python=3.10 -y
+conda activate vlm_a2a
 
-# 2. 安裝套件
+# 安裝所有 Agent 共用的依賴套件
 cd 3090server/VLM_RL
-pip install -r find_agent/requirements.txt
+pip install -r requirements.txt
+```
 
-# 3. 啟動服務 (需維持環境在 vlm_env_find)
+### 2. 啟動服務
+開啟不同的終端機視窗，皆確保處於 `vlm_a2a` 環境中：
+
+**視窗 A: Find Agent Server (Port 8005)**
+```bash
+cd 3090server/VLM_RL
+conda activate vlm_a2a
 python -m find_agent
 ```
 
-### 2. 啟動 Get Item Info Agent (環境：vlm_env_get_item_info)
-負責計算目標物的 3D 空間位置。
-
+**視窗 B: Get Item Info Agent Server (Port 8006)**
 ```bash
-# 1. 建立並進入專屬環境 (只需執行一次)
-conda create -n vlm_env_get_item_info python=3.10 -y
-conda activate vlm_env_get_item_info
-
-# 2. 安裝套件
 cd 3090server/VLM_RL
-pip install -r get_item_info_agent/requirements.txt
-
-# 3. 啟動服務 (需維持環境在 vlm_env_get_item_info)
+conda activate vlm_a2a
 python -m get_item_info_agent
 ```
 
