@@ -6,6 +6,7 @@ Usage: python -m get_item_info_agent
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -24,11 +25,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PORT = 8006
+EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
 
 agent_card = AgentCard(
     name="Get Item Info Agent Server",
     description="Receives camera and 2D bounding box, returns 3D world position and size estimation.",
-    url=f"http://0.0.0.0:{PORT}/",
+    url=f"http://{EXTERNAL_IP}:{PORT}/",
     version="1.0.0",
     capabilities=AgentCapabilities(streaming=False),
     skills=[

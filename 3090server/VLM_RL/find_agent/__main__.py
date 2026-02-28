@@ -6,6 +6,7 @@ Usage: python -m find_agent
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -24,11 +25,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PORT = 8005
+EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
 
 agent_card = AgentCard(
     name="Find Agent Server",
     description="Receives multi-camera RGB images, runs YOLO detection, and returns globally-numbered candidate objects.",
-    url=f"http://0.0.0.0:{PORT}/",
+    url=f"http://{EXTERNAL_IP}:{PORT}/",
     version="1.0.0",
     capabilities=AgentCapabilities(streaming=False),
     skills=[
