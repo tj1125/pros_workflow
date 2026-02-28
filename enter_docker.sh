@@ -35,19 +35,29 @@ echo "GPU Flags: $GPU_FLAGS"
 
 # Inner bash script executed inside the container
 read -r -d '' DOCKER_CMD << 'EOF'
-echo "📦 Installing uv..."
-pip install -q uv
-
-echo "📦 Downloading Python 3.12 (if missing)..."
-uv python install 3.12
-
-echo "📦 Syncing Python dependencies (Linux venv)..."
+# Setup uv paths and persistent Python install directory
+export PATH="$HOME/.local/bin:$PATH"
+export UV_PYTHON_INSTALL_DIR=/workspaces/VLM_RL/.uv_python
 export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
-cd /workspaces/VLM_RL
-uv sync --frozen --no-dev --python 3.12
+
+# Check if environment is already fully set up to skip redundant steps
+if ! command -v uv &> /dev/null || [ ! -d "$UV_PROJECT_ENVIRONMENT" ]; then
+    echo "📦 Initializing VLM-RL Environment (First run might take a minute)..."
+
+    echo "   📥 Installing uv..."
+    pip install -q uv
+
+    echo "   � Downloading Python 3.12..."
+    uv python install 3.12
+
+    echo "   � Syncing Python dependencies (Linux venv)..."
+    cd /workspaces/VLM_RL
+    uv sync --frozen --no-dev --python 3.12
+fi
 
 # Write persistent settings to bashrc
 cat >> ~/.bashrc << 'BASHRC'
+export UV_PYTHON_INSTALL_DIR=/workspaces/VLM_RL/.uv_python
 export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
 export PATH="$HOME/.local/bin:$PATH"
 alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
