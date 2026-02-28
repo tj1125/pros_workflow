@@ -52,7 +52,9 @@ class YoloService:
 
                 # Run YOLO inference
                 results = self._model(pil_img, verbose=False)
-
+                num_det = len(results[0].boxes)
+                logger.info(f"[YoloService] {cam_name}: Detected {num_det} objects.")
+                
                 # Annotate image
                 draw = ImageDraw.Draw(pil_img)
                 try:
@@ -60,10 +62,15 @@ class YoloService:
                 except Exception:
                     font = ImageFont.load_default()
 
+                # Even if 0 detections, we still want to encode it for background context in the future optionally
+                # But for now we only care about detections
                 for box in results[0].boxes:
                     x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
                     conf = float(box.conf[0])
-                    label = self._model.names[int(box.cls[0])]
+                    cls_id = int(box.cls[0])
+                    label = self._model.names[cls_id]
+                    
+                    logger.info(f"  - ID {global_id}: {label} ({conf:.2f}) at [{x1}, {y1}, {x2}, {y2}]")
 
                     # Draw red bounding box and ID text
                     draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
