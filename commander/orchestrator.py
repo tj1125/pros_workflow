@@ -3,6 +3,7 @@ import logging
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Literal
 
 import httpx
@@ -54,13 +55,14 @@ class Orchestrator:
         workflow.add_node("grasp_node", self._grasp_node)
         workflow.add_node("approach_node", self._approach_node)
         workflow.add_node("view_node", self._view_node)
+        workflow.add_node("get_item_info_node", self._get_item_info_node)
 
-        # Entry point: wait for human input first
+        # Entry point
         workflow.set_entry_point("input_node")
 
         # Fixed edges
         workflow.add_edge("input_node", "find_node")
-        workflow.add_edge("find_node", "observe_node")
+        workflow.add_edge("get_item_info_node", "observe_node")
         workflow.add_edge("observe_node", "reason_node")
         workflow.add_edge("nav_node", "update_memory_node")
         workflow.add_edge("grasp_node", "update_memory_node")
@@ -68,7 +70,14 @@ class Orchestrator:
         workflow.add_edge("view_node", "update_memory_node")
         workflow.add_edge("update_memory_node", "observe_node")
 
-        # Conditional routing: reason_node → agent node or END
+        # find_node → get_item_info_node or END
+        workflow.add_conditional_edges(
+            "find_node",
+            self._route_find,
+            {"get_item_info_node": "get_item_info_node", "end": END},
+        )
+
+        # reason_node → agent node or END
         workflow.add_conditional_edges(
             "reason_node",
             self._route_decision,
@@ -119,54 +128,136 @@ class Orchestrator:
         }
 
     # ------------------------------------------------------------------
-    # Node: find (runs once to locate the target object)
+    # Node: find (runs once — YOLO detection + human confirmation)
     # ------------------------------------------------------------------
 
     async def _find_node(self, state: CommanderState) -> Dict[str, Any]:
-        """Locate all candidate objects using multi-camera images, then ask human to confirm target."""
+        """
+        1. Call FindAgent to run YOLO on all camera images (returns annotated images + metadata).
+        2. Save annotated images to logs/find_candidates/.
+        3. Print detection list, wait for user to pick a number or type 'no'.
+        """
         task_desc = state.get("task_description", "")
 
         from agents.find_agent import FindAgent
         agent = FindAgent(http_client=self.http_client)
         result = await agent.execute({"task_description": task_desc})
-        candidates = result.get("result", [])
+        yolo_detections: Dict[int, Any] = result.get("result", {}).get("yolo_detections", {})
 
-        # Present candidates to human
-        print("\n" + "=" * 50)
-        print("  找到以下可能的目標物：")
-        print("=" * 50)
-        for i, obj in enumerate(candidates, 1):
-            print(f"  {i}. {obj.get('label', obj.get('id', '未知'))}")
-        print("="* 50)
+        # Save annotated images if server returned them
+        if yolo_detections:
+            import base64
+            save_dir = Path("logs/find_candidates")
+            save_dir.mkdir(parents=True, exist_ok=True)
+            for det_id, det in yolo_detections.items():
+                b64_img = det.get("annotated_image_base64")
+                if b64_img:
+                    img_path = save_dir / f"detection_{det_id}.jpg"
+                    with open(img_path, "wb") as f:
+                        f.write(base64.b64decode(b64_img))
+
+        # Print detections for user
+        print("\n" + "=" * 55)
+        print("  🔍 YOLO 偵測結果：")
+        print("=" * 55)
+        if not yolo_detections:
+            print("  ⚠ 找不到任何物品。")
+        else:
+            for det_id, det in yolo_detections.items():
+                print(f"  [{det_id}] {det.get('label','?')}  信心度={det.get('conf', 0):.0%}  相機={det.get('camera','?')}")
+            print(f"\n  📁 帶框框的照片已存至: logs/find_candidates/")
+        print("=" * 55)
 
         loop = asyncio.get_event_loop()
         choice_str = await loop.run_in_executor(
             None,
-            lambda: input(f"請輸入目標物編號 (1-{len(candidates)})：\n> "),
+            lambda: input(
+                f"請輸入目標物編號 (1-{len(yolo_detections)}) 或輸入 no 表示未找到：\n> "
+            ),
         )
 
-        try:
-            idx = int(choice_str.strip()) - 1
-            target = candidates[idx]
-        except (ValueError, IndexError):
-            logger.warning("[find_node] Invalid choice, defaulting to first candidate.")
-            target = candidates[0] if candidates else {}
+        choice = choice_str.strip().lower()
+        if choice == "no" or not yolo_detections:
+            logger.info("[find_node] User indicated no valid target found.")
+            return {
+                "yolo_detections": yolo_detections,
+                "selected_detection_id": 0,
+                "find_complete": True,
+                "current_status": "TARGET_NOT_FOUND",
+            }
 
-        label = target.get('label', target.get('id', '目標物'))
-        logger.info(f"[find_node] Target confirmed: {label}")
-        print(f"\n✅ 目標確認：{label}")
-        print("-" * 50)
+        try:
+            selected_id = int(choice)
+            det = yolo_detections.get(selected_id)
+            if det is None:
+                raise ValueError("ID not in detections")
+        except ValueError:
+            logger.warning("[find_node] Invalid choice, defaulting to 1.")
+            selected_id = 1
+            det = next(iter(yolo_detections.values()))
+
+        label = det.get("label", "目標物")
+        logger.info(f"[find_node] User selected detection {selected_id}: {label}")
+        print(f"\n✅ 選定目標：[{selected_id}] {label}")
+        print("-" * 55)
 
         return {
-            "candidate_objects": candidates,
-            "target_object": target,
+            "yolo_detections": yolo_detections,
+            "selected_detection_id": selected_id,
             "find_complete": True,
             "current_status": "TARGET_FOUND",
         }
 
     # ------------------------------------------------------------------
+    # Conditional edge: after find_node
+    # ------------------------------------------------------------------
+
+    def _route_find(self, state: CommanderState) -> str:
+        """Route to get_item_info_node if target found, else END."""
+        if state.get("selected_detection_id", 0) == 0:
+            logger.info("[route_find] No target → ending graph.")
+            return "end"
+        return "get_item_info_node"
+
+    # ------------------------------------------------------------------
+    # Node: get_item_info (runs once — retrieve full 3D info)
+    # ------------------------------------------------------------------
+
+    async def _get_item_info_node(self, state: CommanderState) -> Dict[str, Any]:
+        """
+        Takes the user-selected detection, calls GetItemInfoAgent on 3090 via A2A
+        to retrieve 3D position, size, and other properties.
+        Stores result in state["target_object"] for the rest of the session.
+        """
+        det_id = state.get("selected_detection_id", 0)
+        yolo_detections = state.get("yolo_detections", {})
+        det = yolo_detections.get(det_id, {})
+
+        from agents.get_item_info_agent import GetItemInfoAgent
+        agent = GetItemInfoAgent(http_client=self.http_client)
+        params = {
+            "camera": det.get("camera", "Camera_Car"),
+            "bbox": det.get("bbox", []),
+            "label": det.get("label", "unknown"),
+            "detection_id": det_id,
+        }
+        result = await agent.execute(params)
+        target_object = result.get("result", {})
+
+        label = target_object.get("label", "目標物")
+        pos = target_object.get("position_3d", "N/A")
+        logger.info(f"[get_item_info_node] Target object info retrieved: {label} @ {pos}")
+        print(f"\n📦 目標物資訊已取得：{label}，3D 座標 = {pos}")
+
+        return {
+            "target_object": target_object,
+            "current_status": "ITEM_INFO_READY",
+        }
+
+    # ------------------------------------------------------------------
     # Node: observe
     # ------------------------------------------------------------------
+
 
     async def _observe_node(self, state: CommanderState) -> Dict[str, Any]:
         """Fetch current environment observation (mock or Rosbridge)."""

@@ -130,6 +130,8 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
         "target_object": {},
         "candidate_objects": [],
         "find_complete": False,
+        "yolo_detections": {},
+        "selected_detection_id": 0,
     }
 
     logger.info(f"Starting LangGraph loop | context_id={context_id}")
