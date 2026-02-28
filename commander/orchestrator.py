@@ -131,13 +131,17 @@ class Orchestrator:
                     f"| Mock scene at step {state.get('retry_count', 0)}: "
                     "Target object visible on table with partial occlusion."
                 ),
-                "image_path": None,
+                "image_base64": None,
             }
         else:
-            # TODO (Day-2): subscribe to /camera/rgb/image_raw via Rosbridge WebSocket
-            obs = state.get("current_observation", {"description": task_desc})
+            from .camera import get_camera_image_base64
+            image_b64 = await get_camera_image_base64("Camera_Car", timeout_sec=15.0)
+            obs = {
+                "description": task_desc,
+                "image_base64": image_b64,
+            }
 
-        logger.info("[observe_node] Observation captured.")
+        logger.info(f"[observe_node] Observation captured (Has Image: {bool(obs.get('image_base64'))}).")
         return {"current_observation": obs, "current_status": "OBSERVED"}
 
     # ------------------------------------------------------------------

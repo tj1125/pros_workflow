@@ -93,7 +93,7 @@ class Brain:
         else:
             raise ValueError(f"[Brain] Unknown VLM_PROVIDER: {provider}")
 
-    def _build_prompt(self, state: CommanderState) -> str:
+    def _build_prompt(self, state: CommanderState) -> list | str:
         """Build the VLM prompt from current state."""
         obs = state.get("current_observation", {})
         history = state.get("history_buffer", [])
@@ -109,12 +109,20 @@ class Brain:
 
         obs_desc = obs.get("description", "Camera image unavailable (mock mode)")
 
-        return (
+        text_content = (
             f"## Current Observation\n{obs_desc}\n\n"
             f"## Action History (last 3)\n{history_summary}\n\n"
             f"## Retry Count\n{retry}\n\n"
             "Decide the next action. Output valid JSON."
         )
+
+        image_b64 = obs.get("image_base64")
+        if image_b64:
+            return [
+                {"type": "text", "text": text_content},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+            ]
+        return text_content
 
     async def reason(self, state: CommanderState) -> Dict[str, Any]:
         """
