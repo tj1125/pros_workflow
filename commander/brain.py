@@ -35,19 +35,7 @@ class BrainDecision(BaseModel):
 # Brain: VLM reasoning hub
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are the central reasoning brain of an embodied AI robot grasping system.
-Your role is to observe the current scene and decide which agent to dispatch next.
-
-Available agents:
-- nav_agent: Move the robot base to a better observation position
-- grasp_agent: Generate a 6-DoF grasp pose for the target object
-- approach_agent: Guide the robot arm to approach the pre-grasp point
-- view_agent: Adjust arm/camera posture to improve visual clarity
-- DONE: The grasping task is successfully completed
-
-You MUST respond with valid JSON matching the BrainDecision schema.
-"""
-
+from .prompts import SYSTEM_PROMPT
 
 class Brain:
     """
