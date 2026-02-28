@@ -44,7 +44,7 @@
 ### 1. 建立環境與安裝 (只需執行一次)
 ```bash
 # 建立專屬虛擬環境 (加上 a2a_vlm_ 前綴以利辨識本專案)
-conda create -n a2a_vlm_find python=3.10 -y
+conda create -n a2a_vlm_find python=3.11 -y
 conda activate a2a_vlm_find
 
 # 安裝所需依賴套件
