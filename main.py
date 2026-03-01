@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import uuid
+from pathlib import Path
 
 import click
 from dotenv import load_dotenv
