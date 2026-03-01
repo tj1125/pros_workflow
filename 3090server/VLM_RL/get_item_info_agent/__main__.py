@@ -1,9 +1,13 @@
 """
-__main__.py — A2A Server Entrypoint for GetItemInfoAgent
+__main__.py — A2A Server Entrypoint for GetItemInfoAgent.
 
-Starts the GetItemInfo A2A server.
-Usage: python -m get_item_info_agent
+Usage:
+    cd /path/to/VLM_RL/3090server/VLM_RL
+    conda activate get_item_info_agent
+    python -m get_item_info_agent
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -16,8 +20,10 @@ from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 
-# Allow importing the local packages if run directly
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Allow importing sibling packages (a2a_utils, get_item_info_agent) when run directly.
+_AGENT_SERVICES_ROOT = Path(__file__).parent.parent
+if str(_AGENT_SERVICES_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_SERVICES_ROOT))
 
 from get_item_info_agent.agent_executor import GetItemInfoExecutor
 
@@ -28,28 +34,37 @@ PORT = 8006
 EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
 
 agent_card = AgentCard(
-    name="Get Item Info Agent Server",
-    description="Receives camera and 2D bounding box, returns 3D world position and size estimation.",
+    name="Get Item Info Agent",
+    description=(
+        "Receives a stereo image pair and a YOLO class name, runs the full perception pipeline "
+        "(YOLO → SAM → Triangulation → DepthAnything → SAM3D → GraspGen), "
+        "and returns the 3D world position and ranked goal poses as JSON."
+    ),
     url=f"http://{EXTERNAL_IP}:{PORT}/",
-    version="1.0.0",
+    version="2.0.0",
     capabilities=AgentCapabilities(streaming=False),
     skills=[
         AgentSkill(
-            id="estimate_3d",
-            name="3D Object Estimation",
-            description="Estimate 3D world position and size from 2D bounding box.",
-            tags=["3d", "spatial"],
-            examples=["get 3d position of the detected object"],
-            input_modes=["text"],
+            id="get_item_info",
+            name="3D Item Info Estimation",
+            description=(
+                "Estimate 3D world position and ranked goal poses for a target object "
+                "from a stereo RGB image pair."
+            ),
+            tags=["3d", "spatial", "grasp", "stereo"],
+            examples=["get 3D goal pose for object class 'doll'"],
+            # Part 0: JSON text; Part 1 & 2: image bytes (base64 or inline data)
+            input_modes=["text", "data"],
             output_modes=["text"],
         )
     ],
-    default_input_modes=["text"],
+    default_input_modes=["text", "data"],
     default_output_modes=["text"],
 )
 
-def main():
-    logger.info(f"Starting GetItemInfoAgent A2A Server on port {PORT}...")
+
+def main() -> None:
+    logger.info("Starting GetItemInfoAgent A2A Server on port %d ...", PORT)
     executor = GetItemInfoExecutor()
     handler = DefaultRequestHandler(
         agent_executor=executor,
@@ -57,6 +72,7 @@ def main():
     )
     app = A2AStarletteApplication(agent_card=agent_card, http_handler=handler)
     uvicorn.run(app.build(), host="0.0.0.0", port=PORT)
+
 
 if __name__ == "__main__":
     main()
