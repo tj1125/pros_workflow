@@ -14,3 +14,6 @@ dist/
 # Ignore server-level models
 3090server/VLM_RL/models/*
 !3090server/VLM_RL/models/.gitkeep
+
+# 忽略 pre-compiled libraries
+3090server/VLM_RL/get_item_info_agent/vendor/pydeps/
