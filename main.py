@@ -155,6 +155,12 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
         logger.error(f"LangGraph execution error: {e}", exc_info=True)
     finally:
         await orchestrator.aclose()
+        # Cleanup: delete find_candidates after session ends
+        import shutil
+        candidates_dir = Path("logs/find_candidates")
+        if candidates_dir.exists():
+            shutil.rmtree(candidates_dir)
+            logger.info("[Cleanup] Deleted logs/find_candidates")
 
     print("\n" + "=" * 60)
     print(f"  Task complete. Trace log: {log_path}")

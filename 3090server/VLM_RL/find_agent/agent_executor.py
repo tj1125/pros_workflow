@@ -45,15 +45,15 @@ class FindAgentExecutor(AgentExecutor):
 
             logger.info(f"Find request received for {len(camera_images)} images. Target: {target_object}")
 
-            # Run detection
-            yolo_detections = self.yolo_service.detect_and_annotate(
-                camera_images=camera_images, 
-                target_object=target_object
+            # detection_result = {"yolo_detections": {...}, "composed_image_base64": "..."}
+            detection_result = self.yolo_service.detect_and_annotate(
+                camera_images=camera_images,
+                target_object=target_object,
             )
 
             # Return as standard A2A artifact
-            logger.info(f"Returning {len(yolo_detections)} detections.")
-            await event_queue.enqueue_event(build_success({"yolo_detections": yolo_detections}))
+            logger.info(f"Returning {len(detection_result.get('yolo_detections', {}))} detections.")
+            await event_queue.enqueue_event(build_success(detection_result))
 
         except Exception as e:
             logger.error(f"FindAgent execution error: {e}", exc_info=True)

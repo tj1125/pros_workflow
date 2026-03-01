@@ -167,19 +167,18 @@ class Orchestrator:
             "task_description": task_desc,
             "target_object": target_obj
         })
-        yolo_detections: Dict[int, Any] = result.get("result", {}).get("yolo_detections", {})
+        agent_result = result.get("result", {})
+        yolo_detections: Dict[int, Any] = agent_result.get("yolo_detections", {})
+        composed_b64: str = agent_result.get("composed_image_base64", "")
 
-        # Save annotated images if server returned them
-        if yolo_detections:
+        # Save single composed image if server returned one
+        if composed_b64:
             import base64
             save_dir = Path("logs/find_candidates")
             save_dir.mkdir(parents=True, exist_ok=True)
-            for det_id, det in yolo_detections.items():
-                b64_img = det.get("annotated_image_base64")
-                if b64_img:
-                    img_path = save_dir / f"detection_{det_id}.jpg"
-                    with open(img_path, "wb") as f:
-                        f.write(base64.b64decode(b64_img))
+            img_path = save_dir / "detections.jpg"
+            with open(img_path, "wb") as f:
+                f.write(base64.b64decode(composed_b64))
 
         # Print detections for user
         print("\n" + "=" * 55)
@@ -190,7 +189,7 @@ class Orchestrator:
         else:
             for det_id, det in yolo_detections.items():
                 print(f"  [{det_id}] {det.get('label','?')}  信心度={det.get('conf', 0):.0%}  相機={det.get('camera','?')}")
-            print(f"\n  📁 帶框框的照片已存至: logs/find_candidates/")
+            print(f"\n  📁 合併框框照片已存至: logs/find_candidates/detections.jpg")
         print("=" * 55)
 
         loop = asyncio.get_event_loop()

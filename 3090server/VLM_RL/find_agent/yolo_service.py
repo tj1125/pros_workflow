@@ -31,75 +31,92 @@ class YoloService:
             logger.error(f"[YoloService] Failed to load YOLO or weights not found: {e}")
             self._model = None
 
-    def detect_and_annotate(self, camera_images: Dict[str, str], target_object: Dict[str, Any] = None) -> Dict[str, Any]:
+    def detect_and_annotate(
+        self,
+        camera_images: Dict[str, str],
+        target_object: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
         """
-        Input: { "Camera1": "<base64_img>", "Camera2": "<base64_img>" }
-        Output: { "1": {bbox, label, conf, camera, annotated_image_base64}, "2": ... }
+        Input:  { "Camera1": "<base64_img>", ... }
+        Output: {
+            "yolo_detections": { "1": {camera, bbox, label, conf}, ... },
+            "composed_image_base64": "<single grid image with all boxes>",
+        }
         """
         if not self._model:
             raise RuntimeError("YOLO model not initialized.")
 
         logger.info(f"[YoloService] Running detection on {len(camera_images)} images.")
-        
-        yolo_detections = {}
+
+        target_id    = target_object.get("id", "").lower()    if target_object else ""
+        target_label = target_object.get("label", "")          if target_object else ""
+
+        yolo_detections: Dict[str, Any] = {}
+        annotated_frames: list = []  # one PIL image per camera
         global_id = 1
+
+        try:
+            font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 60
+            )
+        except Exception:
+            font = ImageFont.load_default()
 
         for cam_name, b64_str in camera_images.items():
             try:
-                # Decode image
                 img_bytes = base64.b64decode(b64_str)
-                pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                pil_img   = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-                # Run YOLO inference
-                results = self._model(pil_img, verbose=False)
-                num_det = len(results[0].boxes)
+                results  = self._model(pil_img, verbose=False)
+                num_det  = len(results[0].boxes)
                 logger.info(f"[YoloService] {cam_name}: Detected {num_det} objects.")
-                
-                # Annotate image
-                draw = ImageDraw.Draw(pil_img)
-                try:
-                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-                except Exception:
-                    font = ImageFont.load_default()
 
-                # Even if 0 detections, we still want to encode it for background context in the future optionally
-                # But for now we only care about detections
+                draw = ImageDraw.Draw(pil_img)
+
                 for box in results[0].boxes:
                     x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
-                    conf = float(box.conf[0])
-                    cls_id = int(box.cls[0])
-                    label = self._model.names[cls_id].lower()  # Force lowercase for easier matching
-                    
-                    # If target_object is specified, only find that specific object
-                    if target_object:
-                        target_id = target_object.get("id", "").lower()
-                        target_label = target_object.get("label", "")
-                        
-                        # E.g. pure720.pt might output 'doll', 'apple', 'wine'. Match with id.
-                        if label != target_id and label not in target_label:
-                            continue
+                    conf    = float(box.conf[0])
+                    label   = self._model.names[int(box.cls[0])].lower()
 
-                    logger.info(f"  - ID {global_id}: {label} ({conf:.2f}) at [{x1}, {y1}, {x2}, {y2}]")
+                    # Filter by target object if specified
+                    if target_id and label != target_id and label not in target_label:
+                        continue
 
-                    # Draw red bounding box and ID text
-                    draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+                    logger.info(f"  - ID {global_id}: {label} ({conf:.2f}) at [{x1},{y1},{x2},{y2}]")
+
+                    # Thin border (1px), large number label (font 60px)
+                    draw.rectangle([x1, y1, x2, y2], outline="red", width=1)
                     draw.text((x1 + 4, y1 + 4), str(global_id), fill="red", font=font)
-
-                    # Encode annotated image
-                    buf = io.BytesIO()
-                    pil_img.save(buf, format="JPEG", quality=85)
-                    annotated_b64 = base64.b64encode(buf.getvalue()).decode()
 
                     yolo_detections[str(global_id)] = {
                         "camera": cam_name,
-                        "bbox": [x1, y1, x2, y2],
-                        "label": label,
-                        "conf": conf,
-                        "annotated_image_base64": annotated_b64,
+                        "bbox":   [x1, y1, x2, y2],
+                        "label":  label,
+                        "conf":   conf,
                     }
                     global_id += 1
+
+                annotated_frames.append(pil_img)
 
             except Exception as e:
                 logger.error(f"[YoloService] Error processing {cam_name}: {e}")
 
-        return yolo_detections
+        # Compose all camera images into one horizontal mosaic
+        composed_b64 = ""
+        if annotated_frames:
+            total_w = sum(f.width for f in annotated_frames)
+            max_h   = max(f.height for f in annotated_frames)
+            canvas  = Image.new("RGB", (total_w, max_h))
+            x_off   = 0
+            for frame in annotated_frames:
+                canvas.paste(frame, (x_off, 0))
+                x_off += frame.width
+            buf = io.BytesIO()
+            canvas.save(buf, format="JPEG", quality=85)
+            composed_b64 = base64.b64encode(buf.getvalue()).decode()
+
+        return {
+            "yolo_detections":      yolo_detections,
+            "composed_image_base64": composed_b64,
+        }
+
