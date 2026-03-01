@@ -40,7 +40,7 @@ class YoloService:
         Input:  { "Camera1": "<base64_img>", ... }
         Output: {
             "yolo_detections": { "1": {camera, bbox, label, conf}, ... },
-            "cropped_images": { "1": "<base64>", "2": "<base64>"}
+            "annotated_images": { "1": "<base64>", "2": "<base64>"}
         }
         """
         if not self._model:
@@ -52,7 +52,7 @@ class YoloService:
         target_label = target_object.get("label", "")          if target_object else ""
 
         yolo_detections: Dict[str, Any] = {}
-        cropped_images: Dict[str, str] = {}
+        annotated_images: Dict[str, str] = {}
         global_id = 1
 
         for cam_name, b64_str in camera_images.items():
@@ -87,16 +87,14 @@ class YoloService:
 
                     logger.info(f"  - ID {global_id}: {label} ({conf:.2f}) at [{x1_c},{y1_c},{x2_c},{y2_c}]")
 
-                    # Crop the bounding box
-                    crop_img = pil_img.crop((x1_c, y1_c, x2_c, y2_c))
+                    # Draw bounding box on full camera image (no text, no crop)
+                    det_img = pil_img.copy()
+                    det_draw = ImageDraw.Draw(det_img)
+                    det_draw.rectangle([x1_c, y1_c, x2_c, y2_c], outline="red", width=2)
                     
-                    # Draw a red border around the cropped image
-                    crop_draw = ImageDraw.Draw(crop_img)
-                    crop_draw.rectangle([0, 0, crop_img.width - 1, crop_img.height - 1], outline="red", width=2)
-
                     buf = io.BytesIO()
-                    crop_img.save(buf, format="JPEG", quality=85)
-                    cropped_images[str(global_id)] = base64.b64encode(buf.getvalue()).decode()
+                    det_img.save(buf, format="JPEG", quality=85)
+                    annotated_images[str(global_id)] = base64.b64encode(buf.getvalue()).decode()
 
                     yolo_detections[str(global_id)] = {
                         "camera": cam_name,
@@ -111,6 +109,6 @@ class YoloService:
 
         return {
             "yolo_detections": yolo_detections,
-            "cropped_images": cropped_images,
+            "annotated_images": annotated_images,
         }
 
