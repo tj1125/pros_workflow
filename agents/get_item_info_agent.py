@@ -33,21 +33,15 @@ class GetItemInfoAgent:
 
     execute() takes params:
       {
-        "camera": "Camera_Car",
-        "bbox": [x1, y1, x2, y2],
-        "label": "cup",
-        "detection_id": 1
+        "yolo_class": "doll",  # or "apple", "wine"
       }
 
     Returns:
       {
         "result": {
-          "label": "cup",
-          "detection_id": 1,
-          "camera": "Camera_Car",
-          "bbox": [...],
-          "position_3d": [x, y, z],     # world coordinates in meters
-          "size_estimate": [w, h, d],   # approximate size in meters
+          "center_world": [x, y, z],
+          "group_ranking": [...],
+          "goal_pose_path": "..."
         },
         "success": bool
       }
@@ -68,50 +62,62 @@ class GetItemInfoAgent:
     async def _mock_execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Mock: return dummy 3D info for testing without GPU server."""
         await asyncio.sleep(0.5)
-        label = params.get("label", "unknown")
-        det_id = params.get("detection_id", 0)
-        camera = params.get("camera", "Camera_Car")
-        bbox = params.get("bbox", [0, 0, 0, 0])
+        yolo_class = params.get("yolo_class", "unknown")
 
         result = {
-            "label": label,
-            "detection_id": det_id,
-            "camera": camera,
-            "bbox": bbox,
-            "position_3d": [1.0, 0.0, 0.5],    # dummy world position (x, y, z)
-            "size_estimate": [0.08, 0.12, 0.08], # dummy size (w, h, d) in meters
+            "center_world": [1.0, 0.0, 0.5],    # dummy world position (x, y, z)
+            "group_ranking": [],
+            "goal_pose_path": "/tmp/mock_goal_pose.json",
         }
-        logger.info(f"[{self.AGENT_NAME}] Mock: retrieved info for '{label}' (ID={det_id}).")
+        logger.info(f"[{self.AGENT_NAME}] Mock: retrieved info for '{yolo_class}'.")
         return {"result": result, "success": True}
 
     async def _a2a_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
-        """Real: re-capture image and send camera+bbox to RTX 3090 for 3D estimation."""
+        """Real: capture stereo pair and send to RTX 3090 for full 3D perception pipeline."""
         from commander.camera import get_camera_image_base64
+        import json
 
-        camera = params.get("camera", "Camera_Car")
-        b64 = await get_camera_image_base64(camera, timeout_sec=15.0)
-        if not b64:
-            logger.error(f"[{self.AGENT_NAME}] Failed to capture image from {camera}.")
+        cam_a_name = "Camera_Room1_1"
+        cam_b_name = "Camera_Room1_2"
+
+        logger.info(f"[{self.AGENT_NAME}] Capturing stereo pair: {cam_a_name}, {cam_b_name}...")
+        
+        # Parallel capture
+        cam_a_b64, cam_b_b64 = await asyncio.gather(
+            get_camera_image_base64(cam_a_name, timeout_sec=15.0),
+            get_camera_image_base64(cam_b_name, timeout_sec=15.0)
+        )
+
+        if not cam_a_b64 or not cam_b_b64:
+            logger.error(f"[{self.AGENT_NAME}] Failed to capture stereo pair. A: {bool(cam_a_b64)}, B: {bool(cam_b_b64)}")
             return {"result": {}, "success": False}
 
         try:
-            import json
             resolver = A2ACardResolver(httpx_client=self._http_client, base_url=self._inf_url)
             agent_card = await resolver.get_agent_card()
             client = A2AClient(httpx_client=self._http_client, agent_card=agent_card)
 
+            yolo_class = params.get("yolo_class", "unknown")
+
             payload = {
                 "message": {
                     "role": "user",
-                    "parts": [{
-                        "kind": "text",
-                        "text": json.dumps({
-                            "camera": camera,
-                            "bbox": params.get("bbox"),
-                            "image_base64": b64,
-                            "detection_id": params.get("detection_id"),
-                        })
-                    }],
+                    "parts": [
+                        { # Part 0: JSON setup
+                            "kind": "text",
+                            "text": json.dumps({
+                                "yolo_class": yolo_class,
+                            })
+                        },
+                        { # Part 1: Image A
+                            "kind": "text", 
+                            "text": cam_a_b64
+                        },
+                        { # Part 2: Image B
+                            "kind": "text",
+                            "text": cam_b_b64
+                        }
+                    ],
                     "message_id": uuid.uuid4().hex,
                     "context_id": context_id,
                 }

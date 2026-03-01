@@ -284,19 +284,21 @@ class Orchestrator:
 
         from agents.get_item_info_agent import GetItemInfoAgent
         agent = GetItemInfoAgent(http_client=self.http_client)
+        
+        # Get the actual ID defined in objects.yaml
+        target_obj = state.get("target_object", {})
+        yolo_class = target_obj.get("id", "unknown")
+
         params = {
-            "camera": det.get("camera", "Camera_Car"),
-            "bbox": det.get("bbox", []),
-            "label": det.get("label", "unknown"),
-            "detection_id": det_id,
+            "yolo_class": yolo_class,
         }
         result = await agent.execute(params)
         target_object = result.get("result", {})
 
-        label = target_object.get("label", "目標物")
-        pos = target_object.get("position_3d", "N/A")
-        logger.info(f"[get_item_info_node] Target object info retrieved: {label} @ {pos}")
-        print(f"\n📦 目標物資訊已取得：{label}，3D 座標 = {pos}")
+        pos = target_object.get("center_world", "N/A")
+        logger.info(f"[get_item_info_node] Target '{yolo_class}' 3D info retrieved: {pos}")
+        print(f"\n📦 目標物立體資訊已取得！ 3D 中心點 = {pos}")
+        print(f"📁 更多抓取細節已存至: {target_object.get('goal_pose_path', 'N/A')}")
 
         return {
             "target_object": target_object,
