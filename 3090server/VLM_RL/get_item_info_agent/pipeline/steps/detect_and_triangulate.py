@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import scipy.io
 
-from pipeline.types import BoundingBox
+from get_item_info_agent.pipeline.types import BoundingBox
 
 
 def load_yolo_model(weights_path: Path):

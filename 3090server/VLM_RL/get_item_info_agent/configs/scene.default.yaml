@@ -1,0 +1,45 @@
+camera:
+  camera_a: "1_1"
+  camera_b: "1_2"
+  camera_parameter_dir: "../data/camera_parameter"
+  rgb_dir: "../data/rgb_image"
+
+models:
+  yolo_weights: "../../models/yolo/pure720.pt"
+  sam_seg_checkpoint: "../../models/segmentation/sam_vit_b_01ec64.pth"
+  depthanything_weights: "../../models/depth/depth_anything_v2_vitb.pth"
+  sam3d_root: "../vendor/sam3d_runtime"
+  sam3d_config: "../../models/sam3d/hf/pipeline.yaml"
+  graspgen_root: "../vendor/graspgen_runtime"
+  gripper_config: "../../models/graspgen_checkpoints/graspgen_robotiq_2f_140.yml"
+
+alignment:
+  normal: [-0.8742383830716731, -0.4241241858417162, -0.2362751035304569]
+  origin: [0.0, 0.0, 0.0]
+  scan_y_step: 45.0
+  weight_shape: 0.7
+  weight_depth: 0.3
+  rotate_z: 0.0
+  voxel: 0.01
+  width: 64
+  height: 64
+  padding: 0.05
+
+map:
+  map_pgm: "../data/map/map01.pgm"
+  map_yaml: "../data/map/map01.yaml"
+  unity_map_origin: [3.314, 0.0, 6.0]
+  offset: 0.7
+  white_threshold: 250
+
+runtime:
+  device: "cuda"
+  sam_model_type: "vit_b"
+  depth_input_size: 518
+  base_ratio: 0.3333333333333333
+  height_scale: 1.24
+  sam_seed: 42
+  grasp_threshold: -1.0
+  num_grasps: 200
+  topk_num_grasps: 100
+  num_sample_points: 3000

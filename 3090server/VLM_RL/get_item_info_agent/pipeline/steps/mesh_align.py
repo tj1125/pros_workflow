@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from pipeline.adapters.sam3d_adapter import Sam3DInference
+from get_item_info_agent.pipeline.adapters.sam3d_adapter import Sam3DInference
 
 
 def reconstruct_mesh_with_sam3d(

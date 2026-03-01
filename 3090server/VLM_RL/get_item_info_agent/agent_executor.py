@@ -22,7 +22,7 @@ from a2a.server.events import EventQueue
 from a2a.types import UnsupportedOperationError
 
 from a2a_utils.response import build_error, build_success
-from pipeline.constants import DEFAULT_SCENE_CONFIG
+from get_item_info_agent.pipeline.constants import DEFAULT_SCENE_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class GetItemInfoExecutor(AgentExecutor):
                 goal_output = tmp / "goal_pose.json"
 
                 # Late import keeps heavy model loading out of server startup.
-                from pipeline.pipeline import run_pipeline
+                from get_item_info_agent.pipeline.pipeline import run_pipeline
 
                 result = run_pipeline(
                     scene_config=scene_config_path,

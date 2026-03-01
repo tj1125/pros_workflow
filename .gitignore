@@ -10,3 +10,7 @@ logs/
 dist/
 *.egg-info/
 =*
+
+# Ignore server-level models
+3090server/VLM_RL/models/*
+!3090server/VLM_RL/models/.gitkeep

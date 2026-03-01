@@ -4,7 +4,7 @@
 
 ## 執行環境
 
-- **Conda 環境名稱**：`get_item_info_agent`
+- **Conda 環境名稱**：`a2a_vlm_find`
 - **主要依賴**：`torch`, `segment_anything`, `ultralytics`, `pytorch3d`, `GraspGen` 相關依賴
 - **服務 Port**：8006
 
@@ -13,8 +13,8 @@
 此 Agent 的依賴較為龐大，涵蓋了 2D 到 3D 的完整感知管線：
 
 ```bash
-conda create -n get_item_info_agent python=3.11 -y
-conda activate get_item_info_agent
+conda create -n a2a_vlm_find python=3.11 -y
+conda activate a2a_vlm_find
 
 # 1. PyTorch + CUDA
 pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
@@ -24,17 +24,16 @@ pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121
 pip install -r requirements.txt
 
 # 3. GraspGen pointnet2 local CUDA extension
-pip install --no-build-isolation \
-    -e /home/tjchen/workspace/get_item_info/vendor/graspgen_runtime/pointnet2_ops
+pip install --no-build-isolation -e vendor/graspgen_runtime/pointnet2_ops
 ```
 
 ## 啟動服務
 
-確認在 `get_item_info_agent` 環境下，於 `VLM_RL` 目錄執行：
+確認在 `a2a_vlm_find` 環境下，於 `VLM_RL` 目錄執行：
 
 ```bash
-conda activate get_item_info_agent
-python -m get_item_info_agent
+conda activate a2a_vlm_find
+python -m a2a_vlm_find
 ```
 
 ---
@@ -44,7 +43,7 @@ python -m get_item_info_agent
 本專案將原始的 `get_item_info` 工具包裝成 Agent。  
 流程：`Stereo RGB -> YOLO -> SAM -> Triangulation -> DepthAnything -> SAM3D -> Pose Alignment -> GraspGen -> Goal Pose`
 
-> ⚠️ 注意：`pipeline/constants.py` 內定義的 `GET_ITEM_INFO_ROOT` 綁定了原始專案路徑（`/home/tjchen/workspace/get_item_info`），因為依賴的本機模型與部分第三方 vendor 程式碼都放在該處。若原始專案搬移，請務必更新該常數。
+> 本 Agent 已經與外部原始工具完全解耦，所有必備的 `models/`, `vendor/`, `configs/`, `data/` 已被搬移至本目錄 `a2a_vlm_find` 內，可完全獨立運行。
 
 ---
 

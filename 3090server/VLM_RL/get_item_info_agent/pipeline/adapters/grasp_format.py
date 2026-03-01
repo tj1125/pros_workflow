@@ -7,7 +7,7 @@ import numpy as np
 import trimesh.transformations as tra
 import yaml
 
-from pipeline.types import Grasp
+from get_item_info_agent.pipeline.types import Grasp
 
 
 def grasp_orientation_group(grasp: np.ndarray) -> int:

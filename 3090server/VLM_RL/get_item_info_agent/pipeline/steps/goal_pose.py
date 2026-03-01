@@ -6,8 +6,8 @@ from typing import Any
 
 import numpy as np
 
-from pipeline.adapters.grasp_format import grasp_orientation_group
-from pipeline.types import MapInfo
+from get_item_info_agent.pipeline.adapters.grasp_format import grasp_orientation_group
+from get_item_info_agent.pipeline.types import MapInfo
 
 
 def apply_y_flip(position: np.ndarray, rotation: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

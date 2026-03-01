@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import torch
 
-from pipeline.types import BoundingBox
+from get_item_info_agent.pipeline.types import BoundingBox
 
 
 def clamp_bbox(bbox: BoundingBox, image_shape: tuple[int, ...]) -> tuple[int, int, int, int]:

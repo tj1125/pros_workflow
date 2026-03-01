@@ -8,7 +8,7 @@ from typing import Any
 import torch
 import yaml
 
-from pipeline.constants import GET_ITEM_INFO_ROOT
+from get_item_info_agent.pipeline.constants import AGENT_ROOT
 
 
 REQUIRED_SECTIONS = ("camera", "models", "alignment", "map", "runtime")
@@ -152,8 +152,8 @@ def prepare_runtime_imports(cfg: dict[str, Any]) -> None:
     sam_root = Path(cfg["models"]["sam3d_root"]).resolve()
     graspgen_root = Path(cfg["models"]["graspgen_root"]).resolve()
     pointnet2_root = graspgen_root / "pointnet2_ops"
-    # pydeps lives inside the original project's vendor directory
-    pydeps_root = GET_ITEM_INFO_ROOT / "vendor" / "pydeps"
+    # pydeps lives inside the local vendor directory
+    pydeps_root = AGENT_ROOT / "vendor" / "pydeps"
     camera_root = sam_root / "Camera_3D_Localization"
     camera_src = camera_root / "src"
 
@@ -163,7 +163,7 @@ def prepare_runtime_imports(cfg: dict[str, Any]) -> None:
     os.environ.setdefault("LIDRA_SKIP_INIT", "true")
     os.environ.setdefault(
         "TORCH_EXTENSIONS_DIR",
-        str(GET_ITEM_INFO_ROOT / ".cache" / "torch_extensions"),
+        str(AGENT_ROOT / ".cache" / "torch_extensions"),
     )
     Path(os.environ["TORCH_EXTENSIONS_DIR"]).mkdir(parents=True, exist_ok=True)
 

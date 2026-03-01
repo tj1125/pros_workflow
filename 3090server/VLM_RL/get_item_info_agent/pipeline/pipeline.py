@@ -6,18 +6,18 @@ from pathlib import Path
 
 import cv2
 
-from pipeline.adapters.graspgen_adapter import infer_grasps_from_mesh
-from pipeline.config import (
+from get_item_info_agent.pipeline.adapters.graspgen_adapter import infer_grasps_from_mesh
+from get_item_info_agent.pipeline.config import (
     load_scene_config,
     prepare_runtime_imports,
     resolve_input_images,
     validate_required_paths,
     validate_runtime_device,
 )
-from pipeline.steps.detect_and_triangulate import run_detection_and_triangulation
-from pipeline.steps.goal_pose import compute_goal_pose
-from pipeline.steps.mesh_align import align_mesh_with_depth, reconstruct_mesh_with_sam3d, scale_mesh_to_target_y
-from pipeline.steps.sam_and_depth import build_sam3d_inputs, infer_depth_u8, sam_segment_with_bbox
+from get_item_info_agent.pipeline.steps.detect_and_triangulate import run_detection_and_triangulation
+from get_item_info_agent.pipeline.steps.goal_pose import compute_goal_pose
+from get_item_info_agent.pipeline.steps.mesh_align import align_mesh_with_depth, reconstruct_mesh_with_sam3d, scale_mesh_to_target_y
+from get_item_info_agent.pipeline.steps.sam_and_depth import build_sam3d_inputs, infer_depth_u8, sam_segment_with_bbox
 
 
 def run_pipeline(
