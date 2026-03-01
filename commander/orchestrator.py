@@ -119,17 +119,21 @@ class Orchestrator:
         print("=" * 60)
 
         loop = asyncio.get_event_loop()
-        choice_str = await loop.run_in_executor(
-            None,
-            lambda: input(f"\n請輸入目標物編號 (1-{len(objects)})：\n> "),
-        )
+        while True:
+            choice_str = await loop.run_in_executor(
+                None,
+                lambda: input(f"\n請輸入目標物編號 (1-{len(objects)})：\n> "),
+            )
 
-        try:
-            idx = int(choice_str.strip()) - 1
-            selected = objects[idx]
-        except (ValueError, IndexError):
-            print("輸入無效，預設選擇第一項。")
-            selected = objects[0] if objects else {"label": "未知的物品"}
+            try:
+                idx = int(choice_str.strip()) - 1
+                if 0 <= idx < len(objects):
+                    selected = objects[idx]
+                    break
+                else:
+                    print("❌ 錯誤：輸入數字不在範圍內，請重新輸入。")
+            except ValueError:
+                print("❌ 錯誤：格式不正確，請輸入有效數字。")
 
         task_desc = f"抓取{selected.get('label', selected.get('id', '目標物'))}"
 
@@ -193,16 +197,14 @@ class Orchestrator:
         print("=" * 55)
 
         loop = asyncio.get_event_loop()
-        choice_str = await loop.run_in_executor(
-            None,
-            lambda: input(
-                f"請輸入目標物編號 (1-{len(yolo_detections)}) 或輸入 no 表示未找到：\n> "
-            ),
-        )
-
-        choice = choice_str.strip().lower()
-        if choice == "no" or not yolo_detections:
-            logger.info("[find_node] User indicated no valid target found.")
+        
+        if not yolo_detections:
+            # If no detections, just pause and exit
+            await loop.run_in_executor(
+                None,
+                lambda: input("按下 Enter 鍵結束任務..."),
+            )
+            logger.info("[find_node] No target found. User acknowledged.")
             return {
                 "yolo_detections": yolo_detections,
                 "selected_detection_id": 0,
@@ -210,15 +212,35 @@ class Orchestrator:
                 "current_status": "TARGET_NOT_FOUND",
             }
 
-        try:
-            selected_id = int(choice)
-            det = yolo_detections.get(selected_id)
-            if det is None:
-                raise ValueError("ID not in detections")
-        except ValueError:
-            logger.warning("[find_node] Invalid choice, defaulting to 1.")
-            selected_id = 1
-            det = next(iter(yolo_detections.values()))
+        while True:
+            choice_str = await loop.run_in_executor(
+                None,
+                lambda: input(
+                    f"\n請輸入目標物編號 (1-{len(yolo_detections)}) 或輸入 no 表示未找到：\n> "
+                ),
+            )
+
+            choice = choice_str.strip().lower()
+            if choice == "no":
+                logger.info("[find_node] User indicated no valid target found.")
+                return {
+                    "yolo_detections": yolo_detections,
+                    "selected_detection_id": 0,
+                    "find_complete": True,
+                    "current_status": "TARGET_NOT_FOUND",
+                }
+
+            try:
+                selected_id = int(choice)
+                if selected_id in yolo_detections or str(selected_id) in yolo_detections:
+                    # Depending on how the dict keys were parsed (int or str)
+                    selected_id = selected_id if selected_id in yolo_detections else str(selected_id)
+                    det = yolo_detections[selected_id]
+                    break
+                else:
+                    print("❌ 錯誤：輸入號碼不在選項內，請重新輸入。")
+            except ValueError:
+                print("❌ 錯誤：格式不正確，請輸入數字或 'no'。")
 
         label = det.get("label", "目標物")
         logger.info(f"[find_node] User selected detection {selected_id}: {label}")
