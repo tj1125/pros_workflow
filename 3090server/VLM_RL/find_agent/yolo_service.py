@@ -40,7 +40,7 @@ class YoloService:
         Input:  { "Camera1": "<base64_img>", ... }
         Output: {
             "yolo_detections": { "1": {camera, bbox, label, conf}, ... },
-            "composed_image_base64": "<single grid image with all boxes>",
+            "annotated_images": { "Camera1": "<base64>", "Camera2": "<base64>"}
         }
         """
         if not self._model:
@@ -52,7 +52,7 @@ class YoloService:
         target_label = target_object.get("label", "")          if target_object else ""
 
         yolo_detections: Dict[str, Any] = {}
-        annotated_frames: list = []  # one PIL image per camera
+        annotated_images: Dict[str, str] = {}
         global_id = 1
 
         try:
@@ -73,6 +73,7 @@ class YoloService:
 
                 draw = ImageDraw.Draw(pil_img)
 
+                has_detection = False
                 for box in results[0].boxes:
                     x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
                     conf    = float(box.conf[0])
@@ -82,6 +83,7 @@ class YoloService:
                     if target_id and label != target_id and label not in target_label:
                         continue
 
+                    has_detection = True
                     logger.info(f"  - ID {global_id}: {label} ({conf:.2f}) at [{x1},{y1},{x2},{y2}]")
 
                     # Thin border (1px), large number label (font 60px)
@@ -96,27 +98,16 @@ class YoloService:
                     }
                     global_id += 1
 
-                annotated_frames.append(pil_img)
+                if has_detection:
+                    buf = io.BytesIO()
+                    pil_img.save(buf, format="JPEG", quality=85)
+                    annotated_images[cam_name] = base64.b64encode(buf.getvalue()).decode()
 
             except Exception as e:
                 logger.error(f"[YoloService] Error processing {cam_name}: {e}")
 
-        # Compose all camera images into one horizontal mosaic
-        composed_b64 = ""
-        if annotated_frames:
-            total_w = sum(f.width for f in annotated_frames)
-            max_h   = max(f.height for f in annotated_frames)
-            canvas  = Image.new("RGB", (total_w, max_h))
-            x_off   = 0
-            for frame in annotated_frames:
-                canvas.paste(frame, (x_off, 0))
-                x_off += frame.width
-            buf = io.BytesIO()
-            canvas.save(buf, format="JPEG", quality=85)
-            composed_b64 = base64.b64encode(buf.getvalue()).decode()
-
         return {
-            "yolo_detections":      yolo_detections,
-            "composed_image_base64": composed_b64,
+            "yolo_detections": yolo_detections,
+            "annotated_images": annotated_images,
         }
 
