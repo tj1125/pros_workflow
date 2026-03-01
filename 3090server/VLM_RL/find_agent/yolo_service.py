@@ -101,7 +101,7 @@ class YoloService:
                     tx = x1
                     ty = y1 - text_h - 4
                     if ty < 0:
-                        ty = y1 + 4  # push down if going off top edge
+                        ty = y2 + 4  # push DOWN BELOW the bbox if going off top edge
 
                     # Avoid overlapping with other text boxes by sliding horizontally
                     for _ in range(20):
@@ -119,8 +119,12 @@ class YoloService:
                     # Append to memory to avoid future overlaps
                     drawn_text_boxes.append((tx, ty, tx + text_w, ty + text_h))
 
-                    # Draw text background (black) to mask the image, then draw the red text
-                    draw.rectangle([tx, ty, tx + text_w, ty + text_h], fill="black")
+                    # Draw edge mask/outline to make red text pop without full black rectangle
+                    # This achieves visibility without an ugly black box
+                    draw.text((tx-1, ty), text_str, fill="black", font=font)
+                    draw.text((tx+1, ty), text_str, fill="black", font=font)
+                    draw.text((tx, ty-1), text_str, fill="black", font=font)
+                    draw.text((tx, ty+1), text_str, fill="black", font=font)
                     draw.text((tx, ty), text_str, fill="red", font=font)
 
                     yolo_detections[str(global_id)] = {
