@@ -171,13 +171,15 @@ class FindAgent:
 
     @staticmethod
     def _parse_response(response: Any) -> Dict[str, Any]:
-        """Parse YOLO detections from A2A artifact response."""
+        """Parse YOLO detections from A2A text message response.
+        
+        The 3090 server uses new_agent_text_message(), so the result is in
+        response.root.result.parts[0].root.text as a JSON string.
+        """
         try:
-            result = response.root.result
-            if hasattr(result, "artifacts") and result.artifacts:
-                parts = result.artifacts[0].parts
-                if parts:
-                    return json.loads(parts[0].root.text)
-        except Exception:
-            pass
+            parts = response.root.result.parts
+            if parts:
+                return json.loads(parts[0].root.text)
+        except Exception as e:
+            logger.error(f"[Find Agent] Failed to parse response: {e}")
         return {"yolo_detections": {}}

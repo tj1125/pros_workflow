@@ -12,7 +12,7 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import UnsupportedOperationError
 
-from a2a_utils.response import build_error_artifact, build_success_artifact
+from a2a_utils.response import build_error, build_success
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class GetItemInfoExecutor(AgentExecutor):
         try:
             parts = context.message.parts
             if not parts:
-                await event_queue.enqueue_event(**build_error_artifact("Empty request"))
+                await event_queue.enqueue_event(build_error("Empty request"))
                 return
 
             body = json.loads(parts[0].root.text)
@@ -47,11 +47,11 @@ class GetItemInfoExecutor(AgentExecutor):
             }
 
             logger.info("Return 3D estimation result.")
-            await event_queue.enqueue_event(**build_success_artifact(result_data))
+            await event_queue.enqueue_event(build_success(result_data))
 
         except Exception as e:
             logger.error(f"GetItemInfo execution error: {e}", exc_info=True)
-            await event_queue.enqueue_event(**build_error_artifact(str(e)))
+            await event_queue.enqueue_event(build_error(str(e)))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise UnsupportedOperationError()
