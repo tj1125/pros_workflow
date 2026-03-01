@@ -56,8 +56,9 @@ class YoloService:
         global_id = 1
 
         try:
+            # 使用較細的字體DejaVuSans.ttf (預設不再加粗)
             font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 60
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 60
             )
         except Exception:
             font = ImageFont.load_default()
@@ -72,6 +73,7 @@ class YoloService:
                 logger.info(f"[YoloService] {cam_name}: Detected {num_det} objects.")
 
                 draw = ImageDraw.Draw(pil_img)
+                drawn_text_boxes = []
 
                 has_detection = False
                 for box in results[0].boxes:
@@ -86,9 +88,40 @@ class YoloService:
                     has_detection = True
                     logger.info(f"  - ID {global_id}: {label} ({conf:.2f}) at [{x1},{y1},{x2},{y2}]")
 
-                    # Thin border (1px), large number label (font 60px)
+                    # Thin border (1px)
                     draw.rectangle([x1, y1, x2, y2], outline="red", width=1)
-                    draw.text((x1 + 4, y1 + 4), str(global_id), fill="red", font=font)
+                    
+                    # Calculate text bounding box
+                    text_str = str(global_id)
+                    text_bbox = draw.textbbox((0, 0), text_str, font=font)
+                    text_w = text_bbox[2] - text_bbox[0]
+                    text_h = text_bbox[3] - text_bbox[1]
+
+                    # Initial ideal text position (just above the bounding box)
+                    tx = x1
+                    ty = y1 - text_h - 4
+                    if ty < 0:
+                        ty = y1 + 4  # push down if going off top edge
+
+                    # Avoid overlapping with other text boxes by sliding horizontally
+                    for _ in range(20):
+                        overlap = False
+                        for cx1, cy1, cx2, cy2 in drawn_text_boxes:
+                            # Strict overlap formula
+                            if not (tx + text_w < cx1 or tx > cx2 or ty + text_h < cy1 or ty > cy2):
+                                overlap = True
+                                break
+                        if not overlap:
+                            break
+                        # Shift right
+                        tx += text_w + 4
+
+                    # Append to memory to avoid future overlaps
+                    drawn_text_boxes.append((tx, ty, tx + text_w, ty + text_h))
+
+                    # Draw text background (black) to mask the image, then draw the red text
+                    draw.rectangle([tx, ty, tx + text_w, ty + text_h], fill="black")
+                    draw.text((tx, ty), text_str, fill="red", font=font)
 
                     yolo_detections[str(global_id)] = {
                         "camera": cam_name,
