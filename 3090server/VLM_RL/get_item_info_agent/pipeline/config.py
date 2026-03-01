@@ -152,8 +152,6 @@ def prepare_runtime_imports(cfg: dict[str, Any]) -> None:
     sam_root = Path(cfg["models"]["sam3d_root"]).resolve()
     graspgen_root = Path(cfg["models"]["graspgen_root"]).resolve()
     pointnet2_root = graspgen_root / "pointnet2_ops"
-    # pydeps lives inside the local vendor directory
-    pydeps_root = AGENT_ROOT / "vendor" / "pydeps"
     camera_root = sam_root / "Camera_3D_Localization"
     camera_src = camera_root / "src"
 
@@ -167,7 +165,7 @@ def prepare_runtime_imports(cfg: dict[str, Any]) -> None:
     )
     Path(os.environ["TORCH_EXTENSIONS_DIR"]).mkdir(parents=True, exist_ok=True)
 
-    for path in (pydeps_root, sam_root, camera_root, camera_src, graspgen_root, pointnet2_root):
+    for path in (sam_root, camera_root, camera_src, graspgen_root, pointnet2_root):
         text = str(path)
         if text not in sys.path:
             sys.path.insert(0, text)
