@@ -172,16 +172,18 @@ class Orchestrator:
             "target_object": target_obj
         })
         agent_result = result.get("result", {})
-        yolo_detections: Dict[int, Any] = agent_result.get("yolo_detections", {})
-        annotated_images: Dict[str, str] = agent_result.get("annotated_images", {})
+        yolo_detections: Dict[str, Any] = agent_result.get("yolo_detections", {})
+        cropped_images: Dict[str, str] = agent_result.get("cropped_images", {})
 
-        # Save individual camera images if server returned them
-        if annotated_images:
+        # Save individual cropped images if server returned them
+        if cropped_images:
             import base64
             save_dir = Path("logs/find_candidates")
             save_dir.mkdir(parents=True, exist_ok=True)
-            for cam_name, b64_img in annotated_images.items():
-                img_path = save_dir / f"{cam_name}.jpg"
+            for det_id_str, b64_img in cropped_images.items():
+                det_info = yolo_detections.get(det_id_str) or yolo_detections.get(int(det_id_str), {})
+                cam_name = det_info.get("camera", "unknown")
+                img_path = save_dir / f"{det_id_str}_{cam_name}.jpg"
                 with open(img_path, "wb") as f:
                     f.write(base64.b64decode(b64_img))
 
