@@ -129,9 +129,11 @@ class GetItemInfoAgent:
     def _parse_response(response: Any) -> Dict[str, Any]:
         """Parse 3D info from A2A artifact response."""
         import json
+        import logging
+        log = logging.getLogger(__name__)
+        
         try:
-            # new_agent_text_message places it directly under message.parts
-            return json.loads(response.root.result.message.parts[0].root.text)
-        except Exception:
-            pass
-        return {}
+            return json.loads(response.root.result.parts[0].root.text)
+        except Exception as e:
+            log.error(f"[_parse_response] Failed to parse A2A response: {e}", exc_info=True)
+            return {}
