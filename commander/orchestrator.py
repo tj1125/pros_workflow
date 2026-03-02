@@ -292,11 +292,11 @@ class Orchestrator:
         target_obj = state.get("target_object", {})
         yolo_class = target_obj.get("id", "unknown")
 
-        print(f"\n📷 正在擷取立體相機影像 (1_1, 1_2)...")
+        print(f"\n📷 正在擷取立體相機影像 (Camera_Room1_1, Camera_Room1_2)...")
         # Fetch images in parallel
         cam_a_b64, cam_b_b64 = await asyncio.gather(
-            get_camera_image_base64("1_1", timeout_sec=15.0),
-            get_camera_image_base64("1_2", timeout_sec=15.0)
+            get_camera_image_base64("Camera_Room1_1", timeout_sec=15.0),
+            get_camera_image_base64("Camera_Room1_2", timeout_sec=15.0)
         )
 
         if not cam_a_b64 or not cam_b_b64:
