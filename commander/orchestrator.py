@@ -298,12 +298,107 @@ class Orchestrator:
         pos = target_object.get("center_world", "N/A")
         logger.info(f"[get_item_info_node] Target '{yolo_class}' 3D info retrieved: {pos}")
         print(f"\n📦 目標物立體資訊已取得！ 3D 中心點 = {pos}")
-        print(f"📁 更多抓取細節已存至: {target_object.get('goal_pose_path', 'N/A')}")
+        
+        # Determine current goal rank (starts at 1)
+        current_rank = state.get("current_goal_rank", 1)
+        
+        # Publish initial and goal poses to ROS 2 non-blocking
+        asyncio.create_task(self._publish_poses(target_object, current_rank))
 
         return {
             "target_object": target_object,
+            "current_goal_rank": current_rank,
             "current_status": "ITEM_INFO_READY",
         }
+
+    async def _publish_poses(self, target_object: Dict[str, Any], rank: int) -> None:
+        """Asynchronously publishes /initialpose and /goal_pose 5 times using ROS 2."""
+        import asyncio
+        import json
+
+        # Handle hardcoded initialpose
+        initial_pose_msg = {
+            "header": {"frame_id": "map"},
+            "pose": {
+                "pose": {
+                    "position": {"x": 1.0, "y": 2.0, "z": 0.0},
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                },
+                "covariance": [
+                    0.25, 0, 0, 0, 0, 0,
+                    0, 0.25, 0, 0, 0, 0,
+                    0, 0, 0.0, 0, 0, 0,
+                    0, 0, 0, 0.0, 0, 0,
+                    0, 0, 0, 0, 0.0, 0,
+                    0, 0, 0, 0, 0, 0.06853891945200942
+                ]
+            }
+        }
+        initial_pose_str = json.dumps(initial_pose_msg)
+        
+        # Handle goal_pose dynamically based on rank
+        group_ranking = target_object.get("group_ranking", [])
+        if not group_ranking:
+            logger.warning("[publish_poses] No group_ranking found in target_object. Skipping goal_pose.")
+            goal_pose_str = ""
+        else:
+            rank_idx = rank - 1
+            if rank_idx < 0 or rank_idx >= len(group_ranking):
+                logger.warning(f"[publish_poses] Rank {rank} out of bounds (0-{len(group_ranking)-1}). Using rank 1.")
+                rank_idx = 0
+            
+            goal_data = group_ranking[rank_idx]
+            # Assumes best_goal_pose_ros_map exists in the goal data from the server
+            goal_pose_ros = goal_data.get("best_goal_pose_ros_map", {})
+            
+            if goal_pose_ros:
+                goal_pose_msg = {
+                    "header": {"frame_id": "map"},
+                    "pose": {
+                        "position": {
+                            "x": goal_pose_ros.get("position", {}).get("x", 0.0),
+                            "y": goal_pose_ros.get("position", {}).get("y", 0.0),
+                            "z": goal_pose_ros.get("position", {}).get("z", 0.0)
+                        },
+                        "orientation": {
+                            "x": goal_pose_ros.get("orientation", {}).get("x", 0.0),
+                            "y": goal_pose_ros.get("orientation", {}).get("y", 0.0),
+                            "z": goal_pose_ros.get("orientation", {}).get("z", 0.0),
+                            "w": goal_pose_ros.get("orientation", {}).get("w", 1.0)
+                        }
+                    }
+                }
+                goal_pose_str = json.dumps(goal_pose_msg)
+            else:
+                logger.warning("[publish_poses] best_goal_pose_ros_map not found. Skipping goal_pose.")
+                goal_pose_str = ""
+
+        logger.info(f"[publish_poses] Publishing topics for Rank {rank}...")
+
+        # Fire and forget subprocess loop
+        script = f"""
+        for i in {{1..5}}; do
+            ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped '{initial_pose_str}' &
+            """
+        if goal_pose_str:
+            script += f"ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped '{goal_pose_str}' &\n"
+        
+        script += """
+            wait
+            sleep 0.5
+        done
+        """
+        
+        proc = await asyncio.create_subprocess_shell(
+            script,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.error(f"[publish_poses] Topic publish failed: {stderr.decode()}")
+        else:
+            logger.info(f"[publish_poses] Successfully published /initialpose & /goal_pose (Rank {rank}).")
 
     # ------------------------------------------------------------------
     # Node: observe

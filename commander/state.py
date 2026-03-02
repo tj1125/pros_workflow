@@ -58,6 +58,9 @@ class CommanderState(TypedDict):
     # Candidate objects returned by find_node (before user confirmation)
     candidate_objects: List[Dict[str, Any]]
 
+    # 1-based index pointing to the rank of the current goal pose to attempt
+    current_goal_rank: int
+
     # Whether find_node has been completed (prevents re-running)
     find_complete: bool
 
