@@ -50,7 +50,7 @@ class GetItemInfoAgent:
     AGENT_NAME = "GetItemInfo Agent"
 
     def __init__(self, http_client: httpx.AsyncClient = None):
-        self._http_client = http_client or httpx.AsyncClient(timeout=60.0)
+        self._http_client = http_client or httpx.AsyncClient(timeout=120.0)
         self._inf_url = os.getenv("INF_GET_ITEM_INFO_URL", "")
         self._use_mock = os.getenv("MOCK_MODE", "true").lower() == "true" or not self._inf_url
 
