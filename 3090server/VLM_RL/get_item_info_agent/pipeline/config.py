@@ -123,7 +123,6 @@ def validate_required_paths(cfg: dict[str, Any]) -> None:
     """Check that all model and data paths referenced in the config actually exist."""
     checks = [
         ("camera.camera_parameter_dir", cfg["camera"]["camera_parameter_dir"]),
-        ("camera.rgb_dir", cfg["camera"]["rgb_dir"]),
         ("models.yolo_weights", cfg["models"]["yolo_weights"]),
         ("models.sam_seg_checkpoint", cfg["models"]["sam_seg_checkpoint"]),
         ("models.depthanything_weights", cfg["models"]["depthanything_weights"]),
