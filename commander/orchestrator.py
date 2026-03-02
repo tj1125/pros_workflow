@@ -339,7 +339,7 @@ class Orchestrator:
             "header": {
                 "stamp": {
                     "sec": 1772454680,
-                    "nsec": 922767208
+                    "nanosec": 922767208
                 },
                 "frame_id": "map"
             },
@@ -407,8 +407,19 @@ class Orchestrator:
                 qz = math.sin(theta / 2.0)
                 qw = math.cos(theta / 2.0)
 
+                import time
+                now = time.time()
+                sec = int(now)
+                nanosec = int((now - sec) * 1e9)
+
                 goal_pose_msg = {
-                    "header": {"frame_id": "map"},
+                    "header": {
+                        "stamp": {
+                            "sec": sec,
+                            "nanosec": nanosec
+                        },
+                        "frame_id": "map"
+                    },
                     "pose": {
                         "position": {
                             "x": goal_x,
