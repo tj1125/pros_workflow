@@ -283,14 +283,32 @@ class Orchestrator:
         det = yolo_detections.get(det_id, {})
 
         from agents.get_item_info_agent import GetItemInfoAgent
+        from commander.camera import get_camera_image_base64
+        import asyncio
+        
         agent = GetItemInfoAgent(http_client=self.http_client)
         
         # Get the actual ID defined in objects.yaml
         target_obj = state.get("target_object", {})
         yolo_class = target_obj.get("id", "unknown")
 
+        print(f"\n📷 正在擷取立體相機影像 (1_1, 1_2)...")
+        # Fetch images in parallel
+        cam_a_b64, cam_b_b64 = await asyncio.gather(
+            get_camera_image_base64("1_1", timeout_sec=15.0),
+            get_camera_image_base64("1_2", timeout_sec=15.0)
+        )
+
+        if not cam_a_b64 or not cam_b_b64:
+            logger.error("[get_item_info_node] Failed to get camera images.")
+            print("❌ 失敗: 未能取得兩個相機的影像。")
+            return {"current_status": "ITEM_INFO_FAILED"}
+
+        print(f"📡 傳送目標 '{yolo_class}' 資訊至 3090 A2A Server 分析 3D 姿態...")
         params = {
             "yolo_class": yolo_class,
+            "cam_a_b64": cam_a_b64,
+            "cam_b_b64": cam_b_b64,
         }
         result = await agent.execute(params)
         target_object = result.get("result", {})

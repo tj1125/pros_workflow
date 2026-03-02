@@ -73,31 +73,21 @@ class GetItemInfoAgent:
         return {"result": result, "success": True}
 
     async def _a2a_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
-        """Real: capture stereo pair and send to RTX 3090 for full 3D perception pipeline."""
-        from commander.camera import get_camera_image_base64
+        """Real: use passed stereo pair and send to RTX 3090 for full 3D perception pipeline."""
         import json
 
-        cam_a_name = "Camera_Room1_1"
-        cam_b_name = "Camera_Room1_2"
-
-        logger.info(f"[{self.AGENT_NAME}] Capturing stereo pair: {cam_a_name}, {cam_b_name}...")
-        
-        # Parallel capture
-        cam_a_b64, cam_b_b64 = await asyncio.gather(
-            get_camera_image_base64(cam_a_name, timeout_sec=15.0),
-            get_camera_image_base64(cam_b_name, timeout_sec=15.0)
-        )
+        yolo_class = params.get("yolo_class", "unknown")
+        cam_a_b64 = params.get("cam_a_b64", "")
+        cam_b_b64 = params.get("cam_b_b64", "")
 
         if not cam_a_b64 or not cam_b_b64:
-            logger.error(f"[{self.AGENT_NAME}] Failed to capture stereo pair. A: {bool(cam_a_b64)}, B: {bool(cam_b_b64)}")
+            logger.error(f"[{self.AGENT_NAME}] Left or right stereo image is missing.")
             return {"result": {}, "success": False}
 
         try:
             resolver = A2ACardResolver(httpx_client=self._http_client, base_url=self._inf_url)
             agent_card = await resolver.get_agent_card()
             client = A2AClient(httpx_client=self._http_client, agent_card=agent_card)
-
-            yolo_class = params.get("yolo_class", "unknown")
 
             payload = {
                 "message": {
