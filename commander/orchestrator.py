@@ -444,14 +444,18 @@ class Orchestrator:
         # Fire and forget subprocess loop
         script = f"""
         for i in {{1..5}}; do
-            ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped '{initial_pose_str}' &
-            """
+            echo "Iteration $i: Publishing /initialpose..."
+            ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped '{initial_pose_str}'
+            sleep 0.5
+        """
         if goal_pose_str:
-            script += f"ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped '{goal_pose_str}' &\n"
+            script += f"""
+            echo "Iteration $i: Publishing /goal_pose..."
+            ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped '{goal_pose_str}'
+            sleep 0.5
+            """
         
         script += """
-            wait
-            sleep 0.5
         done
         """
         
