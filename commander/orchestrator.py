@@ -32,7 +32,7 @@ class Orchestrator:
     def __init__(self, trace_logger: TraceLogger, use_mock: bool = True):
         self.logger = trace_logger
         self.brain = Brain(use_mock=use_mock)
-        self.http_client = httpx.AsyncClient(timeout=30.0)
+        self.http_client = httpx.AsyncClient(timeout=120.0)
         self.use_mock = use_mock
         self.graph = self._build_graph()
 
