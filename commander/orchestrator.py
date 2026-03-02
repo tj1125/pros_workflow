@@ -443,7 +443,7 @@ class Orchestrator:
 
         # Fire and forget subprocess loop
         script = f"""
-        for i in {{1..5}}; do
+        for i in 1 2 3 4 5; do
             echo "Iteration $i: Publishing /initialpose..."
             ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped '{initial_pose_str}'
             sleep 0.5
