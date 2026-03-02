@@ -130,11 +130,8 @@ class GetItemInfoAgent:
         """Parse 3D info from A2A artifact response."""
         import json
         try:
-            result = response.root.result
-            if hasattr(result, "artifacts") and result.artifacts:
-                parts = result.artifacts[0].parts
-                if parts:
-                    return json.loads(parts[0].root.text)
+            # new_agent_text_message places it directly under message.parts
+            return json.loads(response.root.result.message.parts[0].root.text)
         except Exception:
             pass
         return {}
