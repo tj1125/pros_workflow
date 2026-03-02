@@ -381,29 +381,51 @@ class Orchestrator:
                 rank_idx = 0
             
             goal_data = group_ranking[rank_idx]
-            # Assumes best_goal_pose_ros_map exists in the goal data from the server
-            goal_pose_ros = goal_data.get("best_goal_pose_ros_map", {})
+            # Assumes best_goal_pose_ros_map is a list: [x, y]
+            goal_pose_ros = goal_data.get("best_goal_pose_ros_map", [])
             
-            if goal_pose_ros:
+            if goal_pose_ros and len(goal_pose_ros) >= 2:
+                import math
+                goal_x, goal_y = float(goal_pose_ros[0]), float(goal_pose_ros[1])
+                
+                # Retrieve the target center_world in Unity coordinate (x, y, z)
+                center_world = target_object.get("center_world", [])
+                
+                if len(center_world) >= 3:
+                    # Conversion based on scene.default.yaml: unity_origin = [3.314, 0.0, 6.0]
+                    # map_x = unity_origin[2] - unity_z
+                    # map_y = unity_x - unity_origin[0]
+                    cw_map_x = 6.0 - float(center_world[2])
+                    cw_map_y = float(center_world[0]) - 3.314
+                    
+                    dx = cw_map_x - goal_x
+                    dy = cw_map_y - goal_y
+                    theta = math.atan2(dy, dx)
+                else:
+                    theta = 0.0
+
+                qz = math.sin(theta / 2.0)
+                qw = math.cos(theta / 2.0)
+
                 goal_pose_msg = {
                     "header": {"frame_id": "map"},
                     "pose": {
                         "position": {
-                            "x": goal_pose_ros.get("position", {}).get("x", 0.0),
-                            "y": goal_pose_ros.get("position", {}).get("y", 0.0),
-                            "z": goal_pose_ros.get("position", {}).get("z", 0.0)
+                            "x": goal_x,
+                            "y": goal_y,
+                            "z": 0.0
                         },
                         "orientation": {
-                            "x": goal_pose_ros.get("orientation", {}).get("x", 0.0),
-                            "y": goal_pose_ros.get("orientation", {}).get("y", 0.0),
-                            "z": goal_pose_ros.get("orientation", {}).get("z", 0.0),
-                            "w": goal_pose_ros.get("orientation", {}).get("w", 1.0)
+                            "x": 0.0,
+                            "y": 0.0,
+                            "z": qz,
+                            "w": qw
                         }
                     }
                 }
                 goal_pose_str = json.dumps(goal_pose_msg)
             else:
-                logger.warning("[publish_poses] best_goal_pose_ros_map not found. Skipping goal_pose.")
+                logger.warning("[publish_poses] best_goal_pose_ros_map not found or invalid. Skipping goal_pose.")
                 goal_pose_str = ""
 
         logger.info(f"[publish_poses] Publishing topics for Rank {rank}...")
