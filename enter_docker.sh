@@ -63,7 +63,7 @@ export PATH="$HOME/.local/bin:$PATH"
 alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
 alias run="cd /workspaces/VLM_RL && uv run python main.py --no-mock"
 alias t="cd /workspaces/VLM_RL && uv run python test_client.py --mock-only"
-alias r="cd /workspaces && colcon build --symlink-install && source /workspaces/install/setup.bash && cd /workspaces/VLM_RL"
+alias r="cd /workspaces && colcon build --base-paths /workspaces/VLM_RL/vendor --symlink-install && source /workspaces/install/setup.bash && cd /workspaces/VLM_RL"
 alias logs='cat /workspaces/VLM_RL/logs/trace_logger.jsonl | python3 -m json.tool 2>/dev/null || echo "no logs yet"'
 BASHRC
 
