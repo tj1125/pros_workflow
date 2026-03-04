@@ -1,6 +1,9 @@
 import asyncio
+import json
 import logging
+import math
 import os
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -34,6 +37,7 @@ class Orchestrator:
         self.brain = Brain(use_mock=use_mock)
         self.http_client = httpx.AsyncClient(timeout=120.0)
         self.use_mock = use_mock
+        self._initialpose_ready = False
         self.graph = self._build_graph()
 
     # ------------------------------------------------------------------
@@ -52,6 +56,7 @@ class Orchestrator:
 
         # Individual Agent nodes (A2A Clients)
         workflow.add_node("nav_node", self._nav_node)
+        workflow.add_node("nav_move_node", self._nav_move_node)
         workflow.add_node("grasp_node", self._grasp_node)
         workflow.add_node("approach_node", self._approach_node)
         workflow.add_node("view_node", self._view_node)
@@ -62,9 +67,9 @@ class Orchestrator:
 
         # Fixed edges
         workflow.add_edge("input_node", "find_node")
-        workflow.add_edge("get_item_info_node", "observe_node")
+        workflow.add_edge("get_item_info_node", "nav_move_node")
         workflow.add_edge("observe_node", "reason_node")
-        workflow.add_edge("nav_node", "update_memory_node")
+        workflow.add_edge("nav_node", "nav_move_node")
         workflow.add_edge("grasp_node", "update_memory_node")
         workflow.add_edge("approach_node", "update_memory_node")
         workflow.add_edge("view_node", "update_memory_node")
@@ -87,6 +92,14 @@ class Orchestrator:
                 "approach_node": "approach_node",
                 "view_node":     "view_node",
                 "end":           END,
+            },
+        )
+        workflow.add_conditional_edges(
+            "nav_move_node",
+            self._route_nav_move,
+            {
+                "observe_node": "observe_node",
+                "update_memory_node": "update_memory_node",
             },
         )
 
@@ -278,13 +291,8 @@ class Orchestrator:
         to retrieve 3D position, size, and other properties.
         Stores result in state["target_object"] for the rest of the session.
         """
-        det_id = state.get("selected_detection_id", 0)
-        yolo_detections = state.get("yolo_detections", {})
-        det = yolo_detections.get(det_id, {})
-
         from agents.get_item_info_agent import GetItemInfoAgent
         from commander.camera import get_camera_image_base64
-        import asyncio
         
         agent = GetItemInfoAgent(http_client=self.http_client)
         
@@ -317,158 +325,17 @@ class Orchestrator:
         logger.info(f"[get_item_info_node] Target '{yolo_class}' 3D info retrieved: {pos}")
         print(f"\n📦 目標物立體資訊已取得！ 3D 中心點 = {pos}")
         
-        # Determine current goal rank (starts at 1)
-        current_rank = state.get("current_goal_rank", 1)
-        
-        # Publish initial and goal poses to ROS 2 non-blocking
-        asyncio.create_task(self._publish_poses(target_object, current_rank))
+        current_rank = int(state.get("current_goal_rank", 1) or 1)
+        if current_rank < 1:
+            current_rank = 1
 
         return {
             "target_object": target_object,
             "current_goal_rank": current_rank,
+            "nav_move_source": "bootstrap",
+            "force_initialpose": False,
             "current_status": "ITEM_INFO_READY",
         }
-
-    async def _publish_poses(self, target_object: Dict[str, Any], rank: int) -> None:
-        """Asynchronously publishes /initialpose and /goal_pose 5 times using ROS 2."""
-        import asyncio
-        import json
-
-        # Handle hardcoded initialpose
-        initial_pose_msg = {
-            "header": {
-                "stamp": {
-                    "sec": 1772454680,
-                    "nanosec": 922767208
-                },
-                "frame_id": "map"
-            },
-            "pose": {
-                "pose": {
-                    "position": {
-                        "x": 3.6610914064101037,
-                        "y": -3.705734566669992,
-                        "z": 0.0
-                    },
-                    "orientation": {
-                        "x": 0.0,
-                        "y": 0.0,
-                        "z": 0.0,
-                        "w": 1.0
-                    }
-                },
-                "covariance": [
-                    0.25, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.25, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0.06853892060437211
-                ]
-            }
-        }
-        initial_pose_str = json.dumps(initial_pose_msg)
-        
-        # Handle goal_pose dynamically based on rank
-        group_ranking = target_object.get("group_ranking", [])
-        if not group_ranking:
-            logger.warning("[publish_poses] No group_ranking found in target_object. Skipping goal_pose.")
-            goal_pose_str = ""
-        else:
-            rank_idx = rank - 1
-            if rank_idx < 0 or rank_idx >= len(group_ranking):
-                logger.warning(f"[publish_poses] Rank {rank} out of bounds (0-{len(group_ranking)-1}). Using rank 1.")
-                rank_idx = 0
-            
-            goal_data = group_ranking[rank_idx]
-            # Assumes best_goal_pose_ros_map is a list: [x, y]
-            goal_pose_ros = goal_data.get("best_goal_pose_ros_map", [])
-            
-            if goal_pose_ros and len(goal_pose_ros) >= 2:
-                import math
-                goal_x, goal_y = float(goal_pose_ros[0]), float(goal_pose_ros[1])
-                
-                # Retrieve the target center_world in Unity coordinate (x, y, z)
-                center_world = target_object.get("center_world", [])
-                
-                if len(center_world) >= 3:
-                    # Conversion based on scene.default.yaml: unity_origin = [3.314, 0.0, 6.0]
-                    # map_x = unity_origin[2] - unity_z
-                    # map_y = unity_x - unity_origin[0]
-                    cw_map_x = 6.0 - float(center_world[2])
-                    cw_map_y = float(center_world[0]) - 3.314
-                    
-                    dx = cw_map_x - goal_x
-                    dy = cw_map_y - goal_y
-                    theta = math.atan2(dy, dx)
-                else:
-                    theta = 0.0
-
-                qz = math.sin(theta / 2.0)
-                qw = math.cos(theta / 2.0)
-
-                import time
-                now = time.time()
-                sec = int(now)
-                nanosec = int((now - sec) * 1e9)
-
-                goal_pose_msg = {
-                    "header": {
-                        "stamp": {
-                            "sec": sec,
-                            "nanosec": nanosec
-                        },
-                        "frame_id": "map"
-                    },
-                    "pose": {
-                        "position": {
-                            "x": goal_x,
-                            "y": goal_y,
-                            "z": 0.0
-                        },
-                        "orientation": {
-                            "x": 0.0,
-                            "y": 0.0,
-                            "z": qz,
-                            "w": qw
-                        }
-                    }
-                }
-                goal_pose_str = json.dumps(goal_pose_msg)
-            else:
-                logger.warning("[publish_poses] best_goal_pose_ros_map not found or invalid. Skipping goal_pose.")
-                goal_pose_str = ""
-
-        logger.info(f"[publish_poses] Publishing topics for Rank {rank}...")
-
-        # Fire and forget subprocess loop
-        script = f"""
-        for i in 1 2 3 4 5; do
-            echo "Iteration $i: Publishing /initialpose..."
-            ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped '{initial_pose_str}'
-            sleep 0.5
-        """
-        if goal_pose_str:
-            script += f"""
-            echo "Iteration $i: Publishing /goal_pose..."
-            ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped '{goal_pose_str}'
-            sleep 0.5
-            """
-        
-        script += """
-        done
-        """
-        
-        proc = await asyncio.create_subprocess_shell(
-            script,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            logger.error(f"[publish_poses] Topic publish failed: {stderr.decode()}")
-        else:
-            logger.info(f"[publish_poses] Successfully published /initialpose & /goal_pose (Rank {rank}).")
 
     # ------------------------------------------------------------------
     # Node: observe
@@ -538,15 +405,183 @@ class Orchestrator:
         }
         return mapping.get(module, "end")
 
+    def _route_nav_move(self, state: CommanderState) -> Literal["observe_node", "update_memory_node"]:
+        source = state.get("nav_move_source", "")
+        if source == "bootstrap":
+            return "observe_node"
+        return "update_memory_node"
+
     # ------------------------------------------------------------------
     # Agent nodes (each is an A2A Client calling RTX 3090)
     # ------------------------------------------------------------------
 
     async def _nav_node(self, state: CommanderState) -> Dict[str, Any]:
-        """Nav Agent Node: navigate robot base via INF_NAV (A2A Server on RTX 3090)."""
-        from agents.nav_agent import NavAgent
-        agent = NavAgent(http_client=self.http_client)
-        return await self._run_agent(agent, state)
+        """Prepare navigation context and delegate execution to nav_move_node."""
+        current_rank = int(state.get("current_goal_rank", 1) or 1)
+        if current_rank < 1:
+            current_rank = 1
+        goal_data, err = self._goal_pose_for_rank(state.get("target_object", {}), current_rank)
+        update: Dict[str, Any] = {
+            "current_goal_rank": current_rank,
+            "nav_move_source": "reason_loop",
+            "force_initialpose": bool(state.get("module_params", {}).get("force_initialpose", False)),
+            "current_status": "NAV_CONTEXT_READY",
+        }
+        if err:
+            update["agent_result"] = f"[NAV_CONTEXT_ERROR] {err}"
+            update["agent_success"] = False
+            update["nav_goal_pose"] = {}
+        else:
+            update["nav_goal_pose"] = goal_data
+        return update
+
+    async def _nav_move_node(self, state: CommanderState) -> Dict[str, Any]:
+        """
+        Blocking navigation executor:
+        1. Keep publishing /initialpose + /goal_pose until /plan is ready.
+        2. Continue navigation until NavigateToPose returns SUCCEEDED.
+        """
+        source = state.get("nav_move_source", "reason_loop")
+        target_object = state.get("target_object", {})
+        group_ranking = target_object.get("group_ranking", []) or []
+        if not group_ranking:
+            return {
+                "agent_result": "[NAV] group_ranking is empty, cannot navigate.",
+                "agent_success": False,
+                "nav_plan_ready": False,
+                "nav_arrived": False,
+                "nav_move_events": [],
+                "current_status": "NAV_FAILED",
+                "_exec_latency": 0.0,
+            }
+
+        start_t = time.time()
+        same_rank_retries = max(0, int(os.getenv("NAV_SAME_RANK_RETRIES", "2")))
+        max_attempt_per_rank = same_rank_retries + 1
+        plan_timeout = float(os.getenv("NAV_PLAN_TIMEOUT_SEC", "8"))
+        arrival_timeout = float(os.getenv("NAV_ARRIVAL_TIMEOUT_SEC", "120"))
+        publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.5"))
+
+        rank = int(state.get("current_goal_rank", 1) or 1)
+        if rank < 1:
+            rank = 1
+
+        force_initialpose = bool(state.get("force_initialpose", False))
+        all_events = []
+        last_error = "unknown navigation error"
+        last_attempt = 0
+
+        while rank <= len(group_ranking):
+            goal_data, goal_err = self._goal_pose_for_rank(target_object, rank)
+            if goal_err:
+                all_events.append({
+                    "event": "rank_advanced",
+                    "rank_from": rank,
+                    "rank_to": rank + 1,
+                    "detail": goal_err,
+                })
+                rank += 1
+                continue
+
+            for attempt in range(1, max_attempt_per_rank + 1):
+                last_attempt = attempt
+                publish_initialpose = force_initialpose or (not self._initialpose_ready)
+                if self.use_mock:
+                    await asyncio.sleep(0.2)
+                    mock_events = [
+                        {"event": "goal_publishing", "rank": rank, "attempt": attempt},
+                        {"event": "plan_ready", "rank": rank, "attempt": attempt},
+                        {"event": "arrived", "rank": rank, "attempt": attempt},
+                    ]
+                    return {
+                        "current_goal_rank": rank,
+                        "nav_attempt": attempt,
+                        "nav_goal_pose": goal_data,
+                        "nav_plan_ready": True,
+                        "nav_arrived": True,
+                        "nav_move_events": mock_events,
+                        "agent_result": f"[MOCK_NAV] Arrived at rank {rank} (attempt {attempt}).",
+                        "agent_success": True,
+                        "current_status": "NAV_COMPLETED",
+                        "_exec_latency": time.time() - start_t,
+                    }
+
+                payload = {
+                    "goal_pose": goal_data,
+                    "publish_initialpose": publish_initialpose,
+                    "initial_pose": self._default_initial_pose(),
+                    "plan_timeout_sec": plan_timeout,
+                    "arrival_timeout_sec": arrival_timeout,
+                    "publish_interval_sec": publish_interval,
+                    "status_topic": "/nav_move/status",
+                    "attempt": attempt,
+                    "rank": rank,
+                    "source": source,
+                }
+                result = await self._run_nav_move_runner(payload)
+                events = result.get("events", [])
+                all_events.extend(events)
+                plan_ready = bool(result.get("plan_ready", False))
+                success = bool(result.get("success", False))
+                if publish_initialpose and plan_ready:
+                    self._initialpose_ready = True
+                    force_initialpose = False
+
+                if success:
+                    return {
+                        "current_goal_rank": rank,
+                        "nav_attempt": attempt,
+                        "nav_goal_pose": goal_data,
+                        "nav_plan_ready": plan_ready,
+                        "nav_arrived": True,
+                        "nav_move_events": all_events,
+                        "agent_result": result.get(
+                            "message",
+                            f"[NAV] Arrived at rank {rank} (attempt {attempt}).",
+                        ),
+                        "agent_success": True,
+                        "current_status": "NAV_COMPLETED",
+                        "_exec_latency": time.time() - start_t,
+                    }
+
+                last_error = result.get("message", "navigation attempt failed")
+                all_events.append(
+                    {
+                        "event": "attempt_failed",
+                        "rank": rank,
+                        "attempt": attempt,
+                        "detail": last_error,
+                    }
+                )
+
+            all_events.append(
+                {
+                    "event": "rank_advanced",
+                    "rank_from": rank,
+                    "rank_to": rank + 1,
+                    "detail": "exhausted retries on current rank",
+                }
+            )
+            rank += 1
+
+        all_events.append(
+            {
+                "event": "navigation_failed",
+                "detail": last_error,
+            }
+        )
+        return {
+            "current_goal_rank": rank,
+            "nav_attempt": last_attempt,
+            "nav_goal_pose": {},
+            "nav_plan_ready": False,
+            "nav_arrived": False,
+            "nav_move_events": all_events,
+            "agent_result": f"[NAV] Failed after exhausting all ranks: {last_error}",
+            "agent_success": False,
+            "current_status": "NAV_FAILED",
+            "_exec_latency": time.time() - start_t,
+        }
 
     async def _grasp_node(self, state: CommanderState) -> Dict[str, Any]:
         """GraspGen Agent Node: generate 6-DoF grasp pose via INF_GRASP (A2A Server)."""
@@ -586,6 +621,7 @@ class Orchestrator:
         )
         return {
             "agent_result": result["result"],
+            "agent_success": bool(result.get("success", False)),
             "current_status": "EXECUTED",
             "_exec_latency": exec_latency,
         }
@@ -607,15 +643,16 @@ class Orchestrator:
             "action": module,
             "reasoning": reasoning,
             "result": result,
-            "success": bool(result),
+            "success": bool(state.get("agent_success", bool(result))),
         }
 
+        success_flag = bool(state.get("agent_success", bool(result)))
         self.logger.log_trace(
             agent_called=module,
             reasoning=reasoning,
             decision_latency=decision_latency,
             execution_latency=exec_latency,
-            success=bool(result),
+            success=success_flag,
             context_id=context_id,
             extra_info={"result": result},
         )
@@ -626,6 +663,106 @@ class Orchestrator:
             "retry_count": state.get("retry_count", 0) + 1,
             "current_status": "MEMORY_UPDATED",
         }
+
+    def _goal_pose_for_rank(self, target_object: Dict[str, Any], rank: int) -> tuple[Dict[str, Any], str]:
+        group_ranking = target_object.get("group_ranking", []) or []
+        rank_idx = rank - 1
+        if rank_idx < 0 or rank_idx >= len(group_ranking):
+            return {}, f"rank={rank} out of range"
+
+        goal_data = group_ranking[rank_idx] or {}
+        goal_pose_ros = goal_data.get("best_goal_pose_ros_map", [])
+        if not isinstance(goal_pose_ros, list) or len(goal_pose_ros) < 2:
+            return {}, f"rank={rank} missing best_goal_pose_ros_map"
+
+        goal_x = float(goal_pose_ros[0])
+        goal_y = float(goal_pose_ros[1])
+        yaw = 0.0
+        center_world = target_object.get("center_world", [])
+        if isinstance(center_world, list) and len(center_world) >= 3:
+            cw_map_x = 6.0 - float(center_world[2])
+            cw_map_y = float(center_world[0]) - 3.314
+            dx = cw_map_x - goal_x
+            dy = cw_map_y - goal_y
+            yaw = math.atan2(dy, dx)
+
+        qz = math.sin(yaw / 2.0)
+        qw = math.cos(yaw / 2.0)
+        return {
+            "x": goal_x,
+            "y": goal_y,
+            "z": 0.0,
+            "qx": 0.0,
+            "qy": 0.0,
+            "qz": qz,
+            "qw": qw,
+            "yaw": yaw,
+        }, ""
+
+    def _default_initial_pose(self) -> Dict[str, Any]:
+        return {
+            "x": 3.6610914064101037,
+            "y": -3.705734566669992,
+            "z": 0.0,
+            "qx": 0.0,
+            "qy": 0.0,
+            "qz": 0.0,
+            "qw": 1.0,
+            "covariance": [
+                0.25, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.25, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.06853892060437211,
+            ],
+        }
+
+    async def _run_nav_move_runner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        import shlex
+        safe_payload = shlex.quote(json.dumps(payload))
+        # Unset uv env vars so /usr/bin/python3 (3.10) runs cleanly with ROS 2.
+        # Explicitly set PYTHONPATH and LD_LIBRARY_PATH to the ROS humble paths so
+        # both the Python modules and their compiled .so extensions are found.
+        ros_py = "/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages"
+        ros_lib = "/opt/ros/humble/lib"
+        cmd = (
+            "unset VIRTUAL_ENV PYTHONPATH PYTHONHOME && "
+            "source /opt/ros/humble/setup.bash && "
+            "source /workspaces/install/setup.bash 2>/dev/null || true && "
+            f"export LD_LIBRARY_PATH={ros_lib}:${{LD_LIBRARY_PATH:-}} && "
+            f"PYTHONPATH={ros_py} "
+            f"/usr/bin/python3 -m commander.nav_move_runner --payload {safe_payload}"
+        )
+
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            executable='/bin/bash'
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            err_msg = stderr.decode().strip() or "nav_move_runner failed"
+            logger.error(f"[nav_move_node] runner exit={proc.returncode}: {err_msg}")
+            return {
+                "success": False,
+                "plan_ready": False,
+                "message": err_msg,
+                "events": [],
+            }
+
+        try:
+            return json.loads(stdout.decode().strip() or "{}")
+        except json.JSONDecodeError:
+            text = stdout.decode().strip()
+            logger.error(f"[nav_move_node] runner returned non-JSON output: {text}")
+            return {
+                "success": False,
+                "plan_ready": False,
+                "message": "Invalid nav_move_runner output",
+                "events": [],
+            }
 
     async def aclose(self) -> None:
         """Clean up the shared httpx client."""

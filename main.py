@@ -133,6 +133,14 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
         "find_complete": False,
         "yolo_detections": {},
         "selected_detection_id": 0,
+        "nav_move_source": "",
+        "nav_goal_pose": {},
+        "nav_plan_ready": False,
+        "nav_arrived": False,
+        "nav_attempt": 0,
+        "force_initialpose": False,
+        "nav_move_events": [],
+        "agent_success": False,
     }
 
     logger.info(f"Starting LangGraph loop | context_id={context_id}")

@@ -70,3 +70,19 @@ class CommanderState(TypedDict):
 
     # User-selected detection ID (0 = user typed "no")
     selected_detection_id: int
+
+    # nav_move routing source: bootstrap (from get_item_info) or reason_loop (from nav_node)
+    nav_move_source: str
+
+    # Computed goal pose for navigation runner
+    nav_goal_pose: Dict[str, Any]
+
+    # nav_move execution flags
+    nav_plan_ready: bool
+    nav_arrived: bool
+    nav_attempt: int
+    force_initialpose: bool
+
+    # Navigation and action execution feedback
+    nav_move_events: List[Dict[str, Any]]
+    agent_success: bool

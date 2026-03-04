@@ -20,3 +20,9 @@ dist/
 
 # 忽略大型參考資料夾
 參考檔案放這/
+
+# UV 與 macOS 系統檔案
+.uv_python/
+.DS_Store
+vendor/ros_pkgs/
+.container_env.sh
