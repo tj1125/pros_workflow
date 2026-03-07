@@ -52,7 +52,7 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    scan_topic: scan
+    scan_topic: scan_tmp
     map_topic: map
 
 # ------------------------------------
@@ -235,7 +235,7 @@ local_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_tmp
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -255,7 +255,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_tmp
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -293,7 +293,7 @@ global_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_tmp
           max_obstacle_height: 2.0
           clearing: True
           marking: True
