@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 from sensor_msgs.msg import LaserScan
 
 class ScanRelayer(Node):
@@ -24,7 +25,13 @@ class ScanRelayer(Node):
 
     def scan_callback(self, msg: LaserScan):
         # Override the drifted Unity timestamp with the container's exact current time
-        msg.header.stamp = self.get_clock().now().to_msg()
+        # PLUS A TINY FORWARD OFFSET (+50ms)
+        # This solves the TF Extrapolation Error where controller_server complains
+        # the TF data is 2-15ms older than the path requested time.
+        now = self.get_clock().now()
+        future_time = now + Duration(seconds=0, nanoseconds=50_000_000)
+        msg.header.stamp = future_time.to_msg()
+        
         # Publish the synced message
         self.pub.publish(msg)
 
