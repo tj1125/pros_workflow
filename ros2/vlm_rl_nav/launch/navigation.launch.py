@@ -65,6 +65,9 @@ def generate_launch_description() -> LaunchDescription:
         executable='laser_scan_matcher',
         name='scan_matcher',
         output='screen',
+        remappings=[
+            ('/scan', '/scan_tmp')
+        ],
         parameters=[{
             'base_frame': 'base_footprint',
             'publish_tf': True,
