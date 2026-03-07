@@ -17,6 +17,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -45,18 +46,48 @@ def generate_launch_description() -> LaunchDescription:
         description="Use simulation clock if true",
     )
 
-    # --- Include Nav2 bringup's navigation_launch.py ---
-    # This starts: amcl, map_server, bt_navigator, controller_server,
-    #              planner_server, behavior_server, velocity_smoother,
-    #              waypoint_follower, lifecycle_manager
+    # -------------------------------------------------------------
+    # 建立 Unity Lidar 所需的 TF 樹與 Odometry
+    # -------------------------------------------------------------
+    # 1. 靜態 TF: base_footprint -> laser (Z 軸 +0.15, Yaw 反轉 3.14)
+    base_to_laser_tf_cmd = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_to_laser_tf',
+        arguments=['0.0', '0.0', '0.15', '3.14', '0.0', '0.0', 'base_footprint', 'laser']
+    )
+
+    # 2. Laser Scan Matcher: 利用 Lidar 掃描資料推算 Odom
+    # 這會補足 Unity 沒有直接發布 /odom topic 的問題，
+    # 負責發布 transform: odom -> base_footprint
+    scan_matcher_cmd = Node(
+        package='ros2_laser_scan_matcher',
+        executable='laser_scan_matcher',
+        name='scan_matcher',
+        output='screen',
+        parameters=[{
+            'base_frame': 'base_footprint',
+            'publish_tf': True,
+            'publish_odom': 'odom'
+        }]
+    )
+
+    # --- Include Nav2 bringup's bringup_launch.py ---
+    # This starts EVERYTHING: amcl, map_server, bt_navigator, controller_server,
+    #                         planner_server, behavior_server, velocity_smoother,
+    #                         and lifecycle_manager.
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_dir, "launch", "navigation_launch.py")
+            os.path.join(
+                get_package_share_directory("nav2_bringup"),
+                "launch",
+                "bringup_launch.py",
+            )
         ),
         launch_arguments={
-            "map": LaunchConfiguration("map_file"),
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-            "params_file": LaunchConfiguration("params_file"),
+            "map": map_yaml_file,
+            "use_sim_time": use_sim_time,
+            "params_file": params_file,
             "autostart": "true",
         }.items(),
     )
@@ -66,6 +97,8 @@ def generate_launch_description() -> LaunchDescription:
             declare_map,
             declare_params,
             declare_use_sim_time,
+            base_to_laser_tf_cmd,
+            scan_matcher_cmd,
             nav2_launch,
         ]
     )
