@@ -17,7 +17,7 @@ if ! docker image inspect "$LOCAL_IMAGE" > /dev/null 2>&1; then
 fi
 
 # --- Common Docker Arguments ---
-COMMON_ARGS="--network compose_cube_bridge_network --env OLLAMA_URL=http://140.116.82.233:11434 --env OLLAMA_BASE_URL=http://140.116.82.233:11434 $VOLUME_ARGS -w /workspaces/VLM_RL"
+COMMON_ARGS="--network cube_bridge_network --env OLLAMA_URL=http://140.116.82.233:11434 --env OLLAMA_BASE_URL=http://140.116.82.233:11434 $VOLUME_ARGS -w /workspaces/VLM_RL"
 if [ -f "./.env" ]; then
     COMMON_ARGS+=" --env-file ./.env"
 fi

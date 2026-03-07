@@ -10,25 +10,23 @@
 #   rosbridge  — Unity WebSocket 橋接 (port 9090)
 #   nav2       — Nav2 導航系統 (AMCL + BT + Planner + Controller + Costmaps)
 #
-# 所有服務都在 cube_bridge_network 上，DDS 自動探索互通。
-# compose_cube_bridge_network 讓 vlm-rl-env (enter_docker.sh) 的 AI 大腦也能溝通。
+# 所有容器（包含 enter_docker.sh 的 vlm-rl-env）全部在 cube_bridge_network，
+# 確保 DDS 在同一個 L2 網路上正確探索。
 # =============================================================================
 
 services:
 
   # ------------------------------------
   # Rosbridge Server：讓 Unity 透過 WebSocket (port 9090) 溝通 ROS 2 topics
+  # 只接 cube_bridge_network，DDS 在單一網路內可靠互通
   # ------------------------------------
   rosbridge:
     image: ghcr.io/screamlab/pros_base_image:0.0.2
     container_name: vlm_rl_rosbridge
     env_file:
       - .env
-    environment:
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
     networks:
       - cube_bridge_network
-      - compose_cube_bridge_network
     ports:
       - "9090:9090" # Unity connects to ws://<host>:9090
     command: "ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
@@ -36,21 +34,18 @@ services:
 
   # ------------------------------------
   # Nav2：全套導航系統 (AMCL + bt_navigator + controller + planner + costmaps)
+  # 只接 cube_bridge_network，和 rosbridge 共享同一 DDS 網路
   # ------------------------------------
   nav2:
     image: ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
     container_name: vlm_rl_nav2
     env_file:
       - .env
-    environment:
-      # Must match ROS_DOMAIN_ID used by rosbridge and vlm-rl-env
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
     volumes:
       # Mount the entire ros2 workspace (rw needed for colcon build/install/log)
       - ./ros2:/workspaces/ros2:rw
     networks:
       - cube_bridge_network
-      - compose_cube_bridge_network
     depends_on:
       - rosbridge
     command: >
@@ -60,16 +55,13 @@ services:
         cd /workspaces/ros2 &&
         colcon build --packages-select vlm_rl_nav --symlink-install &&
         source /workspaces/ros2/install/setup.bash &&
-        echo '🚀 Launching Nav2 (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)...' &&
+        echo '🚀 Launching Nav2...' &&
         ros2 launch vlm_rl_nav navigation.launch.py
       "
     restart: "no"
 
 networks:
-  # cube_bridge_network: shared between rosbridge and Nav2 (Unity connects via rosbridge)
+  # cube_bridge_network: all ROS 2 containers share this network for reliable DDS discovery
+  # enter_docker.sh also connects vlm-rl-env to this same network
   cube_bridge_network:
     driver: bridge
-
-  # compose_cube_bridge_network: shared with vlm-rl-env AI containers (enter_docker.sh)
-  compose_cube_bridge_network:
-    external: true
