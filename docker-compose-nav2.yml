@@ -61,7 +61,9 @@ services:
     restart: "no"
 
 networks:
-  # cube_bridge_network: all ROS 2 containers share this network for reliable DDS discovery
-  # enter_docker.sh also connects vlm-rl-env to this same network
+  # cube_bridge_network: pre-created by launch_nav2.sh before compose runs.
+  # Must be external so compose uses the exact name 'cube_bridge_network'
+  # (without Docker Compose's automatic project-name prefix).
+  # enter_docker.sh also connects vlm-rl-env to this same network.
   cube_bridge_network:
-    driver: bridge
+    external: true
