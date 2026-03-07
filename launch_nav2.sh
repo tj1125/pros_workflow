@@ -26,8 +26,8 @@ for arg in "$@"; do
   esac
 done
 
-# --- Ensure cube_bridge_network exists (shared by all ROS 2 containers) ---
-for NETWORK in cube_bridge_network; do
+# --- Ensure networks exist ---
+for NETWORK in compose_cube_bridge_network cube_bridge_network; do
   if ! docker network ls --format '{{.Name}}' | grep -q "^${NETWORK}$"; then
     echo "🌐 Creating Docker bridge network '${NETWORK}'..."
     docker network create --driver bridge "${NETWORK}"
