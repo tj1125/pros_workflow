@@ -139,6 +139,7 @@ controller_server:
   ros__parameters:
     use_sim_time: false
     controller_frequency: 20.0
+    transform_tolerance: 1.5
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -336,6 +337,7 @@ planner_server:
   ros__parameters:
     planner_plugins: ["GridBased"]
     use_sim_time: false
+    transform_tolerance: 1.5
     GridBased:
       plugin: "nav2_smac_planner/SmacPlanner2D"
       tolerance: 0.5
@@ -361,7 +363,7 @@ smoother_server:
     costmap_topic: global_costmap/costmap_raw
     footprint_topic: global_costmap/published_footprint
     robot_base_frame: base_link
-    transform_timeout: 0.1
+    transform_timeout: 1.5
     smoother_plugins: ["savitzky_golay_smoother"]
     savitzky_golay_smoother:
       plugin: "nav2_smoother::SavitzkyGolaySmoother"
@@ -410,6 +412,7 @@ robot_state_publisher:
 waypoint_follower:
   ros__parameters:
     use_sim_time: false
+    transform_tolerance: 1.5
     loop_rate: 20
     stop_on_failure: false
     waypoint_task_executor_plugin: "wait_at_waypoint"
