@@ -85,9 +85,9 @@ def generate_launch_description() -> LaunchDescription:
             )
         ),
         launch_arguments={
-            "map": map_yaml_file,
-            "use_sim_time": use_sim_time,
-            "params_file": params_file,
+            "map": LaunchConfiguration("map_file"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "params_file": LaunchConfiguration("params_file"),
             "autostart": "true",
         }.items(),
     )
