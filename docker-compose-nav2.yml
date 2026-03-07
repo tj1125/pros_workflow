@@ -1,35 +1,58 @@
 # =============================================================================
-# VLM-RL Nav2 Docker Compose
+# VLM-RL Nav2 + Rosbridge Docker Compose
 # =============================================================================
 # 使用方式：
-#   ./launch_nav2.sh
-# 或：
-#   docker compose -f docker-compose-nav2.yml up
+#   ./launch_nav2.sh           # 前景模式（看 log）
+#   ./launch_nav2.sh -d        # 背景模式
+#   ./launch_nav2.sh --stop    # 停止所有服務
 #
-# 這個 compose 啟動一個 Nav2 容器，使用 VLM-RL 專案自己的 launch 檔和設定。
-# - Nav2 執行環境：ghcr.io/screamlab/pros_jetson_driver_image
-# - ROS 2 package：ros2/vlm_rl_nav（volume mount 進容器 + colcon build）
-# - 地圖：ros2/vlm_rl_nav/map/map01.yaml
-# - Nav2 設定：ros2/vlm_rl_nav/config/nav2_params.yaml
+# 啟動的服務：
+#   rosbridge  — Unity WebSocket 橋接 (port 9090)
+#   nav2       — Nav2 導航系統 (AMCL + BT + Planner + Controller + Costmaps)
+#
+# 所有服務都在 cube_bridge_network 上，DDS 自動探索互通。
+# compose_cube_bridge_network 讓 vlm-rl-env (enter_docker.sh) 的 AI 大腦也能溝通。
 # =============================================================================
 
 services:
+
+  # ------------------------------------
+  # Rosbridge Server：讓 Unity 透過 WebSocket (port 9090) 溝通 ROS 2 topics
+  # ------------------------------------
+  rosbridge:
+    image: ghcr.io/screamlab/pros_base_image:0.0.2
+    container_name: vlm_rl_rosbridge
+    env_file:
+      - .env
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
+    networks:
+      - cube_bridge_network
+      - compose_cube_bridge_network
+    ports:
+      - "9090:9090" # Unity connects to ws://<host>:9090
+    command: "ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
+    restart: unless-stopped
+
+  # ------------------------------------
+  # Nav2：全套導航系統 (AMCL + bt_navigator + controller + planner + costmaps)
+  # ------------------------------------
   nav2:
     image: ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
     container_name: vlm_rl_nav2
     env_file:
       - .env
     environment:
-      # Must match ROS_DOMAIN_ID used by all other ROS 2 containers (vlm-rl-env, rosbridge, etc.)
+      # Must match ROS_DOMAIN_ID used by rosbridge and vlm-rl-env
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
     volumes:
-      # Mount the entire ros2 workspace into the container (rw needed for colcon build/install/log)
+      # Mount the entire ros2 workspace (rw needed for colcon build/install/log)
       - ./ros2:/workspaces/ros2:rw
     networks:
-      # compose_cube_bridge_network: shared with vlm-rl-env (enter_docker.sh) and AI containers
-      - compose_cube_bridge_network
-      # cube_bridge_network: where rosbridge_server is running (for Unity communication)
       - cube_bridge_network
+      - compose_cube_bridge_network
+    depends_on:
+      - rosbridge
     command: >
       bash -c "
         set -e
@@ -42,11 +65,11 @@ services:
       "
     restart: "no"
 
-# Both networks must already exist before running this compose.
-# compose_cube_bridge_network: created by launch_nav2.sh automatically
-# cube_bridge_network: created by rosbridge_server or Unity docker compose
 networks:
-  compose_cube_bridge_network:
-    external: true
+  # cube_bridge_network: shared between rosbridge and Nav2 (Unity connects via rosbridge)
   cube_bridge_network:
+    driver: bridge
+
+  # compose_cube_bridge_network: shared with vlm-rl-env AI containers (enter_docker.sh)
+  compose_cube_bridge_network:
     external: true
