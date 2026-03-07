@@ -19,11 +19,17 @@ services:
     container_name: vlm_rl_nav2
     env_file:
       - .env
+    environment:
+      # Must match ROS_DOMAIN_ID used by all other ROS 2 containers (vlm-rl-env, rosbridge, etc.)
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
     volumes:
-      # Mount the entire ros2 workspace into the container
-      - ./ros2:/workspaces/ros2:ro
+      # Mount the entire ros2 workspace into the container (rw needed for colcon build/install/log)
+      - ./ros2:/workspaces/ros2:rw
     networks:
+      # compose_cube_bridge_network: shared with vlm-rl-env (enter_docker.sh) and AI containers
       - compose_cube_bridge_network
+      # cube_bridge_network: where rosbridge_server is running (for Unity communication)
+      - cube_bridge_network
     command: >
       bash -c "
         set -e
@@ -31,12 +37,16 @@ services:
         cd /workspaces/ros2 &&
         colcon build --packages-select vlm_rl_nav --symlink-install &&
         source /workspaces/ros2/install/setup.bash &&
-        echo '🚀 Launching Nav2...' &&
+        echo '🚀 Launching Nav2 (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)...' &&
         ros2 launch vlm_rl_nav navigation.launch.py
       "
     restart: "no"
 
-# Use the same bridge network as the main VLM-RL system
+# Both networks must already exist before running this compose.
+# compose_cube_bridge_network: created by launch_nav2.sh automatically
+# cube_bridge_network: created by rosbridge_server or Unity docker compose
 networks:
   compose_cube_bridge_network:
+    external: true
+  cube_bridge_network:
     external: true

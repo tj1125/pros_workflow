@@ -26,11 +26,13 @@ for arg in "$@"; do
   esac
 done
 
-# --- Ensure network exists ---
-if ! docker network ls --format '{{.Name}}' | grep -q "compose_cube_bridge_network"; then
-  echo "🌐 Creating Docker bridge network 'compose_cube_bridge_network'..."
-  docker network create --driver bridge compose_cube_bridge_network
-fi
+# --- Ensure networks exist ---
+for NETWORK in compose_cube_bridge_network cube_bridge_network; do
+  if ! docker network ls --format '{{.Name}}' | grep -q "^${NETWORK}$"; then
+    echo "🌐 Creating Docker bridge network '${NETWORK}'..."
+    docker network create --driver bridge "${NETWORK}"
+  fi
+done
 
 # --- Stop mode ---
 if [ "$STOP_MODE" = true ]; then
