@@ -27,6 +27,8 @@ setup(
     description="VLM-RL self-contained Nav2 navigation package",
     license="MIT",
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "scan_relayer = vlm_rl_nav.scan_relayer:main"
+        ],
     },
 )

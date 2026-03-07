@@ -57,6 +57,16 @@ def generate_launch_description() -> LaunchDescription:
         arguments=['0.0', '0.0', '0.15', '3.14', '0.0', '0.0', 'base_footprint', 'laser']
     )
 
+    # 1.5 Scan Relayer: 解決 Unity 與 Docker 容器間的時鐘誤差 (Clock Skew)
+    # Unity 發送的雷達資料帶有過去的時間戳，導致 TF Extrapolation Error
+    # 此節點將 /scan_tmp 重新打包為 /scan 並賦予當下 (now) 的系統時間
+    scan_relayer_cmd = Node(
+        package='vlm_rl_nav',
+        executable='scan_relayer',
+        name='scan_relayer',
+        output='screen'
+    )
+
     # 2. Laser Scan Matcher: 利用 Lidar 掃描資料推算 Odom
     # 這會補足 Unity 沒有直接發布 /odom topic 的問題，
     # 負責發布 transform: odom -> base_footprint
@@ -65,9 +75,6 @@ def generate_launch_description() -> LaunchDescription:
         executable='laser_scan_matcher',
         name='scan_matcher',
         output='screen',
-        remappings=[
-            ('/scan', '/scan_tmp')
-        ],
         parameters=[{
             'base_frame': 'base_footprint',
             'publish_tf': True,
@@ -101,6 +108,7 @@ def generate_launch_description() -> LaunchDescription:
             declare_params,
             declare_use_sim_time,
             base_to_laser_tf_cmd,
+            scan_relayer_cmd,
             scan_matcher_cmd,
             nav2_launch,
         ]
