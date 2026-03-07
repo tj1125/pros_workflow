@@ -59,7 +59,22 @@ uv run python test_client.py            # Mock + A2A 連線測試
 uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 ```
 
-## Docker 部署
+## Docker 部署 & 導航系統啟動
+
+### 啟動 Nav2 導航系統（先於 run 啟動）
+
+```bash
+# 前景模式（建議除錯時使用——可直接看 Nav2 log）
+./launch_nav2.sh
+
+# 背景模式（啟動後可繼續在同一終端執行 run）
+./launch_nav2.sh -d
+
+# 停止 Nav2
+./launch_nav2.sh --stop
+```
+
+### 進入 VLM-RL 開發容器
 
 ```bash
 # 複製並填寫設定
@@ -79,13 +94,16 @@ podman run --env-file .env vlm-rl-system
 VLM_RL/
 ├── main.py                # 系統進入點 (Click CLI)
 ├── pyproject.toml         # uv 套件管理
-├── Containerfile          # Docker 建置
-├── docker-compose.yml     # 容器編排
+├── Dockerfile             # VLM-RL 開發容器建置
+├── enter_docker.sh        # 進入開發容器
+├── launch_nav2.sh         # 一鍵啟動 Nav2 導航系統
+├── docker-compose-nav2.yml # Nav2 容器編排
 ├── .env.example           # 環境變數範本
 ├── test_client.py         # 端對端測試
 ├── commander/
 │   ├── brain.py           # VLM 推理中樞 (Gemini/Ollama)
 │   ├── orchestrator.py    # LangGraph 狀態圖 (5 節點)
+│   ├── nav_move_runner.py # ROS 2 Nav2 Action Client
 │   ├── state.py           # CommanderState TypedDict
 │   └── logger.py          # JSONL 追蹤日誌
 ├── agents/
@@ -94,6 +112,16 @@ VLM_RL/
 │   ├── approach_agent.py  # 靠近 Node (本地控制)
 │   ├── view_agent.py      # 視野調整 Node (A2A Client)
 │   └── schemas.py         # Pydantic 資料模型
+├── ros2/
+│   └── vlm_rl_nav/        # 自用 Nav2 ROS 2 Package
+│       ├── launch/
+│       │   └── navigation.launch.py  # Nav2 主 launch 檔
+│       ├── config/
+│       │   └── nav2_params.yaml      # AMCL + Nav2 參數 (yaw 5度精度)
+│       └── map/
+│           ├── map01.pgm             # 地圖圖像
+│           └── map01.yaml            # 地圖元資料
+├── config/                # 其他設定檔 (camera, objects)
 └── logs/                  # JSONL 追蹤日誌輸出
 ```
 

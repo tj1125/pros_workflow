@@ -24,5 +24,8 @@ dist/
 # UV 與 macOS 系統檔案
 .uv_python/
 .DS_Store
-vendor/ros_pkgs/
+# ROS 2 colcon build artifacts
+ros2/build/
+ros2/install/
+ros2/log/
 .container_env.sh

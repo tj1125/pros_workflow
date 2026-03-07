@@ -1,0 +1,42 @@
+# =============================================================================
+# VLM-RL Nav2 Docker Compose
+# =============================================================================
+# 使用方式：
+#   ./launch_nav2.sh
+# 或：
+#   docker compose -f docker-compose-nav2.yml up
+#
+# 這個 compose 啟動一個 Nav2 容器，使用 VLM-RL 專案自己的 launch 檔和設定。
+# - Nav2 執行環境：ghcr.io/screamlab/pros_jetson_driver_image
+# - ROS 2 package：ros2/vlm_rl_nav（volume mount 進容器 + colcon build）
+# - 地圖：ros2/vlm_rl_nav/map/map01.yaml
+# - Nav2 設定：ros2/vlm_rl_nav/config/nav2_params.yaml
+# =============================================================================
+
+services:
+  nav2:
+    image: ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
+    container_name: vlm_rl_nav2
+    env_file:
+      - .env
+    volumes:
+      # Mount the entire ros2 workspace into the container
+      - ./ros2:/workspaces/ros2:ro
+    networks:
+      - compose_cube_bridge_network
+    command: >
+      bash -c "
+        set -e
+        echo '🔧 Building vlm_rl_nav package...'
+        cd /workspaces/ros2 &&
+        colcon build --packages-select vlm_rl_nav --symlink-install &&
+        source /workspaces/ros2/install/setup.bash &&
+        echo '🚀 Launching Nav2...' &&
+        ros2 launch vlm_rl_nav navigation.launch.py
+      "
+    restart: "no"
+
+# Use the same bridge network as the main VLM-RL system
+networks:
+  compose_cube_bridge_network:
+    external: true

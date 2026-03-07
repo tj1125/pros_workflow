@@ -570,6 +570,7 @@ class Orchestrator:
                 "detail": last_error,
             }
         )
+        logger.error(f"[nav_move_node] Navigation failed completely. Inner error: {last_error}")
         return {
             "current_goal_rank": rank,
             "nav_attempt": last_attempt,
@@ -682,8 +683,8 @@ class Orchestrator:
         if isinstance(center_world, list) and len(center_world) >= 3:
             cw_map_x = 6.0 - float(center_world[2])
             cw_map_y = float(center_world[0]) - 3.314
-            dx = cw_map_x - goal_x
-            dy = cw_map_y - goal_y
+            dx = goal_x - cw_map_x
+            dy = goal_y - cw_map_y
             yaw = math.atan2(dy, dx)
 
         qz = math.sin(yaw / 2.0)
@@ -701,13 +702,13 @@ class Orchestrator:
 
     def _default_initial_pose(self) -> Dict[str, Any]:
         return {
-            "x": 3.6610914064101037,
-            "y": -3.705734566669992,
+            "x": 3.112286942135556,
+            "y": -3.2084078403508274,
             "z": 0.0,
             "qx": 0.0,
             "qy": 0.0,
-            "qz": 0.0,
-            "qw": 1.0,
+            "qz": -0.016265232678593755,
+            "qw": 0.9998677123529448,
             "covariance": [
                 0.25, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.25, 0.0, 0.0, 0.0, 0.0,

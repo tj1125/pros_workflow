@@ -10,7 +10,7 @@ ARCH=$(uname -m)
 OS=$(uname -s)
 echo "Detected OS: $OS, Architecture: $ARCH"
 
-# --- Auto-build local image if not present (only needs to run once) ---
+# --- Auto-build local image if not present (only needs to run once ever) ---
 if ! docker image inspect "$LOCAL_IMAGE" > /dev/null 2>&1; then
     echo "🔨 Building local image '$LOCAL_IMAGE' (first time only, ~30s)..."
     docker build -t "$LOCAL_IMAGE" "$(dirname "$0")"
@@ -46,7 +46,7 @@ if ! command -v uv &> /dev/null || [ ! -d "$UV_PROJECT_ENVIRONMENT" ]; then
     cd /workspaces/VLM_RL && uv sync --frozen --no-dev --python 3.12 --quiet
 fi
 
-# 3. Aliases (written to volume to survive across sessions)
+# 2. Aliases (written to volume to survive across sessions)
 cat > /workspaces/VLM_RL/.container_env.sh << 'ENVFILE'
 export UV_PYTHON_INSTALL_DIR=/workspaces/VLM_RL/.uv_python
 export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
@@ -84,5 +84,6 @@ if [ "$ARCH" = "x86_64" ] || ([ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]); th
         docker run -it --rm $COMMON_ARGS "$LOCAL_IMAGE" /bin/bash -c "$DOCKER_CMD"
     fi
 else
+    # arm64 Linux (e.g. Jetson)
     docker run -it --rm $COMMON_ARGS --runtime=nvidia "$LOCAL_IMAGE" /bin/bash -c "$DOCKER_CMD"
 fi
