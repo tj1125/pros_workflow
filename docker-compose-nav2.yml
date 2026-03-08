@@ -8,7 +8,7 @@
 #
 # 啟動的服務：
 #   rosbridge  — Unity WebSocket 橋接 (port 9090)
-#   nav2       — Nav2 導航系統 (AMCL + BT + Planner + Controller + Costmaps)
+#   nav2       — VLM-RL 導航系統 (scan matcher + localization + Nav2 planning)
 #
 # 恢復雙網路架構：
 # cube_bridge_network: 專為 Unity rosbridge 通訊
@@ -36,7 +36,7 @@ services:
     restart: unless-stopped
 
   # ------------------------------------
-  # Nav2：全套導航系統 (AMCL + bt_navigator + controller + planner + costmaps)
+  # Nav2：VLM-RL 導航基礎設施 (scan matcher + localization + planning servers)
   # ------------------------------------
   nav2:
     image: ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
@@ -47,8 +47,11 @@ services:
       # Must match ROS_DOMAIN_ID used by rosbridge and vlm-rl-env
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
     volumes:
-      # Mount the entire ros2 workspace (rw needed for colcon build/install/log)
-      - ./ros2:/workspaces/ros2:rw
+      # Mount navigation tool sources only; build/install/log stay in Docker named volumes.
+      - ./tools/nav:/workspaces/tools/nav:rw
+      - vlm_rl_nav_build:/workspaces/nav_build
+      - vlm_rl_nav_install:/workspaces/nav_install
+      - vlm_rl_nav_log:/workspaces/nav_log
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
@@ -58,9 +61,12 @@ services:
       bash -c "
         set -e
         echo '🔧 Building vlm_rl_nav package...'
-        cd /workspaces/ros2 &&
-        colcon build --packages-select vlm_rl_nav --symlink-install &&
-        source /workspaces/ros2/install/setup.bash &&
+        cd /workspaces/tools/nav &&
+        find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+        find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+        find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+        colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select vlm_rl_nav --symlink-install &&
+        source /workspaces/nav_install/setup.bash &&
         echo '🚀 Launching Nav2 (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)...' &&
         ros2 launch vlm_rl_nav navigation.launch.py
       "
@@ -74,3 +80,11 @@ networks:
   # compose_cube_bridge_network: shared with vlm-rl-env AI containers (enter_docker.sh)
   compose_cube_bridge_network:
     external: true
+
+volumes:
+  vlm_rl_nav_build:
+    name: vlm_rl_nav_build
+  vlm_rl_nav_install:
+    name: vlm_rl_nav_install
+  vlm_rl_nav_log:
+    name: vlm_rl_nav_log

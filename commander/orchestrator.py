@@ -37,7 +37,6 @@ class Orchestrator:
         self.brain = Brain(use_mock=use_mock)
         self.http_client = httpx.AsyncClient(timeout=120.0)
         self.use_mock = use_mock
-        self._initialpose_ready = False
         self.graph = self._build_graph()
 
     # ------------------------------------------------------------------
@@ -438,8 +437,9 @@ class Orchestrator:
     async def _nav_move_node(self, state: CommanderState) -> Dict[str, Any]:
         """
         Blocking navigation executor:
-        1. Keep publishing /initialpose + /goal_pose until /plan is ready.
-        2. Continue navigation until NavigateToPose returns SUCCEEDED.
+        1. Warm-up publish /goal_pose for discovery.
+        2. Request a global path from planner_server.
+        3. Follow /received_global_plan with the pros-style discrete wheel controller.
         """
         source = state.get("nav_move_source", "reason_loop")
         target_object = state.get("target_object", {})
@@ -456,11 +456,15 @@ class Orchestrator:
             }
 
         start_t = time.time()
-        same_rank_retries = max(0, int(os.getenv("NAV_SAME_RANK_RETRIES", "2")))
+        same_rank_retries = max(0, int(os.getenv("NAV_SAME_RANK_RETRIES", "0")))
         max_attempt_per_rank = same_rank_retries + 1
         plan_timeout = float(os.getenv("NAV_PLAN_TIMEOUT_SEC", "8"))
         arrival_timeout = float(os.getenv("NAV_ARRIVAL_TIMEOUT_SEC", "120"))
         publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.5"))
+        replan_period = float(os.getenv("NAV_REPLAN_PERIOD_SEC", "1.5"))
+        follow_control_hz = float(os.getenv("NAV_FOLLOW_CONTROL_HZ", "10"))
+        goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.2"))
+        path_target_distance_m = float(os.getenv("NAV_PATH_TARGET_DISTANCE_M", "0.5"))
 
         rank = int(state.get("current_goal_rank", 1) or 1)
         if rank < 1:
@@ -485,7 +489,7 @@ class Orchestrator:
 
             for attempt in range(1, max_attempt_per_rank + 1):
                 last_attempt = attempt
-                publish_initialpose = force_initialpose or (not self._initialpose_ready)
+                publish_initialpose = force_initialpose
                 if self.use_mock:
                     await asyncio.sleep(0.2)
                     mock_events = [
@@ -513,6 +517,10 @@ class Orchestrator:
                     "plan_timeout_sec": plan_timeout,
                     "arrival_timeout_sec": arrival_timeout,
                     "publish_interval_sec": publish_interval,
+                    "replan_period_sec": replan_period,
+                    "follow_control_hz": follow_control_hz,
+                    "goal_tolerance_m": goal_tolerance_m,
+                    "path_target_distance_m": path_target_distance_m,
                     "status_topic": "/nav_move/status",
                     "attempt": attempt,
                     "rank": rank,
@@ -524,7 +532,6 @@ class Orchestrator:
                 plan_ready = bool(result.get("plan_ready", False))
                 success = bool(result.get("success", False))
                 if publish_initialpose and plan_ready:
-                    self._initialpose_ready = True
                     force_initialpose = False
 
                 if success:
@@ -730,7 +737,7 @@ class Orchestrator:
         cmd = (
             "unset VIRTUAL_ENV PYTHONPATH PYTHONHOME && "
             "source /opt/ros/humble/setup.bash && "
-            "source /workspaces/install/setup.bash 2>/dev/null || true && "
+            "source /workspaces/nav_install/setup.bash 2>/dev/null || true && "
             f"export LD_LIBRARY_PATH={ros_lib}:${{LD_LIBRARY_PATH:-}} && "
             f"PYTHONPATH={ros_py} "
             f"/usr/bin/python3 -m commander.nav_move_runner --payload {safe_payload}"
