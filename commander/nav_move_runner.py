@@ -206,6 +206,7 @@ class NavMoveRunner(Node):
         replan_period_sec: float,
         follow_control_hz: float,
         goal_tolerance_m: float,
+        goal_heading_tolerance_deg: float,
         min_target_distance_m: float,
     ) -> Dict[str, Any]:
         active_path = self._current_path
@@ -218,6 +219,7 @@ class NavMoveRunner(Node):
         follower = ProsPathFollower(
             self,
             goal_tolerance_m=goal_tolerance_m,
+            goal_heading_tolerance_deg=goal_heading_tolerance_deg,
             min_target_distance_m=min_target_distance_m,
         )
         control_period = 1.0 / max(1.0, follow_control_hz)
@@ -285,7 +287,10 @@ class NavMoveRunner(Node):
         action_server_timeout = float(self.payload.get("action_server_timeout_sec", 8.0))
         replan_period_sec = float(self.payload.get("replan_period_sec", 1.5))
         follow_control_hz = float(self.payload.get("follow_control_hz", 10.0))
-        goal_tolerance_m = float(self.payload.get("goal_tolerance_m", 0.2))
+        goal_tolerance_m = float(self.payload.get("goal_tolerance_m", 0.35))
+        goal_heading_tolerance_deg = float(
+            self.payload.get("goal_heading_tolerance_deg", 5.0)
+        )
         min_target_distance_m = float(self.payload.get("path_target_distance_m", 0.5))
 
         goal_pose_topic_msg = self._make_goal_pose(stamp_mode="now")
@@ -351,6 +356,7 @@ class NavMoveRunner(Node):
             replan_period_sec=replan_period_sec,
             follow_control_hz=follow_control_hz,
             goal_tolerance_m=goal_tolerance_m,
+            goal_heading_tolerance_deg=goal_heading_tolerance_deg,
             min_target_distance_m=min_target_distance_m,
         )
 

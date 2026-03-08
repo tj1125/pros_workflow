@@ -463,7 +463,10 @@ class Orchestrator:
         publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.5"))
         replan_period = float(os.getenv("NAV_REPLAN_PERIOD_SEC", "1.5"))
         follow_control_hz = float(os.getenv("NAV_FOLLOW_CONTROL_HZ", "10"))
-        goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.2"))
+        goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.35"))
+        goal_heading_tolerance_deg = float(
+            os.getenv("NAV_GOAL_HEADING_TOLERANCE_DEG", "5.0")
+        )
         path_target_distance_m = float(os.getenv("NAV_PATH_TARGET_DISTANCE_M", "0.5"))
 
         rank = int(state.get("current_goal_rank", 1) or 1)
@@ -520,6 +523,7 @@ class Orchestrator:
                     "replan_period_sec": replan_period,
                     "follow_control_hz": follow_control_hz,
                     "goal_tolerance_m": goal_tolerance_m,
+                    "goal_heading_tolerance_deg": goal_heading_tolerance_deg,
                     "path_target_distance_m": path_target_distance_m,
                     "status_topic": "/nav_move/status",
                     "attempt": attempt,
@@ -690,8 +694,8 @@ class Orchestrator:
         if isinstance(center_world, list) and len(center_world) >= 3:
             cw_map_x = 6.0 - float(center_world[2])
             cw_map_y = float(center_world[0]) - 3.314
-            dx = goal_x - cw_map_x
-            dy = goal_y - cw_map_y
+            dx = cw_map_x - goal_x
+            dy = cw_map_y - goal_y
             yaw = math.atan2(dy, dx)
 
         qz = math.sin(yaw / 2.0)

@@ -45,6 +45,15 @@ def calculate_diff_angle(
     return _normalize_angle_deg(target_yaw - car_yaw)
 
 
+def calculate_goal_heading_error(
+    car_orientation: tuple[float, float],
+    goal_orientation: tuple[float, float],
+) -> float:
+    car_yaw = _yaw_deg_from_quaternion(car_orientation[0], car_orientation[1])
+    goal_yaw = _yaw_deg_from_quaternion(goal_orientation[0], goal_orientation[1])
+    return _normalize_angle_deg(goal_yaw - car_yaw)
+
+
 @dataclass
 class FollowStep:
     action_key: str
@@ -59,11 +68,13 @@ class ProsPathFollower:
         self,
         node: Node,
         *,
-        goal_tolerance_m: float = 0.2,
+        goal_tolerance_m: float = 0.35,
+        goal_heading_tolerance_deg: float = 5.0,
         min_target_distance_m: float = 0.5,
     ) -> None:
         self.node = node
         self.goal_tolerance_m = goal_tolerance_m
+        self.goal_heading_tolerance_deg = goal_heading_tolerance_deg
         self.min_target_distance_m = min_target_distance_m
         self.front_pub = node.create_publisher(Float32MultiArray, "/car_C_front_wheel", 10)
         self.rear_pub = node.create_publisher(Float32MultiArray, "/car_C_rear_wheel", 10)
@@ -137,6 +148,14 @@ class ProsPathFollower:
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
 
+    @staticmethod
+    def _choose_rotation_action(diff_angle: float) -> str:
+        if diff_angle <= -1.0:
+            return "CLOCKWISE_ROTATION"
+        if diff_angle >= 1.0:
+            return "COUNTERCLOCKWISE_ROTATION"
+        return "STOP"
+
     def follow_step(
         self,
         amcl_pose_msg: Optional[PoseWithCovarianceStamped],
@@ -164,22 +183,40 @@ class ProsPathFollower:
         car_position_msg = amcl_pose_msg.pose.pose.position
         car_orientation_msg = amcl_pose_msg.pose.pose.orientation
         goal_position_msg = goal_pose_msg.pose.position
+        goal_orientation_msg = goal_pose_msg.pose.orientation
 
         car_position = (float(car_position_msg.x), float(car_position_msg.y))
         car_orientation = (float(car_orientation_msg.z), float(car_orientation_msg.w))
         goal_position = (float(goal_position_msg.x), float(goal_position_msg.y))
+        goal_orientation = (float(goal_orientation_msg.z), float(goal_orientation_msg.w))
 
         distance_to_goal = hypot(
             car_position[0] - goal_position[0],
             car_position[1] - goal_position[1],
         )
+        goal_heading_error = calculate_goal_heading_error(car_orientation, goal_orientation)
         if distance_to_goal < self.goal_tolerance_m:
-            self.stop()
+            if abs(goal_heading_error) <= self.goal_heading_tolerance_deg:
+                self.stop()
+                return FollowStep(
+                    action_key="STOP",
+                    distance_to_goal=distance_to_goal,
+                    arrived=True,
+                    detail=(
+                        "goal_reached "
+                        f"heading_error={goal_heading_error:.1f}"
+                    ),
+                )
+
+            action_key = self._choose_rotation_action(goal_heading_error)
+            self.publish_action(action_key)
             return FollowStep(
-                action_key="STOP",
+                action_key=action_key,
                 distance_to_goal=distance_to_goal,
-                arrived=True,
-                detail="goal_reached",
+                detail=(
+                    "final_heading_align "
+                    f"heading_error={goal_heading_error:.1f}"
+                ),
             )
 
         target_point = self._get_next_target_point(car_position, path)
@@ -198,5 +235,8 @@ class ProsPathFollower:
         return FollowStep(
             action_key=action_key,
             distance_to_goal=distance_to_goal,
-            detail=f"target=({target_point[0]:.2f},{target_point[1]:.2f}) diff_angle={diff_angle:.1f}",
+            detail=(
+                f"target=({target_point[0]:.2f},{target_point[1]:.2f}) "
+                f"diff_angle={diff_angle:.1f} goal_heading_error={goal_heading_error:.1f}"
+            ),
         )
