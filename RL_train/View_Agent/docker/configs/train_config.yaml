@@ -1,0 +1,128 @@
+# ============================================================
+# View Agent — Training Configuration
+# ============================================================
+# This file configures ALL three training stages:
+#   Stage 1: Data collection  (run_collect.py)
+#   Stage 2: Teacher labeling (run_label.py)
+#   Stage 3a: Behavior Cloning pretrain (run_pretrain.py)
+#   Stage 3b: SAC RL finetune (run_train.py)
+# ============================================================
+
+# ------------------------------------------------------------
+# Environment / Unity Connection
+# ------------------------------------------------------------
+env:
+  rosbridge_url: "ws://localhost:9090"   # Rosbridge WebSocket endpoint
+  rgb_topic: "/camera/color/image_raw"
+  depth_topic: "/camera/depth/image_raw"
+  joint_state_topic: "/joint_states"
+  imu_topic: "/imu/data"
+  action_topic: "/view_agent/delta_joints"
+  physics_metric_topic: "/view_agent/physics_metrics"
+  randomize_topic: "/env_randomize"
+
+  # Joints used by View Agent (6-DOF arm)
+  joint_names:
+    - "joint1"
+    - "joint2"
+    - "joint3"
+    - "joint4"
+    - "joint5"
+    - "joint6"
+
+# ------------------------------------------------------------
+# Data Collection
+# ------------------------------------------------------------
+collection:
+  num_trajectories: 500           # Total trajectories to collect
+  trajectory_duration_sec: 8.0   # Duration per trajectory
+  control_hz: 10                  # Observation frequency (Hz)
+  out_dir: "data/trajectories"    # Output HDF5 directory
+  image_size: [224, 224]          # Resize images before saving
+  randomize_every_n: 1            # Randomize env every N trajectories
+  use_random_policy: true         # Use random action during collection
+  action_scale: 0.05              # Random action magnitude (rad)
+
+# ------------------------------------------------------------
+# Teacher VLM Labeling
+# ------------------------------------------------------------
+labeling:
+  provider: "gemini"              # "gemini" | "ollama"
+  gemini_model: "gemini-1.5-pro"
+  ollama_model: "gemma3:27b"
+  ollama_base_url: "http://localhost:11434"
+  window_size: 4                  # Number of frames per Teacher query (T, T-1, T-2, T-3)
+  max_parallel_requests: 4        # Maximum concurrent API calls
+  data_dir: "data/trajectories"
+  out_dir: "data/labeled"
+
+  # Reward weights (Teacher dimensional scores -> r_total)
+  reward_weights:
+    occlusion_improvement: 0.40
+    centering_score: 0.20
+    chassis_stability: 0.15
+    progress_reward: 0.15
+    consistency: 0.10
+
+# ------------------------------------------------------------
+# Feature Extraction
+# ------------------------------------------------------------
+features:
+  clip_model_id: "openai/clip-vit-base-patch32"
+  dinov2_model_id: "facebook/dinov2-base"
+  clip_dim: 512
+  dinov2_dim: 768
+  fused_dim: 1280                 # clip_dim + dinov2_dim
+  frame_stack: 3                  # Temporal stack depth
+  temporal_dim: 512               # TemporalEncoder output dim
+  joint_dim: 6
+  history_dim: 6
+  state_dim: 524                  # temporal_dim + joint_dim + history_dim
+
+# ------------------------------------------------------------
+# Behavior Cloning (Stage 3a)
+# ------------------------------------------------------------
+pretrain:
+  data_dir: "data/labeled"
+  checkpoint_dir: "checkpoints/pretrain"
+  batch_size: 64
+  learning_rate: 3.0e-4
+  epochs: 50
+  val_split: 0.1
+  early_stopping_patience: 10
+  save_every_n_epochs: 5
+
+# ------------------------------------------------------------
+# SAC Reinforcement Learning (Stage 3b)
+# ------------------------------------------------------------
+sac:
+  pretrain_checkpoint: "checkpoints/pretrain/best.pt"
+  checkpoint_dir: "checkpoints/sac"
+
+  # Training
+  total_env_steps: 200_000
+  batch_size: 256
+  learning_rate: 3.0e-4
+  replay_buffer_size: 100_000
+  warmup_steps: 5000              # Steps with random policy before training
+  update_every_n_steps: 1
+  updates_per_step: 1
+  save_every_n_steps: 10_000
+  eval_every_n_steps: 5_000
+  eval_episodes: 5
+
+  # SAC Hyperparameters
+  gamma: 0.99                     # Discount factor
+  tau: 0.005                      # Soft target update rate
+  alpha: 0.2                      # Initial entropy coefficient
+  auto_alpha: true                # Auto-tune alpha
+  target_entropy_scale: 1.0       # target_entropy = -action_dim * scale
+
+  # Action constraints
+  action_scale: 0.05              # Max delta per joint per step (rad)
+  action_dim: 6
+
+  # Reward shaping
+  use_teacher_reward: true        # False: use physics metrics only
+  physics_reward_weight: 0.5      # Weight for real-time physics metrics
+  teacher_reward_weight: 0.5      # Weight for offline Teacher scores
