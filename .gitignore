@@ -25,3 +25,11 @@ dist/
 .uv_python/
 .DS_Store
 .container_env.sh
+
+# Ignore model checkpoints in RL_train
+RL_train/**/checkpoints/
+RL_train/**/*.pt
+RL_train/**/*.pth
+RL_train/**/*.safetensors
+RL_train/**/*.ckpt
+RL_train/**/dinov3/

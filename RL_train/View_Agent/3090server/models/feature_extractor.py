@@ -27,6 +27,11 @@ DINOV2_DIM      = 768
 FUSED_DIM       = CLIP_DIM + DINOV2_DIM   # 1280
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    value = os.getenv(name, default).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 class FeatureExtractor:
     """
     Dual-tower visual encoder: CLIP + DINOv2.
@@ -40,6 +45,9 @@ class FeatureExtractor:
 
     def __init__(self, device: Optional[str] = None):
         self._device = device  # Resolved on first use
+        self._clip_model_id = os.getenv("CLIP_MODEL_ID", CLIP_MODEL_ID)
+        self._dinov2_model_id = os.getenv("DINOV2_MODEL_ID", DINOV2_MODEL_ID)
+        self._local_files_only = _env_flag("HF_HUB_OFFLINE") or _env_flag("TRANSFORMERS_OFFLINE")
         self._clip_model     = None
         self._clip_processor = None
         self._dino_model     = None
@@ -92,13 +100,25 @@ class FeatureExtractor:
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
         device = self._device
 
-        logger.info(f"[FeatureExtractor] Loading CLIP ({CLIP_MODEL_ID}) on {device}")
-        self._clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL_ID)
-        self._clip_model = CLIPModel.from_pretrained(CLIP_MODEL_ID).to(device).eval()
+        logger.info(f"[FeatureExtractor] Loading CLIP ({self._clip_model_id}) on {device}")
+        self._clip_processor = CLIPProcessor.from_pretrained(
+            self._clip_model_id,
+            local_files_only=self._local_files_only,
+        )
+        self._clip_model = CLIPModel.from_pretrained(
+            self._clip_model_id,
+            local_files_only=self._local_files_only,
+        ).to(device).eval()
 
-        logger.info(f"[FeatureExtractor] Loading DINOv2 ({DINOV2_MODEL_ID}) on {device}")
-        self._dino_processor = AutoImageProcessor.from_pretrained(DINOV2_MODEL_ID)
-        self._dino_model = AutoModel.from_pretrained(DINOV2_MODEL_ID).to(device).eval()
+        logger.info(f"[FeatureExtractor] Loading DINOv2 ({self._dinov2_model_id}) on {device}")
+        self._dino_processor = AutoImageProcessor.from_pretrained(
+            self._dinov2_model_id,
+            local_files_only=self._local_files_only,
+        )
+        self._dino_model = AutoModel.from_pretrained(
+            self._dinov2_model_id,
+            local_files_only=self._local_files_only,
+        ).to(device).eval()
 
         self._loaded = True
         logger.info("[FeatureExtractor] Models loaded.")
