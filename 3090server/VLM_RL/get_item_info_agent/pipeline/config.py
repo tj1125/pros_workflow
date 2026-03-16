@@ -181,15 +181,9 @@ def resolve_input_images(cfg: dict[str, Any], image_a: Path | None, image_b: Pat
     path_b = image_b.expanduser().resolve() if image_b else None
 
     if path_a is None:
-        matches = sorted(rgb_dir.glob("rgb_1_1*.png"))
-        if not matches:
-            raise FileNotFoundError(f"No rgb_1_1*.png in {rgb_dir}")
-        path_a = matches[0]
+        path_a = _resolve_default_rgb_path(rgb_dir, str(cfg["camera"]["camera_a"]))
     if path_b is None:
-        matches = sorted(rgb_dir.glob("rgb_1_2*.png"))
-        if not matches:
-            raise FileNotFoundError(f"No rgb_1_2*.png in {rgb_dir}")
-        path_b = matches[0]
+        path_b = _resolve_default_rgb_path(rgb_dir, str(cfg["camera"]["camera_b"]))
 
     if not path_a.exists():
         raise FileNotFoundError(path_a)
@@ -197,6 +191,40 @@ def resolve_input_images(cfg: dict[str, Any], image_a: Path | None, image_b: Pat
         raise FileNotFoundError(path_b)
 
     return path_a, path_b
+
+
+def _camera_id_aliases(camera_id: str) -> list[str]:
+    raw = str(camera_id)
+    if raw.startswith("Camera_Room"):
+        suffix = raw[len("Camera_Room") :]
+    else:
+        suffix = raw
+    return list(
+        dict.fromkeys(
+            [
+                raw,
+                f"rgb_{suffix}",
+                f"Camera_Room{suffix}",
+                f"Camera_Room{suffix}_color_image_raw_compressed",
+            ]
+        )
+    )
+
+
+def _resolve_default_rgb_path(rgb_dir: Path, camera_id: str) -> Path:
+    if not rgb_dir.exists():
+        raise FileNotFoundError(f"RGB directory not found: {rgb_dir}")
+
+    patterns: list[str] = []
+    for stem in _camera_id_aliases(camera_id):
+        patterns.extend([f"{stem}*.png", f"{stem}*.jpg", f"{stem}*.jpeg"])
+
+    for pattern in patterns:
+        matches = sorted(rgb_dir.glob(pattern))
+        if matches:
+            return matches[0]
+
+    raise FileNotFoundError(f"No RGB image found for camera '{camera_id}' in {rgb_dir}")
 
 
 def validate_runtime_device(cfg: dict[str, Any]) -> str:

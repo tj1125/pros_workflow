@@ -1,6 +1,6 @@
 camera:
-  camera_a: "1_1"
-  camera_b: "1_2"
+  camera_a: "Camera_Room1_1"
+  camera_b: "Camera_Room1_2"
   camera_parameter_dir: "../data/camera_parameter"
   rgb_dir: "../data/rgb_image"
 

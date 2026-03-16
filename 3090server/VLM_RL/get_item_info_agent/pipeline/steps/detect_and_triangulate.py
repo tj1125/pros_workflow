@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import pickle
 from pathlib import Path
 
 import numpy as np
 import scipy.io
+import yaml
 
 from get_item_info_agent.pipeline.types import BoundingBox
 
@@ -49,32 +51,110 @@ def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[Bounding
     return BoundingBox(x1, y1, x2, y2), result.orig_img.copy()
 
 
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        if path not in seen:
+            unique.append(path)
+            seen.add(path)
+    return unique
+
+
+def _camera_name_candidates(camera_id: str) -> list[str]:
+    raw = str(camera_id)
+    if raw.startswith("Camera_Room"):
+        suffix = raw[len("Camera_Room") :]
+    else:
+        suffix = raw
+    return list(
+        dict.fromkeys(
+            [
+                raw,
+                suffix,
+                f"Camera_Room{suffix}",
+                f"Camera_Room1_{suffix}",
+                f"meta_{suffix}",
+                f"unity_camera_{suffix}",
+            ]
+        )
+    )
+
+
+def _reshape_matrix(data, expected_shape: tuple[int, int], source_path: Path, key: str) -> np.ndarray:
+    if isinstance(data, dict) and "data" in data:
+        rows = int(data.get("rows", expected_shape[0]))
+        cols = int(data.get("cols", expected_shape[1]))
+        matrix = np.array(data["data"], dtype=float).reshape(rows, cols)
+    else:
+        matrix = np.array(data, dtype=float)
+    if matrix.shape != expected_shape:
+        raise ValueError(f"Invalid {key} shape in {source_path}: {matrix.shape}")
+    return matrix
+
+
+def _intrinsic_candidates(camera_id: str, intrinsics_dir: Path) -> list[Path]:
+    paths: list[Path] = []
+    for root in (intrinsics_dir, intrinsics_dir / "yaml"):
+        for stem in _camera_name_candidates(camera_id):
+            paths.append(root / f"{stem}.yaml")
+    suffix = str(camera_id)
+    if suffix.startswith("Camera_Room"):
+        suffix = suffix[len("Camera_Room") :]
+    paths.append(intrinsics_dir / f"meta_{suffix}.mat")
+    return _dedupe_paths(paths)
+
+
+def _extrinsic_pkl_candidates(camera_id: str, extrinsics_dir: Path) -> list[Path]:
+    return _dedupe_paths([extrinsics_dir / f"{stem}.pkl" for stem in _camera_name_candidates(camera_id)])
+
+
+def _extrinsic_json_candidates(camera_id: str, extrinsics_dir: Path) -> list[Path]:
+    json_dir = extrinsics_dir / "json"
+    matches: list[Path] = []
+    for stem in _camera_name_candidates(camera_id):
+        matches.extend(sorted(json_dir.glob(f"{stem}_*.json")))
+    return _dedupe_paths(matches)
+
+
 def load_intrinsic_matrix(camera_id: str, intrinsics_dir: Path) -> np.ndarray:
-    """Load the 3×3 intrinsic matrix for the given camera from a .mat file."""
-    mat_path = intrinsics_dir / f"meta_{camera_id}.mat"
-    if not mat_path.exists():
-        raise FileNotFoundError(f"Intrinsic matrix not found: {mat_path}")
-
-    mat = scipy.io.loadmat(mat_path)
-    intrinsic = None
-    for key in ("intrinsic_matrix", "K"):
-        if key in mat:
-            intrinsic = np.array(mat[key], dtype=float)
-            break
-
-    if intrinsic is None or intrinsic.shape != (3, 3):
-        raise ValueError(f"Invalid intrinsic matrix in {mat_path}")
-    return intrinsic
+    """Load the 3x3 intrinsic matrix for the given camera from YAML or legacy MAT."""
+    for path in _intrinsic_candidates(camera_id, intrinsics_dir):
+        if not path.exists():
+            continue
+        if path.suffix == ".yaml":
+            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for key in ("camera_matrix", "intrinsic_matrix", "K"):
+                if key in payload:
+                    return _reshape_matrix(payload[key], (3, 3), path, key)
+            raise ValueError(f"Intrinsic matrix key not found in {path}")
+        if path.suffix == ".mat":
+            mat = scipy.io.loadmat(path)
+            for key in ("intrinsic_matrix", "K"):
+                if key in mat:
+                    return _reshape_matrix(mat[key], (3, 3), path, key)
+            raise ValueError(f"Intrinsic matrix key not found in {path}")
+    raise FileNotFoundError(f"Intrinsic matrix not found for camera '{camera_id}' in {intrinsics_dir}")
 
 
 def load_extrinsic_matrix(camera_id: str, extrinsics_dir: Path) -> np.ndarray:
-    """Load the 3×4 extrinsic matrix for the given camera from a .pkl file."""
-    pkl_path = extrinsics_dir / f"unity_camera_{camera_id}.pkl"
-    if not pkl_path.exists():
-        raise FileNotFoundError(f"Extrinsic matrix not found: {pkl_path}")
-
-    with pkl_path.open("rb") as handle:
-        payload = pickle.load(handle)
+    """Load the 3x4 extrinsic matrix for the given camera from PKL or JSON."""
+    payload = None
+    source_path: Path | None = None
+    for path in _extrinsic_pkl_candidates(camera_id, extrinsics_dir):
+        if path.exists():
+            with path.open("rb") as handle:
+                payload = pickle.load(handle)
+            source_path = path
+            break
+    if payload is None:
+        for path in _extrinsic_json_candidates(camera_id, extrinsics_dir):
+            if path.exists():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                source_path = path
+                break
+    if payload is None or source_path is None:
+        raise FileNotFoundError(f"Extrinsic matrix not found for camera '{camera_id}' in {extrinsics_dir}")
 
     extrinsic = payload.get("extrinsic_matrix")
     if extrinsic is None:
@@ -86,7 +166,7 @@ def load_extrinsic_matrix(camera_id: str, extrinsics_dir: Path) -> np.ndarray:
     if extrinsic.shape == (4, 4):
         extrinsic = extrinsic[:3, :]
     if extrinsic.shape != (3, 4):
-        raise ValueError(f"Invalid extrinsic shape in {pkl_path}: {extrinsic.shape}")
+        raise ValueError(f"Invalid extrinsic shape in {source_path}: {extrinsic.shape}")
 
     return extrinsic
 

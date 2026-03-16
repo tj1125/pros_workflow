@@ -536,10 +536,18 @@ def main() -> None:
         args.device = "cpu"
 
     align_dir = PROJECT_ROOT / "Camera_3D_Localization" / "result" / "seg_crop_depth"
-    align_candidates = sorted(align_dir.glob("rgb_1_1*.png"))
+    align_candidates = []
+    for pattern in (
+        "rgb_1_1*.png",
+        "Camera_Room1_1*.png",
+        "Camera_Room1_1_color_image_raw_compressed*.png",
+    ):
+        align_candidates = sorted(align_dir.glob(pattern))
+        if align_candidates:
+            break
     if not align_candidates:
         raise FileNotFoundError(
-            f"No rgb_1_1*.png found under {align_dir}"
+            f"No alignment depth image found for camera 1 under {align_dir}"
         )
     args.align_depth = align_candidates[0]
     args.grayscale = True
