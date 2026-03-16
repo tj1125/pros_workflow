@@ -10,3 +10,21 @@ cameras:
     description: 客廳全視角俯瞰相機2
   - name: Camera_Room1_3   # fixed overhead camera covering the whole room
     description: 客廳全視角俯瞰相機3
+  - name: Camera_Room1_4   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機4
+  - name: Camera_Room1_5   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機5
+  - name: Camera_Room1_6   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機6
+  - name: Camera_Room1_7   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機7
+  - name: Camera_Room1_8   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機8
+  - name: Camera_Room1_9   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機9
+  - name: Camera_Room1_10   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機10
+  - name: Camera_Room1_11   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機11
+  - name: Camera_Room1_12   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機12
