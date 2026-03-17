@@ -287,11 +287,13 @@ class Orchestrator:
     async def _get_item_info_node(self, state: CommanderState) -> Dict[str, Any]:
         """
         Takes the user-selected detection, calls GetItemInfoAgent on 3090 via A2A
-        to retrieve 3D position, size, and other properties.
+        with all RGB images from the selected camera group to retrieve 3D
+        position, size, and other properties.
         Stores result in state["target_object"] for the rest of the session.
         """
         from agents.get_item_info_agent import GetItemInfoAgent
         from commander.camera import get_camera_image_base64
+        from commander.camera_groups import group_cameras_for_camera
         
         agent = GetItemInfoAgent(http_client=self.http_client)
         
@@ -299,23 +301,58 @@ class Orchestrator:
         target_obj = state.get("target_object", {})
         yolo_class = target_obj.get("id", "unknown")
 
-        print(f"\n📷 正在擷取立體相機影像 (Camera_Room1_1, Camera_Room1_2)...")
-        # Fetch images in parallel
-        cam_a_b64, cam_b_b64 = await asyncio.gather(
-            get_camera_image_base64("Camera_Room1_1", timeout_sec=15.0),
-            get_camera_image_base64("Camera_Room1_2", timeout_sec=15.0)
+        selected_detection_id = state.get("selected_detection_id", 0)
+        yolo_detections = state.get("yolo_detections", {})
+        selected_det = (
+            yolo_detections.get(selected_detection_id)
+            or yolo_detections.get(str(selected_detection_id))
+            or {}
         )
+        selected_camera = str(selected_det.get("camera", "")).strip()
+        group_cameras = group_cameras_for_camera(selected_camera)
 
-        if not cam_a_b64 or not cam_b_b64:
-            logger.error("[get_item_info_node] Failed to get camera images.")
-            print("❌ 失敗: 未能取得兩個相機的影像。")
+        if not selected_camera or len(group_cameras) < 2:
+            logger.error(
+                "[get_item_info_node] Cannot resolve camera group for detection %s (camera=%s).",
+                selected_detection_id,
+                selected_camera,
+            )
+            print("❌ 失敗: 無法判斷使用者所選照片對應的相機組。")
             return {"current_status": "ITEM_INFO_FAILED"}
 
-        print(f"📡 傳送目標 '{yolo_class}' 資訊至 3090 A2A Server 分析 3D 姿態...")
+        print(f"\n📷 正在擷取相機組 RGB 影像 ({', '.join(group_cameras)})...")
+        image_results = await asyncio.gather(
+            *(get_camera_image_base64(camera_name, timeout_sec=15.0) for camera_name in group_cameras)
+        )
+        camera_images = {
+            camera_name: image_b64
+            for camera_name, image_b64 in zip(group_cameras, image_results)
+            if image_b64
+        }
+        missing_cameras = [
+            camera_name
+            for camera_name, image_b64 in zip(group_cameras, image_results)
+            if not image_b64
+        ]
+
+        if missing_cameras:
+            logger.error(
+                "[get_item_info_node] Failed to get all camera images for group. selected=%s missing=%s",
+                selected_camera,
+                missing_cameras,
+            )
+            print(f"❌ 失敗: 未能取得相機組的所有影像，缺少 {missing_cameras}。")
+            return {"current_status": "ITEM_INFO_FAILED"}
+
+        print(
+            f"📡 傳送目標 '{yolo_class}' 與相機組 "
+            f"{group_cameras} 至 3090 A2A Server 分析 3D 姿態..."
+        )
         params = {
             "yolo_class": yolo_class,
-            "cam_a_b64": cam_a_b64,
-            "cam_b_b64": cam_b_b64,
+            "selected_camera": selected_camera,
+            "camera_names": group_cameras,
+            "camera_images": camera_images,
         }
         result = await agent.execute(params)
         target_object = result.get("result", {})

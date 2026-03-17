@@ -27,6 +27,8 @@ def run_pipeline(
     image_b: Path | None,
     goal_output: Path,
     debug_save: bool,
+    camera_a_id: str | None = None,
+    camera_b_id: str | None = None,
 ) -> dict:
     """Execute the full perception pipeline and write goal_pose.json.
 
@@ -41,7 +43,14 @@ def run_pipeline(
 
     image_a_path, image_b_path = resolve_input_images(cfg, image_a, image_b)
 
-    tri = run_detection_and_triangulation(cfg, image_a_path, image_b_path, yolo_class_name)
+    tri = run_detection_and_triangulation(
+        cfg,
+        image_a_path,
+        image_b_path,
+        yolo_class_name,
+        camera_a_id=camera_a_id,
+        camera_b_id=camera_b_id,
+    )
     bbox_a = tri["bbox_a"]
     image_a_bgr = tri["image_a_bgr"]
     center_world = tri["center_world"]

@@ -51,13 +51,14 @@ python -m a2a_vlm_find
 
 ### 輸入（Multi-part Request）
 
-必須提供三個 components：
+必須提供至少三個 components：
 
 | Part | 類型 | 內容描述 |
 |------|------|----------|
-| `[0]` | text (JSON) | 設定檔，例如：`{"yolo_class": "doll", "scene_config": "<path>"}` |
-| `[1]` | data (bytes) | Camera-A 的影像原圖（PNG/JPG 格式） |
-| `[2]` | data (bytes) | Camera-B 的影像原圖（PNG/JPG 格式） |
+| `[0]` | text (JSON) | 設定檔，例如：`{"yolo_class": "doll", "scene_config": "<path>", "selected_camera": "Camera_Room1_1", "camera_names": ["Camera_Room1_1", "Camera_Room1_2", "Camera_Room1_3"]}` |
+| `[1..N]` | data / text(base64) | 與 `camera_names` 同順序的 RGB 原圖（PNG/JPG 格式） |
+
+Server 會優先以 `selected_camera` 為主視角，從同組上傳影像中挑出可用的 stereo pair 來跑既有 3D pipeline。
 
 ### 輸出（Response - JSON text）
 

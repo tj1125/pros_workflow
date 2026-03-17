@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import pickle
 from pathlib import Path
@@ -11,6 +12,8 @@ import yaml
 
 from get_item_info_agent.pipeline.types import BoundingBox
 
+logger = logging.getLogger(__name__)
+
 
 def load_yolo_model(weights_path: Path):
     """Load a YOLO model from the given weights file."""
@@ -19,7 +22,7 @@ def load_yolo_model(weights_path: Path):
     return YOLO(str(weights_path))
 
 
-def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[BoundingBox, np.ndarray]:
+def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[BoundingBox, np.ndarray, float]:
     """Run YOLO inference and return the highest-confidence bbox for the target class."""
     results = model(str(image_path))
     if not results:
@@ -48,7 +51,7 @@ def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[Bounding
         raise ValueError(f"No class '{class_name}' detection in {image_path}")
 
     x1, y1, x2, y2 = map(float, best)
-    return BoundingBox(x1, y1, x2, y2), result.orig_img.copy()
+    return BoundingBox(x1, y1, x2, y2), result.orig_img.copy(), best_conf
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -237,22 +240,108 @@ def cv_world_to_unity(point: np.ndarray) -> np.ndarray:
     return out
 
 
+def select_best_camera_pair(
+    cfg: dict,
+    image_paths_by_camera: dict[str, Path],
+    yolo_class_name: str,
+    preferred_camera: str | None = None,
+) -> tuple[str, str]:
+    """Pick a camera pair from the uploaded group, preferring the user-selected camera."""
+    if len(image_paths_by_camera) < 2:
+        raise ValueError("At least two camera images are required to select a stereo pair.")
+
+    yolo = load_yolo_model(Path(cfg["models"]["yolo_weights"]))
+    detections: dict[str, dict] = {}
+
+    for camera_name, image_path in image_paths_by_camera.items():
+        try:
+            bbox, _, conf = detect_best_bbox(yolo, image_path, yolo_class_name)
+            detections[camera_name] = {
+                "bbox": bbox,
+                "conf": float(conf),
+            }
+        except Exception as exc:
+            logger.info(
+                "Pair selection: skipping camera=%s class=%s reason=%s",
+                camera_name,
+                yolo_class_name,
+                exc,
+            )
+
+    if len(detections) < 2:
+        raise ValueError(
+            f"Need detections from at least 2 cameras in the selected group for '{yolo_class_name}'."
+        )
+
+    if preferred_camera in detections:
+        partner_names = [camera_name for camera_name in detections if camera_name != preferred_camera]
+        if partner_names:
+            partner_name = max(
+                partner_names,
+                key=lambda camera_name: (detections[camera_name]["conf"], str(camera_name)),
+            )
+            logger.info(
+                "Pair selection: preferred=%s partner=%s confs=(%.3f, %.3f)",
+                preferred_camera,
+                partner_name,
+                detections[preferred_camera]["conf"],
+                detections[partner_name]["conf"],
+            )
+            return preferred_camera, partner_name
+
+    pair_candidates: list[tuple[int, float, float, str, str]] = []
+    ordered_names = sorted(detections)
+    for idx, camera_a_name in enumerate(ordered_names):
+        for camera_b_name in ordered_names[idx + 1 :]:
+            conf_a = detections[camera_a_name]["conf"]
+            conf_b = detections[camera_b_name]["conf"]
+            pair_candidates.append(
+                (
+                    1 if preferred_camera and preferred_camera in (camera_a_name, camera_b_name) else 0,
+                    conf_a + conf_b,
+                    max(conf_a, conf_b),
+                    camera_a_name,
+                    camera_b_name,
+                )
+            )
+
+    _, _, _, camera_a_name, camera_b_name = max(pair_candidates)
+    if preferred_camera == camera_b_name and preferred_camera != camera_a_name:
+        camera_a_name, camera_b_name = camera_b_name, camera_a_name
+    elif detections[camera_b_name]["conf"] > detections[camera_a_name]["conf"]:
+        camera_a_name, camera_b_name = camera_b_name, camera_a_name
+
+    logger.info(
+        "Pair selection: fallback pair=(%s, %s) confs=(%.3f, %.3f)",
+        camera_a_name,
+        camera_b_name,
+        detections[camera_a_name]["conf"],
+        detections[camera_b_name]["conf"],
+    )
+    return camera_a_name, camera_b_name
+
+
 def run_detection_and_triangulation(
     cfg: dict,
     image_a_path: Path,
     image_b_path: Path,
     yolo_class_name: str,
+    camera_a_id: str | None = None,
+    camera_b_id: str | None = None,
 ) -> dict:
     """Run YOLO detection on both images and triangulate the 3D world position."""
     runtime = cfg["runtime"]
     camera_cfg = cfg["camera"]
 
     yolo = load_yolo_model(Path(cfg["models"]["yolo_weights"]))
-    bbox_a, image_a_bgr = detect_best_bbox(yolo, image_a_path, yolo_class_name)
-    bbox_b, _ = detect_best_bbox(yolo, image_b_path, yolo_class_name)
+    bbox_a, image_a_bgr, _ = detect_best_bbox(yolo, image_a_path, yolo_class_name)
+    bbox_b, _, _ = detect_best_bbox(yolo, image_b_path, yolo_class_name)
 
-    proj_a = build_projection_matrix(str(camera_cfg["camera_a"]), Path(camera_cfg["camera_parameter_dir"]))
-    proj_b = build_projection_matrix(str(camera_cfg["camera_b"]), Path(camera_cfg["camera_parameter_dir"]))
+    camera_a_name = str(camera_a_id or camera_cfg["camera_a"])
+    camera_b_name = str(camera_b_id or camera_cfg["camera_b"])
+
+    proj_a = build_projection_matrix(camera_a_name, Path(camera_cfg["camera_parameter_dir"]))
+    proj_b = build_projection_matrix(camera_b_name, Path(camera_cfg["camera_parameter_dir"]))
 
     top_left_world = triangulate_point_rays(proj_a, np.array(bbox_a.top_left), proj_b, np.array(bbox_b.top_left))
     bottom_left_world = triangulate_point_rays(
@@ -275,4 +364,6 @@ def run_detection_and_triangulation(
         "image_a_bgr": image_a_bgr,
         "center_world": center_world,
         "target_height": target_height,
+        "camera_a_id": camera_a_name,
+        "camera_b_id": camera_b_name,
     }

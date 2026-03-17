@@ -65,7 +65,7 @@ class CommanderState(TypedDict):
     find_complete: bool
 
     # YOLO detections from find_node: key = global detection number (1-based)
-    # Value: {camera, bbox, label, conf, annotated_image_base64}
+    # Value: {camera, group_id, bbox, label, conf, annotated_image_base64}
     yolo_detections: Dict[int, Dict[str, Any]]
 
     # User-selected detection ID (0 = user typed "no")

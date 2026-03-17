@@ -3,11 +3,13 @@ agents/get_item_info_agent.py — Get Item Info Agent
 
 Role in the system:
   - LangGraph Node: called after human confirms the target detection ID
-  - A2A Client: sends camera + bbox to INF_GET_ITEM_INFO_URL on RTX 3090
-                for detailed 3D pose, size, and label estimation
+  - A2A Client: sends the selected camera group RGB images to
+                INF_GET_ITEM_INFO_URL on RTX 3090 for detailed 3D pose,
+                size, and label estimation
 
 Server (3090) responsibilities:
-  - Receive camera name and bounding box
+  - Receive the selected camera plus all RGB images in that group
+  - Choose a usable stereo pair inside the group
   - Run depth estimation / point cloud projection
   - Return full 3D world position, orientation, and bounding box size
 
@@ -34,6 +36,9 @@ class GetItemInfoAgent:
     execute() takes params:
       {
         "yolo_class": "doll",  # or "apple", "wine"
+        "selected_camera": "Camera_Room1_1",
+        "camera_names": ["Camera_Room1_1", "Camera_Room1_2", "Camera_Room1_3"],
+        "camera_images": {"Camera_Room1_1": "...", ...},
       }
 
     Returns:
@@ -73,15 +78,22 @@ class GetItemInfoAgent:
         return {"result": result, "success": True}
 
     async def _a2a_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
-        """Real: use passed stereo pair and send to RTX 3090 for full 3D perception pipeline."""
+        """Real: send the selected camera group RGB images to RTX 3090."""
         import json
 
         yolo_class = params.get("yolo_class", "unknown")
-        cam_a_b64 = params.get("cam_a_b64", "")
-        cam_b_b64 = params.get("cam_b_b64", "")
+        selected_camera = str(params.get("selected_camera", "")).strip()
+        camera_images = params.get("camera_images", {}) or {}
+        ordered_camera_names = params.get("camera_names") or list(camera_images.keys())
+        ordered_camera_names = [str(camera_name).strip() for camera_name in ordered_camera_names if str(camera_name).strip()]
 
-        if not cam_a_b64 or not cam_b_b64:
-            logger.error(f"[{self.AGENT_NAME}] Left or right stereo image is missing.")
+        if len(ordered_camera_names) < 2:
+            logger.error(f"[{self.AGENT_NAME}] At least two camera images are required.")
+            return {"result": {}, "success": False}
+
+        missing_cameras = [camera_name for camera_name in ordered_camera_names if not camera_images.get(camera_name)]
+        if missing_cameras:
+            logger.error(f"[{self.AGENT_NAME}] Missing camera images for: {missing_cameras}")
             return {"result": {}, "success": False}
 
         try:
@@ -93,20 +105,20 @@ class GetItemInfoAgent:
                 "message": {
                     "role": "user",
                     "parts": [
-                        { # Part 0: JSON setup
+                        {
                             "kind": "text",
                             "text": json.dumps({
                                 "yolo_class": yolo_class,
+                                "selected_camera": selected_camera,
+                                "camera_names": ordered_camera_names,
                             })
-                        },
-                        { # Part 1: Image A
-                            "kind": "text", 
-                            "text": cam_a_b64
-                        },
-                        { # Part 2: Image B
-                            "kind": "text",
-                            "text": cam_b_b64
                         }
+                    ] + [
+                        {
+                            "kind": "text",
+                            "text": camera_images[camera_name],
+                        }
+                        for camera_name in ordered_camera_names
                     ],
                     "message_id": uuid.uuid4().hex,
                     "context_id": context_id,
@@ -117,7 +129,10 @@ class GetItemInfoAgent:
                 params=MessageSendParams(**payload),
             )
 
-            logger.info(f"[{self.AGENT_NAME}] Sending A2A request to {self._inf_url}")
+            logger.info(
+                f"[{self.AGENT_NAME}] Sending {len(ordered_camera_names)} camera image(s) "
+                f"to {self._inf_url} (selected={selected_camera or 'N/A'})"
+            )
             response = await client.send_message(request)
             return {"result": self._parse_response(response), "success": True}
 
