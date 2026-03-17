@@ -21,8 +21,32 @@ class BoundingBox:
         return (self.x1, self.y2)
 
     @property
+    def top_right(self) -> tuple[float, float]:
+        return (self.x2, self.y1)
+
+    @property
+    def bottom_right(self) -> tuple[float, float]:
+        return (self.x2, self.y2)
+
+    @property
+    def top_center(self) -> np.ndarray:
+        return np.array([(self.x1 + self.x2) * 0.5, self.y1], dtype=float)
+
+    @property
+    def bottom_center(self) -> np.ndarray:
+        return np.array([(self.x1 + self.x2) * 0.5, self.y2], dtype=float)
+
+    @property
     def center(self) -> np.ndarray:
         return np.array([(self.x1 + self.x2) * 0.5, (self.y1 + self.y2) * 0.5], dtype=float)
+
+    @property
+    def width(self) -> float:
+        return float(self.x2 - self.x1)
+
+    @property
+    def height(self) -> float:
+        return float(self.y2 - self.y1)
 
 
 @dataclass(frozen=True)

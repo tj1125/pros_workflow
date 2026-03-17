@@ -59,7 +59,7 @@ def load_depth_model(model_path: Path, device: torch.device):
     config = MODEL_CONFIGS[encoder]
     model = DepthAnythingV2(**config)
 
-    checkpoint = torch.load(model_path, map_location="cpu")
+    checkpoint = torch.load(model_path, map_location=device)
     if isinstance(checkpoint, dict):
         if "state_dict" in checkpoint:
             checkpoint = checkpoint["state_dict"]

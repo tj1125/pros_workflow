@@ -4,15 +4,56 @@ import json
 import logging
 import math
 import pickle
+from dataclasses import dataclass
+from itertools import combinations, product
 from pathlib import Path
 
 import numpy as np
 import scipy.io
 import yaml
 
+from get_item_info_agent.pipeline.steps.obstacles import obstacle_cylinder_dimensions
 from get_item_info_agent.pipeline.types import BoundingBox
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Detection:
+    det_id: str
+    camera_id: str
+    label: str
+    conf: float
+    bbox: BoundingBox
+
+    @property
+    def center_uv(self) -> np.ndarray:
+        return self.bbox.center
+
+    @property
+    def top_left_uv(self) -> np.ndarray:
+        return np.array(self.bbox.top_left, dtype=float)
+
+    @property
+    def top_right_uv(self) -> np.ndarray:
+        return np.array(self.bbox.top_right, dtype=float)
+
+    @property
+    def bottom_left_uv(self) -> np.ndarray:
+        return np.array(self.bbox.bottom_left, dtype=float)
+
+    @property
+    def bottom_right_uv(self) -> np.ndarray:
+        return np.array(self.bbox.bottom_right, dtype=float)
+
+
+@dataclass(frozen=True)
+class MatchedObject:
+    label: str
+    detections: dict[str, Detection]
+    center_world_cv: np.ndarray
+    reprojection_error_px: float
+    mean_conf: float
 
 
 def load_yolo_model(weights_path: Path):
@@ -20,6 +61,13 @@ def load_yolo_model(weights_path: Path):
     from ultralytics import YOLO  # type: ignore
 
     return YOLO(str(weights_path))
+
+
+def _result_label_lookup(result) -> dict[int, str]:
+    names = result.names
+    if isinstance(names, dict):
+        return {int(k): str(v).lower() for k, v in names.items()}
+    return {int(idx): str(name).lower() for idx, name in enumerate(names)}
 
 
 def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[BoundingBox, np.ndarray, float]:
@@ -35,7 +83,7 @@ def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[Bounding
     best = None
     best_conf = -np.inf
     target = class_name.lower()
-    name_lookup = {int(k): v for k, v in result.names.items()}
+    name_lookup = _result_label_lookup(result)
 
     for box in result.boxes:
         cls_id = int(box.cls.item())
@@ -52,6 +100,43 @@ def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[Bounding
 
     x1, y1, x2, y2 = map(float, best)
     return BoundingBox(x1, y1, x2, y2), result.orig_img.copy(), best_conf
+
+
+def detect_all_bboxes(
+    model,
+    image_path: Path,
+    camera_id: str,
+    conf_threshold: float,
+) -> tuple[list[Detection], np.ndarray]:
+    """Run YOLO inference and return all detections above the threshold."""
+    results = model(str(image_path))
+    if not results:
+        raise RuntimeError(f"No YOLO result for image: {image_path}")
+
+    result = results[0]
+    image_bgr = result.orig_img.copy()
+    if result.boxes is None or len(result.boxes) == 0:
+        return [], image_bgr
+
+    detections: list[Detection] = []
+    name_lookup = _result_label_lookup(result)
+    for idx, box in enumerate(result.boxes, start=1):
+        conf = float(box.conf.item())
+        if conf < conf_threshold:
+            continue
+        cls_id = int(box.cls.item())
+        label = name_lookup.get(cls_id, str(cls_id)).lower()
+        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
+        detections.append(
+            Detection(
+                det_id=f"{camera_id}:{idx}",
+                camera_id=camera_id,
+                label=label,
+                conf=conf,
+                bbox=BoundingBox(x1, y1, x2, y2),
+            )
+        )
+    return detections, image_bgr
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -233,11 +318,240 @@ def triangulate_point_rays(
     return np.linalg.solve(a, b)
 
 
+def triangulate_point_multi_view(
+    projections: dict[str, np.ndarray],
+    pixels_by_camera: dict[str, np.ndarray],
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """Triangulate from 2+ camera rays; falls back to SVD when the ray system is ill-conditioned."""
+    eye = np.eye(3)
+    a = np.zeros((3, 3), dtype=float)
+    b = np.zeros(3, dtype=float)
+
+    for camera_id, uv in pixels_by_camera.items():
+        proj = projections[camera_id]
+        center = camera_center_from_projection(proj)
+        direction = ray_direction_from_projection(proj, uv)
+        m = eye - np.outer(direction, direction)
+        a += m
+        b += m @ center
+
+    if np.linalg.matrix_rank(a) == 3 and np.linalg.cond(a) <= 1 / eps:
+        return np.linalg.solve(a, b)
+
+    rows = []
+    for camera_id, uv in pixels_by_camera.items():
+        proj = projections[camera_id]
+        rows.append(float(uv[0]) * proj[2, :] - proj[0, :])
+        rows.append(float(uv[1]) * proj[2, :] - proj[1, :])
+    _, _, vt = np.linalg.svd(np.vstack(rows))
+    xh = vt[-1]
+    if np.isclose(xh[3], 0.0):
+        raise ValueError("Triangulation failed with zero homogeneous coordinate.")
+    return xh[:3] / xh[3]
+
+
+def project_point(projection: np.ndarray, point_world_cv: np.ndarray) -> np.ndarray:
+    point_h = np.append(point_world_cv, 1.0)
+    uvw = projection @ point_h
+    return uvw[:2] / uvw[2]
+
+
 def cv_world_to_unity(point: np.ndarray) -> np.ndarray:
     """Convert a world point from OpenCV convention (z-forward) to Unity (z-backward)."""
     out = point.copy()
     out[2] *= -1.0
     return out
+
+
+def load_camera_models(camera_ids: list[str], camera_parameter_dir: Path) -> dict[str, dict[str, np.ndarray]]:
+    models: dict[str, dict[str, np.ndarray]] = {}
+    for camera_id in camera_ids:
+        intrinsics = load_intrinsic_matrix(camera_id, camera_parameter_dir / "Intrinsics")
+        extrinsic = load_extrinsic_matrix(camera_id, camera_parameter_dir / "Extrinsic")
+        projection = intrinsics @ extrinsic
+        models[camera_id] = {
+            "K": intrinsics,
+            "extrinsic": extrinsic,
+            "P": projection,
+            "camera_center": camera_center_from_projection(projection),
+        }
+    return models
+
+
+def fallback_height_from_bbox(match: MatchedObject, camera_models: dict[str, dict[str, np.ndarray]]) -> float:
+    estimates = []
+    for camera_id, det in match.detections.items():
+        k = camera_models[camera_id]["K"]
+        extrinsic = camera_models[camera_id]["extrinsic"]
+        point_cam = extrinsic[:, :3] @ match.center_world_cv + extrinsic[:, 3]
+        z_cam = float(point_cam[2])
+        if z_cam <= 0:
+            continue
+        estimates.append(det.bbox.height * z_cam / float(k[1, 1]))
+    if not estimates:
+        return 0.05
+    return float(max(estimates))
+
+
+def fallback_length_from_bbox(match: MatchedObject, camera_models: dict[str, dict[str, np.ndarray]]) -> float:
+    estimates = []
+    for camera_id, det in match.detections.items():
+        k = camera_models[camera_id]["K"]
+        extrinsic = camera_models[camera_id]["extrinsic"]
+        point_cam = extrinsic[:, :3] @ match.center_world_cv + extrinsic[:, 3]
+        z_cam = float(point_cam[2])
+        if z_cam <= 0:
+            continue
+        estimates.append(det.bbox.width * z_cam / float(k[0, 0]))
+    if not estimates:
+        return 0.05
+    return float(max(estimates))
+
+
+def estimate_length_height(
+    match: MatchedObject,
+    camera_models: dict[str, dict[str, np.ndarray]],
+    height_scale: float,
+) -> tuple[float, float, float]:
+    projections = {camera_id: info["P"] for camera_id, info in camera_models.items()}
+
+    fallback_length = fallback_length_from_bbox(match, camera_models)
+    fallback_height_raw = fallback_height_from_bbox(match, camera_models)
+
+    corner_pixels = {
+        "top_left": {camera_id: det.top_left_uv for camera_id, det in match.detections.items()},
+        "top_right": {camera_id: det.top_right_uv for camera_id, det in match.detections.items()},
+        "bottom_left": {camera_id: det.bottom_left_uv for camera_id, det in match.detections.items()},
+        "bottom_right": {camera_id: det.bottom_right_uv for camera_id, det in match.detections.items()},
+    }
+
+    corner_points: dict[str, np.ndarray] = {}
+    for name, pixels in corner_pixels.items():
+        if len(pixels) < 2:
+            continue
+        try:
+            corner_points[name] = triangulate_point_multi_view(projections, pixels)
+        except Exception as exc:
+            logger.debug("Corner triangulation failed for %s/%s: %s", match.label, name, exc)
+
+    length_candidates = []
+    if "top_left" in corner_points and "top_right" in corner_points:
+        length_candidates.append(float(np.linalg.norm(corner_points["top_right"] - corner_points["top_left"])))
+    if "bottom_left" in corner_points and "bottom_right" in corner_points:
+        length_candidates.append(float(np.linalg.norm(corner_points["bottom_right"] - corner_points["bottom_left"])))
+
+    height_candidates = []
+    if "top_left" in corner_points and "bottom_left" in corner_points:
+        height_candidates.append(float(np.linalg.norm(corner_points["bottom_left"] - corner_points["top_left"])))
+    if "top_right" in corner_points and "bottom_right" in corner_points:
+        height_candidates.append(float(np.linalg.norm(corner_points["bottom_right"] - corner_points["top_right"])))
+
+    length_m = max(length_candidates) if length_candidates else fallback_length
+    height_raw_m = max(height_candidates) if height_candidates else fallback_height_raw
+
+    if length_m < 0.03:
+        length_m = fallback_length
+    if height_raw_m < 0.03:
+        height_raw_m = fallback_height_raw
+
+    length_m = max(float(length_m), 0.03)
+    height_raw_m = max(float(height_raw_m), 0.03)
+    height_scaled_m = height_raw_m * float(height_scale)
+    return length_m, height_raw_m, max(float(height_scaled_m), 0.03)
+
+
+def match_objects_multi_view(
+    detections_by_camera: dict[str, list[Detection]],
+    camera_models: dict[str, dict[str, np.ndarray]],
+    preferred_camera_id: str | None = None,
+) -> list[MatchedObject]:
+    labels = sorted({det.label for dets in detections_by_camera.values() for det in dets})
+    projections = {camera_id: info["P"] for camera_id, info in camera_models.items()}
+    matches: list[MatchedObject] = []
+
+    for label in labels:
+        per_cam = {
+            camera_id: [det for det in dets if det.label == label]
+            for camera_id, dets in detections_by_camera.items()
+        }
+        available_cameras = [camera_id for camera_id, dets in per_cam.items() if dets]
+        if len(available_cameras) < 2:
+            continue
+
+        candidates = []
+        max_views = min(3, len(available_cameras))
+        for num_views in range(max_views, 1, -1):
+            for camera_subset in combinations(available_cameras, num_views):
+                for det_tuple in product(*(per_cam[camera_id] for camera_id in camera_subset)):
+                    pixels = {
+                        camera_id: det.center_uv for camera_id, det in zip(camera_subset, det_tuple)
+                    }
+                    point_world_cv = triangulate_point_multi_view(projections, pixels)
+                    errors = []
+                    for camera_id, det in zip(camera_subset, det_tuple):
+                        uv_proj = project_point(projections[camera_id], point_world_cv)
+                        errors.append(float(np.linalg.norm(uv_proj - det.center_uv)))
+                    candidates.append(
+                        {
+                            "detections": {camera_id: det for camera_id, det in zip(camera_subset, det_tuple)},
+                            "center_world_cv": point_world_cv,
+                            "mean_error": float(np.mean(errors)),
+                            "mean_conf": float(np.mean([det.conf for det in det_tuple])),
+                        }
+                    )
+
+        candidates.sort(
+            key=lambda item: (
+                -len(item["detections"]),
+                0 if preferred_camera_id and preferred_camera_id in item["detections"] else 1,
+                item["mean_error"],
+                -item["mean_conf"],
+            )
+        )
+
+        used_det_ids: set[str] = set()
+        for candidate in candidates:
+            det_ids = {det.det_id for det in candidate["detections"].values()}
+            if det_ids & used_det_ids:
+                continue
+            used_det_ids |= det_ids
+            matches.append(
+                MatchedObject(
+                    label=label,
+                    detections=candidate["detections"],
+                    center_world_cv=np.asarray(candidate["center_world_cv"], dtype=float),
+                    reprojection_error_px=float(candidate["mean_error"]),
+                    mean_conf=float(candidate["mean_conf"]),
+                )
+            )
+
+    matches.sort(key=lambda item: (-len(item.detections), item.label, -item.mean_conf, item.reprojection_error_px))
+    return matches
+
+
+def choose_target_match(
+    matches: list[MatchedObject],
+    target_label: str,
+    primary_camera_id: str | None = None,
+) -> MatchedObject:
+    target_label = target_label.lower()
+    targets = [match for match in matches if match.label == target_label]
+    if not targets:
+        raise RuntimeError(f"Target label '{target_label}' was not matched across at least two cameras.")
+
+    if primary_camera_id:
+        visible_targets = [match for match in targets if primary_camera_id in match.detections]
+        if not visible_targets:
+            raise RuntimeError(
+                f"Target '{target_label}' was not detected in the selected primary camera '{primary_camera_id}'."
+            )
+        targets = visible_targets
+
+    return max(
+        targets,
+        key=lambda item: (len(item.detections), item.mean_conf, -item.reprojection_error_px),
+    )
 
 
 def select_best_camera_pair(
@@ -329,7 +643,7 @@ def run_detection_and_triangulation(
     camera_a_id: str | None = None,
     camera_b_id: str | None = None,
 ) -> dict:
-    """Run YOLO detection on both images and triangulate the 3D world position."""
+    """Legacy two-view detection+triangulation path kept for backward compatibility."""
     runtime = cfg["runtime"]
     camera_cfg = cfg["camera"]
 
@@ -366,4 +680,111 @@ def run_detection_and_triangulation(
         "target_height": target_height,
         "camera_a_id": camera_a_name,
         "camera_b_id": camera_b_name,
+    }
+
+
+def run_detection_and_triangulation_multi_view(
+    cfg: dict,
+    image_paths_by_camera: dict[str, Path],
+    yolo_class_name: str,
+    primary_camera_id: str | None = None,
+) -> dict:
+    """Run YOLO on all uploaded images, triangulate all detectable objects, and pick a primary view."""
+    if len(image_paths_by_camera) < 2:
+        raise ValueError("At least two camera images are required for 3D localization.")
+    if primary_camera_id and primary_camera_id not in image_paths_by_camera:
+        raise ValueError(f"Primary camera '{primary_camera_id}' was not included in the uploaded images.")
+
+    runtime = cfg["runtime"]
+    camera_cfg = cfg["camera"]
+    yolo_conf_threshold = float(runtime.get("yolo_conf_threshold", 0.25))
+    height_scale = float(runtime.get("height_scale", 1.0))
+
+    yolo = load_yolo_model(Path(cfg["models"]["yolo_weights"]))
+    detections_by_camera: dict[str, list[Detection]] = {}
+    images_by_camera: dict[str, np.ndarray] = {}
+    for camera_id, image_path in image_paths_by_camera.items():
+        detections, image_bgr = detect_all_bboxes(
+            yolo,
+            image_path,
+            camera_id=camera_id,
+            conf_threshold=yolo_conf_threshold,
+        )
+        detections_by_camera[camera_id] = detections
+        images_by_camera[camera_id] = image_bgr
+
+    camera_ids = list(image_paths_by_camera.keys())
+    camera_models = load_camera_models(camera_ids, Path(camera_cfg["camera_parameter_dir"]))
+    matches = match_objects_multi_view(
+        detections_by_camera,
+        camera_models,
+        preferred_camera_id=primary_camera_id,
+    )
+    target_match = choose_target_match(matches, yolo_class_name, primary_camera_id=primary_camera_id)
+
+    resolved_primary_camera = primary_camera_id
+    if not resolved_primary_camera:
+        resolved_primary_camera = max(
+            target_match.detections.keys(),
+            key=lambda camera_id: target_match.detections[camera_id].conf,
+        )
+    if resolved_primary_camera not in target_match.detections:
+        raise RuntimeError(
+            f"Target '{yolo_class_name}' has no detection in primary camera '{resolved_primary_camera}'."
+        )
+
+    object_reports = []
+    target_report = None
+    for match in matches:
+        center_world_unity = cv_world_to_unity(match.center_world_cv)
+        length_m, height_raw_m, height_m = estimate_length_height(match, camera_models, height_scale=height_scale)
+        obstacle_diameter_m, obstacle_height_m = obstacle_cylinder_dimensions(length_m, height_m)
+        report = {
+            "label": match.label,
+            "used_cameras": sorted(match.detections.keys()),
+            "mean_conf": float(match.mean_conf),
+            "reprojection_error_px": float(match.reprojection_error_px),
+            "center_world_cv": match.center_world_cv.tolist(),
+            "center_world_unity": center_world_unity.tolist(),
+            "length_m": float(length_m),
+            "length_mm": float(length_m * 1000.0),
+            "height_raw_m": float(height_raw_m),
+            "height_m": float(height_m),
+            "height_mm": float(height_m * 1000.0),
+            "obstacle_shape": "cylinder",
+            "obstacle_diameter_m": float(obstacle_diameter_m),
+            "obstacle_height_m": float(obstacle_height_m),
+            "bboxes_by_camera": {
+                camera_id: [
+                    float(det.bbox.x1),
+                    float(det.bbox.y1),
+                    float(det.bbox.x2),
+                    float(det.bbox.y2),
+                ]
+                for camera_id, det in match.detections.items()
+            },
+            "bbox_conf_by_camera": {
+                camera_id: float(det.conf)
+                for camera_id, det in match.detections.items()
+            },
+        }
+        object_reports.append(report)
+        if match is target_match:
+            target_report = report
+
+    if target_report is None:
+        raise RuntimeError(f"Failed to build object report for target '{yolo_class_name}'.")
+
+    primary_bbox = target_match.detections[resolved_primary_camera].bbox
+    return {
+        "primary_camera_id": resolved_primary_camera,
+        "primary_bbox": primary_bbox,
+        "primary_image_bgr": images_by_camera[resolved_primary_camera],
+        "center_world": np.array(target_report["center_world_unity"], dtype=float),
+        "target_height": float(target_report["height_m"]),
+        "target_length": float(target_report["length_m"]),
+        "target_object": target_report,
+        "objects": object_reports,
+        "num_matched_objects": len(object_reports),
+        "camera_ids": camera_ids,
     }

@@ -10,12 +10,6 @@ from get_item_info_agent.pipeline.adapters.grasp_format import grasp_orientation
 from get_item_info_agent.pipeline.types import MapInfo
 
 
-def apply_y_flip(position: np.ndarray, rotation: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Flip the Y axis to convert between coordinate conventions."""
-    flip = np.diag([1.0, -1.0, 1.0])
-    return flip @ position, flip @ rotation @ flip
-
-
 def _read_map_yaml(path: Path) -> tuple[Path, float, tuple[float, float, float]]:
     """Parse a ROS map YAML file and return (image_path, resolution, origin)."""
     image = None
@@ -144,16 +138,47 @@ def compute_goal_pose(
     offset = float(map_cfg["offset"])
     white_th = int(map_cfg["white_threshold"])
 
-    counts: dict[int, int] = {}
-    best_by_group: dict[int, dict[str, float | np.ndarray | list[float]]] = {}
+    feasible_counts: dict[int, int] = {}
+    feasible_best_by_group: dict[int, dict[str, float | np.ndarray | list[float] | bool | str]] = {}
+    fallback_counts: dict[int, int] = {}
+    fallback_best_by_group: dict[int, dict[str, float | np.ndarray | list[float] | bool | str]] = {}
+
+    def update_group_candidate(
+        counts: dict[int, int],
+        best_by_group: dict[int, dict[str, float | np.ndarray | list[float] | bool | str]],
+        *,
+        group: int,
+        confidence: float,
+        candidate: np.ndarray,
+        world_pos: np.ndarray,
+        rotation: np.ndarray,
+        map_feasible: bool,
+        selection_mode: str,
+    ) -> None:
+        counts[group] = counts.get(group, 0) + 1
+        current_best = best_by_group.get(group)
+        if current_best is not None and confidence <= float(current_best["confidence"]):
+            return
+
+        pose_matrix = np.eye(4, dtype=float)
+        pose_matrix[:3, :3] = rotation
+        pose_matrix[:3, 3] = world_pos
+        goal_ros = unity_to_map(float(candidate[0]), float(candidate[2]), unity_origin)
+        best_by_group[group] = {
+            "confidence": confidence,
+            "goal_unity": candidate,
+            "goal_ros": [float(goal_ros[0]), float(goal_ros[1])],
+            "pose_unity": world_pos,
+            "pose_matrix_unity": pose_matrix,
+            "map_feasible": bool(map_feasible),
+            "selection_mode": selection_mode,
+        }
 
     for grasp_matrix, confidence in zip(grasps, confidences):
         position = np.array(grasp_matrix[:3, 3], dtype=float)
         rotation = np.array(grasp_matrix[:3, :3], dtype=float)
         group = grasp_orientation_group(grasp_matrix)
         confidence = float(confidence)
-
-        position, rotation = apply_y_flip(position, rotation)
         world_pos = position + center_world
 
         approach = rotation[:, 2]
@@ -166,26 +191,44 @@ def compute_goal_pose(
             direction = -direction
 
         candidate = world_pos + direction * offset
-        if not is_white(candidate, pgm, info, white_th, unity_origin):
+        candidate_is_white = is_white(candidate, pgm, info, white_th, unity_origin)
+
+        update_group_candidate(
+            fallback_counts,
+            fallback_best_by_group,
+            group=group,
+            confidence=confidence,
+            candidate=candidate,
+            world_pos=world_pos,
+            rotation=rotation,
+            map_feasible=candidate_is_white,
+            selection_mode="free_map" if candidate_is_white else "fallback_nonfree_map",
+        )
+
+        if not candidate_is_white:
             continue
 
-        counts[group] = counts.get(group, 0) + 1
-        current_best = best_by_group.get(group)
-        if current_best is None or confidence > float(current_best["confidence"]):
-            pose_matrix = np.eye(4, dtype=float)
-            pose_matrix[:3, :3] = rotation
-            pose_matrix[:3, 3] = world_pos
-            goal_ros = unity_to_map(float(candidate[0]), float(candidate[2]), unity_origin)
-            best_by_group[group] = {
-                "confidence": confidence,
-                "goal_unity": candidate,
-                "goal_ros": [float(goal_ros[0]), float(goal_ros[1])],
-                "pose_unity": world_pos,
-                "pose_matrix_unity": pose_matrix,
-            }
+        update_group_candidate(
+            feasible_counts,
+            feasible_best_by_group,
+            group=group,
+            confidence=confidence,
+            candidate=candidate,
+            world_pos=world_pos,
+            rotation=rotation,
+            map_feasible=True,
+            selection_mode="free_map",
+        )
 
+    using_map_fallback = False
+    counts = feasible_counts
+    best_by_group = feasible_best_by_group
     if not counts:
-        raise RuntimeError("No feasible goal pose found on free map area.")
+        if not fallback_counts:
+            raise RuntimeError("No feasible goal pose candidates could be generated.")
+        using_map_fallback = True
+        counts = fallback_counts
+        best_by_group = fallback_best_by_group
 
     sorted_groups = sorted(
         counts.keys(),
@@ -202,7 +245,12 @@ def compute_goal_pose(
                 "best_pose_matrix_unity": np.array(info_group["pose_matrix_unity"], dtype=float).tolist(),
                 "best_goal_pose_unity": np.array(info_group["goal_unity"], dtype=float).tolist(),
                 "best_goal_pose_ros_map": [float(info_group["goal_ros"][0]), float(info_group["goal_ros"][1])],
+                "map_feasible": bool(info_group["map_feasible"]),
+                "selection_mode": str(info_group["selection_mode"]),
             }
         )
 
-    return {"group_ranking": group_ranking}
+    return {
+        "group_ranking": group_ranking,
+        "used_map_fallback": using_map_fallback,
+    }

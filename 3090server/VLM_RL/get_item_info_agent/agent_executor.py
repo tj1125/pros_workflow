@@ -27,13 +27,12 @@ from a2a.types import UnsupportedOperationError
 
 from a2a_utils.response import build_error, build_success
 from get_item_info_agent.pipeline.constants import DEFAULT_SCENE_CONFIG
-from get_item_info_agent.pipeline.config import load_scene_config
 
 logger = logging.getLogger(__name__)
 
 
 class GetItemInfoExecutor(AgentExecutor):
-    """Full-pipeline A2A executor: stereo images → goal_pose JSON."""
+    """Full-pipeline A2A executor: multi-view RGB images → goal_pose JSON."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         try:
@@ -87,35 +86,20 @@ class GetItemInfoExecutor(AgentExecutor):
                     image_path.write_bytes(image_bytes)
                     image_paths_by_camera[camera_name] = image_path
 
-                cfg, _ = load_scene_config(scene_config_path)
-
                 goal_output = tmp / "goal_pose.json"
 
                 # Late import keeps heavy model loading out of server startup.
                 from get_item_info_agent.pipeline.pipeline import run_pipeline
-                from get_item_info_agent.pipeline.steps.detect_and_triangulate import select_best_camera_pair
-
-                camera_a_id, camera_b_id = select_best_camera_pair(
-                    cfg=cfg,
-                    image_paths_by_camera=image_paths_by_camera,
-                    yolo_class_name=yolo_class,
-                    preferred_camera=selected_camera or None,
-                )
-                logger.info(
-                    "GetItemInfo: chosen pair camera_a=%s camera_b=%s",
-                    camera_a_id,
-                    camera_b_id,
-                )
 
                 result = run_pipeline(
                     scene_config=scene_config_path,
                     yolo_class_name=yolo_class,
-                    image_a=image_paths_by_camera[camera_a_id],
-                    image_b=image_paths_by_camera[camera_b_id],
+                    image_a=None,
+                    image_b=None,
                     goal_output=goal_output,
                     debug_save=False,
-                    camera_a_id=camera_a_id,
-                    camera_b_id=camera_b_id,
+                    image_paths_by_camera=image_paths_by_camera,
+                    primary_camera_id=selected_camera or None,
                 )
 
             logger.info("GetItemInfo: pipeline complete. center_world=%s", result.get("center_world"))
