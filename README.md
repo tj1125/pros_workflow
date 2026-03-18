@@ -15,7 +15,7 @@
 
 ⚡ RTX 3090 推論伺服器 (A2A Servers)
   ├── Inference NAV   :9001
-  ├── Inference Grasp :9002
+  ├── Inference Grasp :8007
   └── Inference View  :9003
 
 🤖 Unity 數位孿生 (ROS/Rosbridge)
