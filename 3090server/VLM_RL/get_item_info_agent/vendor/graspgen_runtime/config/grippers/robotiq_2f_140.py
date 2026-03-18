@@ -5,12 +5,20 @@ import os
 from grasp_gen.robot import load_control_points_core, load_default_gripper_config
 from pathlib import Path
 
+BASE_DEPTH = 0.1950
+
+
 class GripperModel(object):
     def __init__(self, data_root_dir=None):
         if data_root_dir is None:
             data_root_dir = f'{Path(__file__).parent.parent.parent}/assets/robotiq'
         fn_base = data_root_dir + "/robotiq_140_collision.obj"
         self.mesh = trimesh.load(fn_base)
+        gripper_config = load_default_gripper_config(Path(__file__).stem)
+        depth = float(gripper_config.get("depth", BASE_DEPTH))
+        if depth > 0 and not np.isclose(depth, BASE_DEPTH):
+            depth_scale = depth / BASE_DEPTH
+            self.mesh.apply_transform(np.diag([1.0, 1.0, depth_scale, 1.0]))
 
     def get_gripper_collision_mesh(self):
         return self.mesh
