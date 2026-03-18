@@ -21,7 +21,7 @@ from grasp_agent.agent_executor import GraspAgentExecutor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PORT = 8002
+PORT = 8007
 EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
 
 agent_card = AgentCard(

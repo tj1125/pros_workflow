@@ -16,7 +16,7 @@ graph TD
   subgraph Executors [RTX 3090 Server]
     Find[Find Agent: 8005]
     Nav[Nav Agent: 8001]
-    Grasp[GraspGen Agent: 8002]
+    Grasp[GraspGen Agent: 8007]
     Approach[Approach Agent: 8003]
     View[View Agent: 8004]
   end
@@ -134,7 +134,7 @@ graph TD
   subgraph "RTX 3090 Agent Services"
     S0[FastAPI: 8005 Find]
     S1[FastAPI: 8001 Nav]
-    S2[FastAPI: 8002 GraspGen]
+    S2[FastAPI: 8007 GraspGen]
     S3[FastAPI: 8003 Approach]
     S4[FastAPI: 8004 View]
   end

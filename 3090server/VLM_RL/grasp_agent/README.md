@@ -61,4 +61,4 @@ server 會回傳 JSON，重點欄位包含：
 python -m grasp_agent
 ```
 
-服務 port 是 `8002`。
+服務 port 是 `8007`。
