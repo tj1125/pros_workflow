@@ -29,8 +29,7 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 
 - **view_agent** (View Adjustment):
   Slightly adjust the arm or robot posture to improve the observation angle.
-  TRIGGER: The path between the gripper and the target object is PARTIALLY obstructed (minor blockage),
-           and the obstruction CAN be resolved with a small positional adjustment.
+  TRIGGER: This agent is not needed throughout the entire process.
 
 - **DONE**:
   The grasping task has been successfully completed.
