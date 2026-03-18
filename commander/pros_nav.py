@@ -68,14 +68,16 @@ class ProsPathFollower:
         self,
         node: Node,
         *,
-        goal_tolerance_m: float = 0.35,
+        goal_tolerance_m: float = 0.08,
         goal_heading_tolerance_deg: float = 5.0,
         min_target_distance_m: float = 0.5,
+        target_heading_point: Optional[tuple[float, float]] = None,
     ) -> None:
         self.node = node
         self.goal_tolerance_m = goal_tolerance_m
         self.goal_heading_tolerance_deg = goal_heading_tolerance_deg
         self.min_target_distance_m = min_target_distance_m
+        self.target_heading_point = target_heading_point
         self.front_pub = node.create_publisher(Float32MultiArray, "/car_C_front_wheel", 10)
         self.rear_pub = node.create_publisher(Float32MultiArray, "/car_C_rear_wheel", 10)
         self._current_plan_key: Optional[tuple[int, int, int, float, float]] = None
@@ -156,6 +158,22 @@ class ProsPathFollower:
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
 
+    def _calculate_final_heading_error(
+        self,
+        car_position: tuple[float, float],
+        car_orientation: tuple[float, float],
+        goal_orientation: tuple[float, float],
+    ) -> tuple[float, str]:
+        if self.target_heading_point is not None:
+            return (
+                calculate_diff_angle(car_position, car_orientation, self.target_heading_point),
+                "target_heading_error",
+            )
+        return (
+            calculate_goal_heading_error(car_orientation, goal_orientation),
+            "goal_heading_error",
+        )
+
     def follow_step(
         self,
         amcl_pose_msg: Optional[PoseWithCovarianceStamped],
@@ -195,8 +213,13 @@ class ProsPathFollower:
             car_position[1] - goal_position[1],
         )
         goal_heading_error = calculate_goal_heading_error(car_orientation, goal_orientation)
+        final_heading_error, final_heading_label = self._calculate_final_heading_error(
+            car_position,
+            car_orientation,
+            goal_orientation,
+        )
         if distance_to_goal < self.goal_tolerance_m:
-            if abs(goal_heading_error) <= self.goal_heading_tolerance_deg:
+            if abs(final_heading_error) <= self.goal_heading_tolerance_deg:
                 self.stop()
                 return FollowStep(
                     action_key="STOP",
@@ -204,18 +227,18 @@ class ProsPathFollower:
                     arrived=True,
                     detail=(
                         "goal_reached "
-                        f"heading_error={goal_heading_error:.1f}"
+                        f"{final_heading_label}={final_heading_error:.1f}"
                     ),
                 )
 
-            action_key = self._choose_rotation_action(goal_heading_error)
+            action_key = self._choose_rotation_action(final_heading_error)
             self.publish_action(action_key)
             return FollowStep(
                 action_key=action_key,
                 distance_to_goal=distance_to_goal,
                 detail=(
                     "final_heading_align "
-                    f"heading_error={goal_heading_error:.1f}"
+                    f"{final_heading_label}={final_heading_error:.1f}"
                 ),
             )
 
@@ -237,6 +260,8 @@ class ProsPathFollower:
             distance_to_goal=distance_to_goal,
             detail=(
                 f"target=({target_point[0]:.2f},{target_point[1]:.2f}) "
-                f"diff_angle={diff_angle:.1f} goal_heading_error={goal_heading_error:.1f}"
+                f"diff_angle={diff_angle:.1f} "
+                f"goal_heading_error={goal_heading_error:.1f} "
+                f"{final_heading_label}={final_heading_error:.1f}"
             ),
         )

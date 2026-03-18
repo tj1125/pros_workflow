@@ -355,7 +355,10 @@ class Orchestrator:
             "camera_images": camera_images,
         }
         result = await agent.execute(params)
-        target_object = result.get("result", {})
+        target_object = {
+            **target_obj,
+            **(result.get("result", {}) or {}),
+        }
 
         pos = target_object.get("center_world", "N/A")
         logger.info(f"[get_item_info_node] Target '{yolo_class}' 3D info retrieved: {pos}")
@@ -500,7 +503,7 @@ class Orchestrator:
         publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.5"))
         replan_period = float(os.getenv("NAV_REPLAN_PERIOD_SEC", "1.5"))
         follow_control_hz = float(os.getenv("NAV_FOLLOW_CONTROL_HZ", "10"))
-        goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.35"))
+        goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.08"))
         goal_heading_tolerance_deg = float(
             os.getenv("NAV_GOAL_HEADING_TOLERANCE_DEG", "5.0")
         )
@@ -633,10 +636,44 @@ class Orchestrator:
         }
 
     async def _grasp_node(self, state: CommanderState) -> Dict[str, Any]:
-        """GraspGen Agent Node: generate 6-DoF grasp pose via INF_GRASP (A2A Server)."""
+        """GraspGen Agent Node: capture Camera_Car RGBD and call INF_GRASP."""
         from agents.grasp_agent import GraspAgent
+        from commander.camera import get_camera_rgbd_base64
+
+        target_object = state.get("target_object", {}) or {}
+        object_id = target_object.get("id")
+        if not object_id:
+            logger.error("[grasp_node] target_object.id is missing.")
+            return {
+                "agent_result": "[GRASP] target_object.id is missing, cannot call grasp agent.",
+                "agent_success": False,
+                "current_status": "EXECUTED",
+                "_exec_latency": 0.0,
+            }
+
+        print("\n📷 正在擷取 Camera_Car 的 RGBD 影像...")
+        rgbd = await get_camera_rgbd_base64("Camera_Car", timeout_sec=15.0)
+        if not rgbd:
+            logger.error("[grasp_node] Failed to get Camera_Car RGBD image.")
+            return {
+                "agent_result": "[GRASP] Failed to capture Camera_Car RGBD image.",
+                "agent_success": False,
+                "current_status": "EXECUTED",
+                "_exec_latency": 0.0,
+            }
+
+        params = dict(state.get("module_params", {}) or {})
+        params.update(
+            {
+                "object_id": object_id,
+                "camera_name": "Camera_Car",
+                "rgb_base64": rgbd.get("rgb_base64"),
+                "depth_base64": rgbd.get("depth_base64"),
+            }
+        )
+        logger.info("[grasp_node] Captured Camera_Car RGBD and prepared grasp request for '%s'.", object_id)
         agent = GraspAgent(http_client=self.http_client)
-        return await self._run_agent(agent, state)
+        return await self._run_agent(agent, state, params_override=params)
 
     async def _approach_node(self, state: CommanderState) -> Dict[str, Any]:
         """Approach Agent Node: guide arm to pre-grasp point (local control, no GPU)."""
@@ -655,9 +692,10 @@ class Orchestrator:
         agent: Any,
         state: CommanderState,
         has_http: bool = True,
+        params_override: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Common runner: call agent.execute() and return state updates."""
-        params = state.get("module_params", {})
+        params = params_override if params_override is not None else state.get("module_params", {})
         context_id = state.get("context_id", uuid.uuid4().hex)
         start = time.time()
 
@@ -713,6 +751,16 @@ class Orchestrator:
             "current_status": "MEMORY_UPDATED",
         }
 
+    @staticmethod
+    def _target_center_world_to_map_xy(target_object: Dict[str, Any]) -> tuple[float | None, float | None]:
+        center_world = target_object.get("center_world", [])
+        if not isinstance(center_world, list) or len(center_world) < 3:
+            return None, None
+
+        target_map_x = 6.0 - float(center_world[2])
+        target_map_y = float(center_world[0]) - 3.314
+        return target_map_x, target_map_y
+
     def _goal_pose_for_rank(self, target_object: Dict[str, Any], rank: int) -> tuple[Dict[str, Any], str]:
         group_ranking = target_object.get("group_ranking", []) or []
         rank_idx = rank - 1
@@ -727,17 +775,15 @@ class Orchestrator:
         goal_x = float(goal_pose_ros[0])
         goal_y = float(goal_pose_ros[1])
         yaw = 0.0
-        center_world = target_object.get("center_world", [])
-        if isinstance(center_world, list) and len(center_world) >= 3:
-            cw_map_x = 6.0 - float(center_world[2])
-            cw_map_y = float(center_world[0]) - 3.314
-            dx = cw_map_x - goal_x
-            dy = cw_map_y - goal_y
+        target_map_x, target_map_y = self._target_center_world_to_map_xy(target_object)
+        if target_map_x is not None and target_map_y is not None:
+            dx = target_map_x - goal_x
+            dy = target_map_y - goal_y
             yaw = math.atan2(dy, dx)
 
         qz = math.sin(yaw / 2.0)
         qw = math.cos(yaw / 2.0)
-        return {
+        goal_pose = {
             "x": goal_x,
             "y": goal_y,
             "z": 0.0,
@@ -746,7 +792,11 @@ class Orchestrator:
             "qz": qz,
             "qw": qw,
             "yaw": yaw,
-        }, ""
+        }
+        if target_map_x is not None and target_map_y is not None:
+            goal_pose["face_target_x"] = target_map_x
+            goal_pose["face_target_y"] = target_map_y
+        return goal_pose, ""
 
     def _default_initial_pose(self) -> Dict[str, Any]:
         return {

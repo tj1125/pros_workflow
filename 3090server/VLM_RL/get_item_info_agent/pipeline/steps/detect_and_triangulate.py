@@ -14,6 +14,12 @@ import yaml
 
 from get_item_info_agent.pipeline.steps.obstacles import obstacle_cylinder_dimensions
 from get_item_info_agent.pipeline.types import BoundingBox
+from tool.vision.yolo import (
+    extract_detections as extract_yolo_detections,
+    load_yolo_model,
+    run_yolo,
+    select_best_bbox,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,50 +62,15 @@ class MatchedObject:
     mean_conf: float
 
 
-def load_yolo_model(weights_path: Path):
-    """Load a YOLO model from the given weights file."""
-    from ultralytics import YOLO  # type: ignore
-
-    return YOLO(str(weights_path))
-
-
-def _result_label_lookup(result) -> dict[int, str]:
-    names = result.names
-    if isinstance(names, dict):
-        return {int(k): str(v).lower() for k, v in names.items()}
-    return {int(idx): str(name).lower() for idx, name in enumerate(names)}
-
-
 def detect_best_bbox(model, image_path: Path, class_name: str) -> tuple[BoundingBox, np.ndarray, float]:
     """Run YOLO inference and return the highest-confidence bbox for the target class."""
-    results = model(str(image_path))
-    if not results:
-        raise RuntimeError(f"No YOLO result for image: {image_path}")
-
-    result = results[0]
+    result = run_yolo(model, image_path)
     if result.boxes is None or len(result.boxes) == 0:
         raise ValueError(f"No YOLO boxes predicted for image: {image_path}")
 
-    best = None
-    best_conf = -np.inf
-    target = class_name.lower()
-    name_lookup = _result_label_lookup(result)
-
-    for box in result.boxes:
-        cls_id = int(box.cls.item())
-        label = name_lookup.get(cls_id, str(cls_id)).lower()
-        if label != target:
-            continue
-        conf = float(box.conf.item())
-        if conf > best_conf:
-            best_conf = conf
-            best = box.xyxy.cpu().numpy()[0]
-
-    if best is None:
-        raise ValueError(f"No class '{class_name}' detection in {image_path}")
-
-    x1, y1, x2, y2 = map(float, best)
-    return BoundingBox(x1, y1, x2, y2), result.orig_img.copy(), best_conf
+    best_bbox, best_conf = select_best_bbox(result, class_name)
+    x1, y1, x2, y2 = [float(v) for v in best_bbox]
+    return BoundingBox(x1, y1, x2, y2), result.orig_img.copy(), float(best_conf)
 
 
 def detect_all_bboxes(
@@ -109,30 +80,23 @@ def detect_all_bboxes(
     conf_threshold: float,
 ) -> tuple[list[Detection], np.ndarray]:
     """Run YOLO inference and return all detections above the threshold."""
-    results = model(str(image_path))
-    if not results:
-        raise RuntimeError(f"No YOLO result for image: {image_path}")
-
-    result = results[0]
+    result = run_yolo(model, image_path, conf_threshold=conf_threshold)
     image_bgr = result.orig_img.copy()
     if result.boxes is None or len(result.boxes) == 0:
         return [], image_bgr
 
     detections: list[Detection] = []
-    name_lookup = _result_label_lookup(result)
-    for idx, box in enumerate(result.boxes, start=1):
-        conf = float(box.conf.item())
-        if conf < conf_threshold:
-            continue
-        cls_id = int(box.cls.item())
-        label = name_lookup.get(cls_id, str(cls_id)).lower()
-        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
+    for idx, yolo_det in enumerate(
+        extract_yolo_detections(result, conf_threshold=conf_threshold),
+        start=1,
+    ):
+        x1, y1, x2, y2 = [float(v) for v in yolo_det.bbox_xyxy]
         detections.append(
             Detection(
                 det_id=f"{camera_id}:{idx}",
                 camera_id=camera_id,
-                label=label,
-                conf=conf,
+                label=yolo_det.label,
+                conf=float(yolo_det.conf),
                 bbox=BoundingBox(x1, y1, x2, y2),
             )
         )

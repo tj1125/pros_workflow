@@ -9,6 +9,7 @@ Returns 6-DoF grasp pose data via the A2A artifact response.
 """
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -28,7 +29,8 @@ class GraspAgent:
     GraspGen Agent Node: generates 6-DoF grasp poses via GPU inference.
 
     Execution flow:
-        1. Receive module_params (object_id, scene context) from CommanderState
+        1. Receive module_params (object_id, Camera_Car RGBD image, scene context)
+           from CommanderState
         2. Send A2A HTTPS request to Inference GraspGen server (RTX 3090)
         3. Parse returned grasp pose and update CommanderState
     """
@@ -50,18 +52,51 @@ class GraspAgent:
     async def _mock_execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         await asyncio.sleep(0.8)
         obj_id = params.get("object_id", "unknown")
-        logger.info(f"[{self.AGENT_NAME}] Mock: generating grasp for {obj_id}")
+        logger.info(
+            f"[{self.AGENT_NAME}] Mock: generating grasp for {obj_id} "
+            f"(rgb={bool(params.get('rgb_base64'))}, depth={bool(params.get('depth_base64'))})"
+        )
+        mock_result = {
+            "object_id": obj_id,
+            "camera_name": params.get("camera_name", "Camera_Car"),
+            "detection_confidence": 0.95,
+            "grasp_confidence": 0.91,
+            "num_candidate_grasps": 1,
+            "best_grasp_pose_camera": {
+                "frame": "camera",
+                "position": [0.30, 0.10, 0.50],
+                "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
+        }
         return {
-            "result": (
-                f"[MockGrasp] 6-DoF pose for '{obj_id}': "
-                "position=[0.3, 0.1, 0.5], quaternion=[0, 0, 0, 1]"
-            ),
+            "result": mock_result,
             "success": True,
         }
 
     async def _a2a_execute(
         self, params: Dict[str, Any], context_id: str
     ) -> Dict[str, Any]:
+        object_id = params.get("object_id", "unknown")
+        rgb_base64 = params.get("rgb_base64", "")
+        depth_base64 = params.get("depth_base64", "")
+        camera_name = params.get("camera_name", "Camera_Car")
+
+        if not object_id or not rgb_base64 or not depth_base64:
+            missing = [
+                key
+                for key, value in (
+                    ("object_id", object_id),
+                    ("rgb_base64", rgb_base64),
+                    ("depth_base64", depth_base64),
+                )
+                if not value
+            ]
+            logger.error(f"[{self.AGENT_NAME}] Missing required grasp params: {missing}")
+            return {
+                "result": {"error": f"missing required params {missing}"},
+                "success": False,
+            }
+
         try:
             resolver = A2ACardResolver(
                 httpx_client=self._http_client,
@@ -73,13 +108,19 @@ class GraspAgent:
                 agent_card=agent_card,
             )
 
+            request_body = {
+                "object_id": object_id,
+                "camera_name": camera_name,
+                "rgb_base64": rgb_base64,
+                "depth_base64": depth_base64,
+            }
             payload = {
                 "message": {
                     "role": "user",
                     "parts": [
                         {
                             "kind": "text",
-                            "text": f"Generate grasp pose with params: {params}",
+                            "text": json.dumps(request_body),
                         }
                     ],
                     "message_id": uuid.uuid4().hex,
@@ -91,23 +132,25 @@ class GraspAgent:
                 params=MessageSendParams(**payload),
             )
 
-            logger.info(f"[{self.AGENT_NAME}] Sending A2A request to {self._inf_url}")
+            logger.info(
+                f"[{self.AGENT_NAME}] Sending Camera_Car RGBD grasp request "
+                f"for object_id={object_id} to {self._inf_url}"
+            )
             response = await client.send_message(request)
-            result_text = self._parse_response(response)
-            return {"result": result_text, "success": True}
+            result_payload = self._parse_response(response)
+            success = "error" not in result_payload
+            return {"result": result_payload, "success": success}
 
         except Exception as e:
             logger.error(f"[{self.AGENT_NAME}] A2A call failed: {e}")
-            return {"result": f"Error: {e}", "success": False}
+            return {"result": {"error": str(e)}, "success": False}
 
     @staticmethod
-    def _parse_response(response: Any) -> str:
+    def _parse_response(response: Any) -> Dict[str, Any]:
         try:
-            result = response.root.result
-            if hasattr(result, "artifacts") and result.artifacts:
-                parts = result.artifacts[0].parts
-                if parts:
-                    return parts[0].root.text
-        except Exception:
-            pass
-        return "No grasp result data"
+            parts = response.root.result.parts
+            if parts:
+                return json.loads(parts[0].root.text)
+        except Exception as exc:
+            logger.error(f"[{GraspAgent.AGENT_NAME}] Failed to parse response: {exc}")
+        return {"error": "No grasp result data"}

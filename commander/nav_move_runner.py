@@ -216,11 +216,20 @@ class NavMoveRunner(Node):
                 "message": "global plan unavailable",
             }
 
+        goal = self.payload.get("goal_pose", {}) or {}
+        target_heading_point = None
+        if "face_target_x" in goal and "face_target_y" in goal:
+            target_heading_point = (
+                float(goal["face_target_x"]),
+                float(goal["face_target_y"]),
+            )
+
         follower = ProsPathFollower(
             self,
             goal_tolerance_m=goal_tolerance_m,
             goal_heading_tolerance_deg=goal_heading_tolerance_deg,
             min_target_distance_m=min_target_distance_m,
+            target_heading_point=target_heading_point,
         )
         control_period = 1.0 / max(1.0, follow_control_hz)
         deadline = time.monotonic() + arrival_timeout
@@ -287,7 +296,7 @@ class NavMoveRunner(Node):
         action_server_timeout = float(self.payload.get("action_server_timeout_sec", 8.0))
         replan_period_sec = float(self.payload.get("replan_period_sec", 1.5))
         follow_control_hz = float(self.payload.get("follow_control_hz", 10.0))
-        goal_tolerance_m = float(self.payload.get("goal_tolerance_m", 0.35))
+        goal_tolerance_m = float(self.payload.get("goal_tolerance_m", 0.08))
         goal_heading_tolerance_deg = float(
             self.payload.get("goal_heading_tolerance_deg", 5.0)
         )

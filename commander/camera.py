@@ -3,19 +3,21 @@ commander/camera.py — On-demand Unity Camera Image Retrieval
 
 Two responsibilities in one file:
   1. When IMPORTED by the Python 3.12 venv (main app):
-     `get_camera_image_base64()` spawns this file as a subprocess using the
+     `get_camera_image_base64()` / `get_camera_rgbd_base64()` spawn this file as a
+     subprocess using the
      system Python 3.10 (which has rclpy compiled against it).
 
   2. When run DIRECTLY via `/usr/bin/python3 camera.py <camera_name>`:
      Acts as a ROS 2 client, fires the Trigger service, waits for the
-     CompressedImage topic, and prints the Base64 string to stdout.
+     CompressedImage topic(s), and prints the Base64 string / JSON payload to stdout.
 """
 
 import asyncio
+import json
 import logging
 import os
 import subprocess
-from typing import Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,43 @@ async def get_camera_image_base64(
     return await loop.run_in_executor(None, _capture)
 
 
+async def get_camera_rgbd_base64(
+    camera_name: str = "Camera_Car",
+    timeout_sec: float = 10.0,
+) -> Optional[Dict[str, str]]:
+    """
+    Spawn a Python 3.10 subprocess to fetch a single ROS 2 camera RGBD observation.
+    Returns a dict with Base64-encoded rgb/depth images, or None on failure.
+    """
+    loop = asyncio.get_event_loop()
+
+    def _capture() -> Optional[Dict[str, str]]:
+        script = os.path.abspath(__file__)
+        try:
+            result = subprocess.run(
+                ["/usr/bin/python3", script, camera_name, "--mode", "rgbd"],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec + 2.0,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    payload = json.loads(result.stdout.strip())
+                except json.JSONDecodeError as exc:
+                    logger.error(f"[Camera] RGBD payload decode failed: {exc}")
+                    return None
+                if payload.get("rgb_base64") and payload.get("depth_base64"):
+                    logger.info("[Camera] RGBD received successfully.")
+                    return payload
+            logger.error(f"[Camera] RGBD capture failed: {result.stderr.strip()}")
+            return None
+        except Exception as exc:
+            logger.error(f"[Camera] RGBD subprocess error: {exc}")
+            return None
+
+    return await loop.run_in_executor(None, _capture)
+
+
 # ---------------------------------------------------------------------------
 # ROS 2 client — runs in Python 3.10 subprocess
 # ---------------------------------------------------------------------------
@@ -67,6 +106,7 @@ def _camera_key(name: str) -> str:
 
 
 if __name__ == "__main__":
+    import argparse
     import base64
     import sys
     import time
@@ -77,25 +117,36 @@ if __name__ == "__main__":
     from std_srvs.srv import Trigger
 
     class _Client(Node):
-        def __init__(self, camera_name: str, timeout: float):
+        def __init__(self, camera_name: str, timeout: float, mode: str):
             super().__init__(f"vlm_cam_{int(time.time())}")
+            self._camera_name = camera_name
             key = _camera_key(camera_name)
             self._svc = f"/capture_image/{key}"
-            self._topic = f"/capture_image/{key}/rgb/compressed"
+            self._rgb_topic = f"/capture_image/{key}/rgb/compressed"
+            self._depth_topic = f"/capture_image/{key}/depth/compressed"
             self._timeout = timeout
+            self._mode = mode
             self._client = self.create_client(Trigger, self._svc)
-            self._msg: Optional[CompressedImage] = None
+            self._rgb_msg: Optional[CompressedImage] = None
+            self._depth_msg: Optional[CompressedImage] = None
             self._waiting = False
-            self.create_subscription(CompressedImage, self._topic, self._cb, 10)
+            self.create_subscription(CompressedImage, self._rgb_topic, self._rgb_cb, 10)
+            self.create_subscription(CompressedImage, self._depth_topic, self._depth_cb, 10)
 
-        def _cb(self, msg):
-            if self._waiting and self._msg is None:
-                self._msg = msg
+        def _rgb_cb(self, msg):
+            if self._waiting and self._rgb_msg is None:
+                self._rgb_msg = msg
+
+        def _depth_cb(self, msg):
+            if self._waiting and self._depth_msg is None:
+                self._depth_msg = msg
 
         def capture_base64(self) -> str:
             if not self._client.wait_for_service(timeout_sec=self._timeout):
                 print(f"ERROR: {self._svc} not available", file=sys.stderr)
                 return ""
+            self._rgb_msg = None
+            self._depth_msg = None
             self._waiting = True
             future = self._client.call_async(Trigger.Request())
             rclpy.spin_until_future_complete(self, future, timeout_sec=self._timeout)
@@ -105,18 +156,39 @@ if __name__ == "__main__":
                 return ""
             deadline = time.monotonic() + self._timeout
             while time.monotonic() < deadline:
-                if self._msg is not None:
+                if self._rgb_msg is not None and (
+                    self._mode == "rgb" or self._depth_msg is not None
+                ):
                     break
                 rclpy.spin_once(self, timeout_sec=0.1)
             self._waiting = False
-            if self._msg is None:
-                print("ERROR: Image topic timed out", file=sys.stderr)
+            if self._rgb_msg is None:
+                print("ERROR: RGB image topic timed out", file=sys.stderr)
                 return ""
-            return base64.b64encode(bytes(self._msg.data)).decode()
+            rgb_b64 = base64.b64encode(bytes(self._rgb_msg.data)).decode()
+            if self._mode == "rgb":
+                return rgb_b64
 
-    cam = sys.argv[1] if len(sys.argv) > 1 else "Camera_Car"
+            if self._depth_msg is None:
+                print("ERROR: Depth image topic timed out", file=sys.stderr)
+                return ""
+
+            depth_b64 = base64.b64encode(bytes(self._depth_msg.data)).decode()
+            return json.dumps(
+                {
+                    "camera_name": self._camera_name,
+                    "rgb_base64": rgb_b64,
+                    "depth_base64": depth_b64,
+                }
+            )
+
+    parser = argparse.ArgumentParser(description="Capture Unity camera RGB or RGBD images.")
+    parser.add_argument("camera_name", nargs="?", default="Camera_Car")
+    parser.add_argument("--mode", choices=("rgb", "rgbd"), default="rgb")
+    args = parser.parse_args()
+
     rclpy.init()
-    node = _Client(cam, timeout=10.0)
+    node = _Client(args.camera_name, timeout=10.0, mode=args.mode)
     try:
         result = node.capture_base64()
         if result:

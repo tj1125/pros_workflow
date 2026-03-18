@@ -11,11 +11,12 @@ import base64
 import io
 import logging
 import re
-from typing import Dict, Any
-
-from PIL import Image, ImageDraw, ImageFont
-
 from pathlib import Path
+from typing import Any, Dict
+
+from PIL import Image, ImageDraw
+
+from tool.vision.yolo import extract_detections, load_yolo_model, run_yolo
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,7 @@ _MAX_GROUP_CAMERA_INDEX = 12
 class YoloService:
     def __init__(self, model_path: str = str(_DEFAULT_MODEL)):
         try:
-            from ultralytics import YOLO
-            self._model = YOLO(model_path)
+            self._model = load_yolo_model(model_path)
             logger.info(f"[YoloService] Loaded model: {model_path}")
         except Exception as e:
             logger.error(f"[YoloService] Failed to load YOLO or weights not found: {e}")
@@ -63,24 +63,20 @@ class YoloService:
                 img_bytes = base64.b64decode(b64_str)
                 pil_img   = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-                results  = self._model(pil_img, verbose=False)
-                num_det  = len(results[0].boxes)
+                result = run_yolo(self._model, pil_img)
+                num_det = 0 if result.boxes is None else len(result.boxes)
                 logger.info(f"[YoloService] {cam_name}: Detected {num_det} objects.")
 
                 detections = []
-                for box in results[0].boxes:
-                    conf    = float(box.conf[0])
-
-                    if conf <= _MIN_DET_CONF:
-                        continue
-
-                    label   = self._model.names[int(box.cls[0])].lower()
+                for yolo_det in extract_detections(result, conf_threshold=_MIN_DET_CONF):
+                    conf = yolo_det.conf
+                    label = yolo_det.label
 
                     # Filter by target object if specified
                     if target_id and label != target_id and label not in target_label:
                         continue
 
-                    x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
+                    x1, y1, x2, y2 = [int(v) for v in yolo_det.bbox_xyxy]
 
                     # Clamp coordinates to image width/height just in case
                     x1_c = max(0, min(x1, pil_img.width - 1))
