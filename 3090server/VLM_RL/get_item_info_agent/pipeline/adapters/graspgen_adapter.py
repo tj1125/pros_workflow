@@ -5,30 +5,14 @@ from typing import Any
 
 import numpy as np
 
+from tool.grasp.graspgen import filter_by_approach_direction
+
 
 def _mesh_reference_center(mesh: Any) -> np.ndarray:
     bounds = np.asarray(mesh.bounds, dtype=float)
     if bounds.shape != (2, 3):
         raise RuntimeError(f"Unexpected mesh bounds shape: {bounds.shape}")
     return bounds.mean(axis=0)
-
-
-def filter_by_approach_direction(
-    grasps: np.ndarray,
-    scores: np.ndarray,
-    max_angle_to_y: float = 60.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Remove grasps whose approach direction is too aligned with the Y axis (top/bottom grasps)."""
-    target_pos = np.array([0.0, 1.0, 0.0], dtype=float)
-    target_neg = np.array([0.0, -1.0, 0.0], dtype=float)
-    approach = grasps[:, :3, 2]
-    norms = np.linalg.norm(approach, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1.0, norms)
-    approach = approach / norms
-    cos_th = np.cos(np.deg2rad(max_angle_to_y))
-    keep = (approach @ target_pos < cos_th) & (approach @ target_neg < cos_th)
-    return grasps[keep], scores[keep]
-
 
 def infer_grasps_from_mesh(
     mesh: Any,
