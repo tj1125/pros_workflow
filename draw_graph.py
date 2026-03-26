@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from commander.logger import TraceLogger
 from commander.orchestrator import Orchestrator
 
-load_dotenv()
+load_dotenv(override=True)
 
 # 用 mock 模式建立 orchestrator，只需要拿到 graph 物件
 trace_logger = TraceLogger()
