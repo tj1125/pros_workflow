@@ -30,6 +30,15 @@ def _load_camera_names() -> List[str]:
     return [str(camera.get("name", "")).strip() for camera in cameras if camera.get("name")]
 
 
+def configured_room_cameras() -> List[str]:
+    """Return all configured fixed room cameras in config order."""
+    return [
+        camera_name
+        for camera_name in _load_camera_names()
+        if room1_camera_group_id(camera_name) is not None
+    ]
+
+
 def cameras_in_group(group_id: int) -> List[str]:
     """Return configured room cameras that belong to the given 1-based group."""
     if group_id < 1:

@@ -287,13 +287,13 @@ class Orchestrator:
     async def _get_item_info_node(self, state: CommanderState) -> Dict[str, Any]:
         """
         Takes the user-selected detection, calls GetItemInfoAgent on 3090 via A2A
-        with all RGB images from the selected camera group to retrieve 3D
+        with all available fixed-room RGB images to retrieve 3D
         position, size, and other properties.
         Stores result in state["target_object"] for the rest of the session.
         """
         from agents.get_item_info_agent import GetItemInfoAgent
         from commander.camera import get_camera_image_base64
-        from commander.camera_groups import group_cameras_for_camera
+        from commander.camera_groups import configured_room_cameras
         
         agent = GetItemInfoAgent(http_client=self.http_client)
         
@@ -309,50 +309,81 @@ class Orchestrator:
             or {}
         )
         selected_camera = str(selected_det.get("camera", "")).strip()
-        group_cameras = group_cameras_for_camera(selected_camera)
+        room_cameras = configured_room_cameras()
+        primary_camera = selected_camera if selected_camera in room_cameras else ""
 
-        if not selected_camera or len(group_cameras) < 2:
+        if len(room_cameras) < 2:
             logger.error(
-                "[get_item_info_node] Cannot resolve camera group for detection %s (camera=%s).",
+                "[get_item_info_node] Not enough configured room cameras for triangulation. detection=%s camera=%s configured=%s",
                 selected_detection_id,
                 selected_camera,
+                room_cameras,
             )
-            print("❌ 失敗: 無法判斷使用者所選照片對應的相機組。")
+            print("❌ 失敗: 可用的房間固定相機少於 2 台，無法進行 3D 定位。")
             return {"current_status": "ITEM_INFO_FAILED"}
 
-        print(f"\n📷 正在擷取相機組 RGB 影像 ({', '.join(group_cameras)})...")
+        if selected_camera and not primary_camera:
+            logger.warning(
+                "[get_item_info_node] Selected camera %s is not a configured room camera; falling back to multi-view auto selection.",
+                selected_camera,
+            )
+
+        print(f"\n📷 正在擷取全部房間相機 RGB 影像 ({', '.join(room_cameras)})...")
         image_results = await asyncio.gather(
-            *(get_camera_image_base64(camera_name, timeout_sec=15.0) for camera_name in group_cameras)
+            *(get_camera_image_base64(camera_name, timeout_sec=15.0) for camera_name in room_cameras)
         )
         camera_images = {
             camera_name: image_b64
-            for camera_name, image_b64 in zip(group_cameras, image_results)
+            for camera_name, image_b64 in zip(room_cameras, image_results)
             if image_b64
         }
+        available_cameras = [camera_name for camera_name in room_cameras if camera_images.get(camera_name)]
         missing_cameras = [
             camera_name
-            for camera_name, image_b64 in zip(group_cameras, image_results)
+            for camera_name, image_b64 in zip(room_cameras, image_results)
             if not image_b64
         ]
 
-        if missing_cameras:
+        if len(available_cameras) < 2:
             logger.error(
-                "[get_item_info_node] Failed to get all camera images for group. selected=%s missing=%s",
+                "[get_item_info_node] Not enough captured room camera images. selected=%s available=%s missing=%s",
                 selected_camera,
+                available_cameras,
                 missing_cameras,
             )
-            print(f"❌ 失敗: 未能取得相機組的所有影像，缺少 {missing_cameras}。")
+            print(
+                f"❌ 失敗: 成功收到的房間相機影像不足 2 張。"
+                f" available={available_cameras}, missing={missing_cameras}"
+            )
             return {"current_status": "ITEM_INFO_FAILED"}
 
+        if missing_cameras:
+            logger.warning(
+                "[get_item_info_node] Some room cameras did not return images; continuing with available=%s missing=%s",
+                available_cameras,
+                missing_cameras,
+            )
+            print(f"⚠ 部分房間相機未回圖，改用已收到的相機: {available_cameras}")
+
+        if primary_camera and primary_camera not in camera_images:
+            logger.warning(
+                "[get_item_info_node] Selected primary camera %s did not return an image; clearing primary camera hint.",
+                primary_camera,
+            )
+            primary_camera = ""
+
         print(
-            f"📡 傳送目標 '{yolo_class}' 與相機組 "
-            f"{group_cameras} 至 3090 A2A Server 分析 3D 姿態..."
+            f"📡 傳送目標 '{yolo_class}' 與全部可用房間相機 "
+            f"{available_cameras} 至 3090 A2A Server 分析 3D 姿態..."
         )
         params = {
             "yolo_class": yolo_class,
-            "selected_camera": selected_camera,
-            "camera_names": group_cameras,
-            "camera_images": camera_images,
+            "selected_camera": primary_camera,
+            "camera_names": available_cameras,
+            "camera_images": {
+                camera_name: camera_images[camera_name]
+                for camera_name in available_cameras
+            },
         }
         result = await agent.execute(params)
         target_object = {

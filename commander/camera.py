@@ -16,10 +16,42 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import subprocess
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _ros_python_bin() -> str:
+    """Return the Python executable that has ROS 2 Python packages installed."""
+    return os.getenv("ROS_PYTHON_BIN", "/usr/bin/python3")
+
+
+def _ros_setup_scripts() -> list[str]:
+    """Return ROS setup scripts to source before running the ROS-side helper."""
+    return [
+        os.getenv("ROS_SETUP_BASH", "/opt/ros/humble/setup.bash"),
+        os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/nav_install/setup.bash"),
+    ]
+
+
+def _camera_subprocess_cmd(camera_name: str, mode: str) -> str:
+    """Build a ROS-aware bash command for the camera helper subprocess."""
+    script = shlex.quote(os.path.abspath(__file__))
+    camera_arg = shlex.quote(camera_name)
+    python_bin = shlex.quote(_ros_python_bin())
+    mode_arg = "" if mode == "rgb" else " --mode rgbd"
+    parts = [
+        "unset VIRTUAL_ENV PYTHONHOME PYTHONPATH",
+    ]
+    for setup_script in _ros_setup_scripts():
+        if setup_script:
+            quoted = shlex.quote(setup_script)
+            parts.append(f"if [ -f {quoted} ]; then source {quoted}; fi")
+    parts.append(f"export ROS_DOMAIN_ID={shlex.quote(os.getenv('ROS_DOMAIN_ID', '1'))}")
+    parts.append(f"exec {python_bin} {script} {camera_arg}{mode_arg}")
+    return " && ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -37,10 +69,9 @@ async def get_camera_image_base64(
     loop = asyncio.get_event_loop()
 
     def _capture() -> Optional[str]:
-        script = os.path.abspath(__file__)
         try:
             result = subprocess.run(
-                ["/usr/bin/python3", script, camera_name],
+                ["/bin/bash", "-lc", _camera_subprocess_cmd(camera_name, mode="rgb")],
                 capture_output=True,
                 text=True,
                 timeout=timeout_sec + 2.0,
@@ -68,10 +99,9 @@ async def get_camera_rgbd_base64(
     loop = asyncio.get_event_loop()
 
     def _capture() -> Optional[Dict[str, str]]:
-        script = os.path.abspath(__file__)
         try:
             result = subprocess.run(
-                ["/usr/bin/python3", script, camera_name, "--mode", "rgbd"],
+                ["/bin/bash", "-lc", _camera_subprocess_cmd(camera_name, mode="rgbd")],
                 capture_output=True,
                 text=True,
                 timeout=timeout_sec + 2.0,

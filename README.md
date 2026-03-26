@@ -136,3 +136,7 @@ VLM_RL/
 | `INF_GRASP_URL` | RTX3090 Grasp 推論伺服器地址 | — |
 | `INF_VIEW_URL` | RTX3090 View 推論伺服器地址 | — |
 | `ROSBRIDGE_URL` | Unity Rosbridge WebSocket | `ws://localhost:9090` |
+| `ROS_DOMAIN_ID` | ROS 2 DDS Domain，必須和相機 / Nav2 同步 | `1` |
+| `ROS_PYTHON_BIN` | 具有 `rclpy` 的 Python 執行檔 | `/usr/bin/python3` |
+| `ROS_SETUP_BASH` | ROS 2 base setup script | `/opt/ros/humble/setup.bash` |
+| `ROS_OVERLAY_SETUP_BASH` | ROS overlay setup script | `/workspaces/nav_install/setup.bash` |
