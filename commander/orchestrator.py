@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal
 
 import httpx
+import yaml
 from langgraph.graph import END, StateGraph
 
 from .brain import Brain
@@ -17,6 +18,12 @@ from .logger import TraceLogger
 from .state import CommanderState
 
 logger = logging.getLogger(__name__)
+_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+
+
+def _load_graspable_objects() -> list[dict[str, Any]]:
+    with (_CONFIG_DIR / "objects.yaml").open(encoding="utf-8") as handle:
+        return yaml.safe_load(handle).get("graspable_objects", [])
 
 
 class Orchestrator:
@@ -25,6 +32,8 @@ class Orchestrator:
 
     Graph topology:
         observe_node → reason_node
+            input_node → find_node → get_item_info_no_sam3d_node → nav_move_node
+            nav_move_node → observe_node → reason_node
             reason_node --[nav_agent]-------> nav_node ┐
             reason_node --[grasp_agent]-----> grasp_node ├─→ update_memory_node → observe_node
             reason_node --[approach_agent]--> approach_node ┘
@@ -59,14 +68,14 @@ class Orchestrator:
         workflow.add_node("grasp_node", self._grasp_node)
         workflow.add_node("approach_node", self._approach_node)
         workflow.add_node("view_node", self._view_node)
-        workflow.add_node("get_item_info_node", self._get_item_info_node)
+        workflow.add_node("get_item_info_no_sam3d_node", self._get_item_info_no_sam3d_node)
 
         # Entry point
         workflow.set_entry_point("input_node")
 
         # Fixed edges
         workflow.add_edge("input_node", "find_node")
-        workflow.add_edge("get_item_info_node", "nav_move_node")
+        workflow.add_edge("get_item_info_no_sam3d_node", "nav_move_node")
         workflow.add_edge("observe_node", "reason_node")
         workflow.add_edge("nav_node", "nav_move_node")
         workflow.add_edge("grasp_node", "update_memory_node")
@@ -74,11 +83,11 @@ class Orchestrator:
         workflow.add_edge("view_node", "update_memory_node")
         workflow.add_edge("update_memory_node", "observe_node")
 
-        # find_node → get_item_info_node or END
+        # find_node → get_item_info_no_sam3d_node or END
         workflow.add_conditional_edges(
             "find_node",
             self._route_find,
-            {"get_item_info_node": "get_item_info_node", "end": END},
+            {"get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node", "end": END},
         )
 
         # reason_node → agent node or END
@@ -119,8 +128,7 @@ class Orchestrator:
             logger.info(f"[input_node] Task pre-filled: {existing}")
             return {"task_description": existing, "current_status": "INPUT_RECEIVED"}
 
-        from agents.find_agent import _load_objects
-        objects = _load_objects()
+        objects = _load_graspable_objects()
 
         print("\n" + "=" * 60)
         print("  VLM-RL 多代理人抓取系統")
@@ -164,65 +172,199 @@ class Orchestrator:
         }
 
     # ------------------------------------------------------------------
-    # Node: find (runs once — YOLO detection + human confirmation)
+    # Node: find (runs once — world_position_data + human confirmation)
     # ------------------------------------------------------------------
+
+    async def _capture_room_camera_images(
+        self,
+        camera_names: list[str],
+        timeout_sec: float = 10.0,
+    ) -> Dict[str, str]:
+        from .camera_groups import room_camera_topic
+        from .room_topics import get_compressed_image_topic_base64
+
+        ordered_unique: list[str] = []
+        seen: set[str] = set()
+        for camera_name in camera_names:
+            camera_text = str(camera_name).strip()
+            if not camera_text or camera_text in seen:
+                continue
+            if not room_camera_topic(camera_text):
+                continue
+            seen.add(camera_text)
+            ordered_unique.append(camera_text)
+
+        if not ordered_unique:
+            return {}
+
+        image_results = await asyncio.gather(
+            *(
+                get_compressed_image_topic_base64(
+                    room_camera_topic(camera_name),
+                    timeout_sec=timeout_sec,
+                )
+                for camera_name in ordered_unique
+            )
+        )
+        return {
+            camera_name: image_b64
+            for camera_name, image_b64 in zip(ordered_unique, image_results)
+            if image_b64
+        }
+
+    @staticmethod
+    def _pick_primary_room_camera(
+        candidate: Dict[str, Any],
+        camera_images: Dict[str, str],
+    ) -> tuple[str, list[float]]:
+        from .world_position import bbox_area
+
+        best_camera = ""
+        best_bbox: list[float] = []
+        best_area = -1.0
+        bboxes_by_camera = candidate.get("bboxes_by_camera", {}) or {}
+        for camera_name in candidate.get("camsrc", []) or []:
+            if camera_name not in camera_images:
+                continue
+            bbox = bboxes_by_camera.get(camera_name)
+            if not isinstance(bbox, list) or len(bbox) != 4:
+                continue
+            area = bbox_area(bbox)
+            if area > best_area:
+                best_area = area
+                best_camera = camera_name
+                best_bbox = bbox
+        return best_camera, best_bbox
 
     async def _find_node(self, state: CommanderState) -> Dict[str, Any]:
         """
-        1. Call FindAgent to run YOLO on all camera images (returns annotated images + metadata).
-        2. Save annotated images to logs/find_candidates/.
-        3. Print detection list, wait for user to pick a number or type 'no'.
+        1. Read /world_position_data once.
+        2. Snapshot room-camera RGB topics and save per-instance preview crops.
+        3. Ask the user to choose the desired instance and store a fully-prepared
+           selected_target for get_item_info_no_sam3d_node.
         """
-        task_desc = state.get("task_description", "")
-
         target_obj = state.get("target_object", {})
+        target_item_id = str(target_obj.get("id") or target_obj.get("label") or "").strip()
+        target_label = str(target_obj.get("label") or target_item_id or "目標物").strip()
 
-        from agents.find_agent import FindAgent
-        agent = FindAgent(http_client=self.http_client)
-        result = await agent.execute({
-            "task_description": task_desc,
-            "target_object": target_obj
-        })
-        agent_result = result.get("result", {})
-        yolo_detections: Dict[str, Any] = agent_result.get("yolo_detections", {})
-        annotated_images: Dict[str, str] = agent_result.get("annotated_images", {})
+        from .room_topics import get_topic_string_message, save_preview_bbox_annotated
+        from .world_position import normalized_item_id, parse_world_position_payload
 
-        # Save individual annotated full images if server returned them
-        if annotated_images:
-            import base64
-            save_dir = Path("logs/find_candidates")
-            save_dir.mkdir(parents=True, exist_ok=True)
-            for det_id_str, b64_img in annotated_images.items():
-                det_info = yolo_detections.get(det_id_str) or yolo_detections.get(int(det_id_str), {})
-                cam_name = det_info.get("camera", "unknown")
-                img_path = save_dir / f"{det_id_str}_{cam_name}.jpg"
-                with open(img_path, "wb") as f:
-                    f.write(base64.b64decode(b64_img))
+        requested_item_id = normalized_item_id(target_item_id or target_label)
+        world_position_payload: Dict[str, Any]
+        raw_candidates: list[Dict[str, Any]]
 
-        # Print detections for user
+        if self.use_mock:
+            mock_candidate = {
+                "item_id": requested_item_id or "target",
+                "instance_id": 1,
+                "instance_key": f"{requested_item_id or 'target'}_1",
+                "topic_key": "mock",
+                "center_world": [1.2, 0.4, 2.8],
+                "camsrc": [],
+                "bboxes_by_camera": {},
+            }
+            world_position_payload = {"data": json.dumps({"mock": []})}
+            raw_candidates = [mock_candidate]
+        else:
+            world_position_raw = await get_topic_string_message("/world_position_data", timeout_sec=5.0)
+            if not world_position_raw:
+                logger.error("[find_node] Failed to read /world_position_data.")
+                print("❌ 失敗：無法收到 /world_position_data。")
+                return {
+                    "yolo_detections": {},
+                    "selected_detection_id": 0,
+                    "selected_target": {},
+                    "find_complete": True,
+                    "current_status": "TARGET_NOT_FOUND",
+                }
+            world_position_payload = {"data": world_position_raw}
+            try:
+                raw_candidates = parse_world_position_payload(world_position_payload)
+            except Exception as exc:
+                logger.error("[find_node] Failed to parse /world_position_data: %s", exc, exc_info=True)
+                print("❌ 失敗：/world_position_data 格式無法解析。")
+                return {
+                    "yolo_detections": {},
+                    "selected_detection_id": 0,
+                    "selected_target": {},
+                    "find_complete": True,
+                    "current_status": "TARGET_NOT_FOUND",
+                }
+
+        matching_candidates = [
+            candidate
+            for candidate in raw_candidates
+            if candidate.get("item_id") == requested_item_id
+        ]
+
+        unique_camera_names: list[str] = []
+        seen_cameras: set[str] = set()
+        for candidate in matching_candidates:
+            for camera_name in candidate.get("camsrc", []) or []:
+                if camera_name in seen_cameras:
+                    continue
+                seen_cameras.add(camera_name)
+                unique_camera_names.append(camera_name)
+        camera_images = (
+            {}
+            if self.use_mock
+            else await self._capture_room_camera_images(unique_camera_names, timeout_sec=10.0)
+        )
+
+        yolo_detections: Dict[int, Dict[str, Any]] = {}
+        for display_id, candidate in enumerate(matching_candidates, start=1):
+            primary_camera, primary_bbox = self._pick_primary_room_camera(candidate, camera_images)
+            available_camera_names = [
+                camera_name
+                for camera_name in candidate.get("camsrc", []) or []
+                if camera_images.get(camera_name)
+            ]
+            preview_path = ""
+            if primary_camera and primary_bbox and camera_images.get(primary_camera):
+                preview_file = Path("logs/find_candidates") / f"{candidate['instance_key']}.jpg"
+                if save_preview_bbox_annotated(camera_images[primary_camera], primary_bbox, preview_file):
+                    preview_path = str(preview_file)
+
+            yolo_detections[display_id] = {
+                "label": target_label,
+                "item_id": candidate["item_id"],
+                "instance_id": int(candidate["instance_id"]),
+                "instance_key": candidate["instance_key"],
+                "topic_key": candidate.get("topic_key", ""),
+                "center_world": list(candidate.get("center_world", [])),
+                "camsrc": list(candidate.get("camsrc", [])),
+                "bboxes_by_camera": dict(candidate.get("bboxes_by_camera", {})),
+                "primary_camera": primary_camera,
+                "camera_names": available_camera_names,
+                "preview_path": preview_path,
+                "source": "mock_world_position" if self.use_mock else "world_position_data",
+            }
+
         print("\n" + "=" * 55)
-        print("  🔍 YOLO 偵測結果：")
+        print("  🔍 world_position_data 候選結果：")
         print("=" * 55)
         if not yolo_detections:
-            print("  ⚠ 找不到任何物品。")
+            print(f"  ⚠ 找不到類別 '{target_label}' 的任何 instance。")
         else:
             for det_id, det in yolo_detections.items():
-                print(f"  [{det_id}] {det.get('label','?')}  信心度={det.get('conf', 0):.0%}  相機={det.get('camera','?')}")
-            print(f"\n  📁 有匡到的相片已存至: logs/find_candidates/")
+                print(
+                    f"  [{det_id}] {det.get('instance_key','?')}  "
+                    f"center_world={det.get('center_world', [])}  "
+                    f"camsrc={det.get('camsrc', [])}"
+                )
+                if det.get("preview_path"):
+                    print(f"      預覽圖: {det['preview_path']}")
         print("=" * 55)
 
         loop = asyncio.get_event_loop()
-        
+
         if not yolo_detections:
-            # If no detections, just pause and exit
-            await loop.run_in_executor(
-                None,
-                lambda: input("按下 Enter 鍵結束任務..."),
-            )
-            logger.info("[find_node] No target found. User acknowledged.")
+            logger.info("[find_node] No matching instance found for %s.", requested_item_id)
             return {
                 "yolo_detections": yolo_detections,
                 "selected_detection_id": 0,
+                "selected_target": {},
                 "find_complete": True,
                 "current_status": "TARGET_NOT_FOUND",
             }
@@ -237,19 +379,18 @@ class Orchestrator:
 
             choice = choice_str.strip().lower()
             if choice == "no":
-                logger.info("[find_node] User indicated no valid target found.")
+                logger.info("[find_node] User indicated no valid instance found.")
                 return {
                     "yolo_detections": yolo_detections,
                     "selected_detection_id": 0,
+                    "selected_target": {},
                     "find_complete": True,
                     "current_status": "TARGET_NOT_FOUND",
                 }
 
             try:
                 selected_id = int(choice)
-                if selected_id in yolo_detections or str(selected_id) in yolo_detections:
-                    # Depending on how the dict keys were parsed (int or str)
-                    selected_id = selected_id if selected_id in yolo_detections else str(selected_id)
+                if selected_id in yolo_detections:
                     det = yolo_detections[selected_id]
                     break
                 else:
@@ -257,16 +398,27 @@ class Orchestrator:
             except ValueError:
                 print("❌ 錯誤：格式不正確，請輸入數字或 'no'。")
 
-        label = det.get("label", "目標物")
-        logger.info(f"[find_node] User selected detection {selected_id}: {label}")
-        print(f"\n✅ 選定目標：[{selected_id}] {label}")
+        selected_target = {
+            **det,
+            "selected_camera": det.get("primary_camera", ""),
+            "camera_images": {
+                camera_name: camera_images[camera_name]
+                for camera_name in det.get("camera_names", [])
+                if camera_name in camera_images
+            },
+            "world_position_data": world_position_payload,
+        }
+
+        logger.info("[find_node] User selected instance %s.", det.get("instance_key", "unknown"))
+        print(f"\n✅ 選定目標：[{selected_id}] {det.get('instance_key', '未知目標')}")
         print("-" * 55)
 
         return {
             "yolo_detections": yolo_detections,
             "selected_detection_id": selected_id,
+            "selected_target": selected_target,
             "find_complete": True,
-            "current_status": "TARGET_FOUND",
+            "current_status": "TARGET_SELECTED_FROM_WORLD_POSITION",
         }
 
     # ------------------------------------------------------------------
@@ -274,137 +426,194 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _route_find(self, state: CommanderState) -> str:
-        """Route to get_item_info_node if target found, else END."""
+        """Route to get_item_info_no_sam3d_node if target found, else END."""
         if state.get("selected_detection_id", 0) == 0:
             logger.info("[route_find] No target → ending graph.")
             return "end"
-        return "get_item_info_node"
+        return "get_item_info_no_sam3d_node"
 
     # ------------------------------------------------------------------
-    # Node: get_item_info (runs once — retrieve full 3D info)
+    # Node: get_item_info_no_sam3d (runs once — retrieve full 3D info)
     # ------------------------------------------------------------------
 
-    async def _get_item_info_node(self, state: CommanderState) -> Dict[str, Any]:
+    async def _get_item_info_no_sam3d_node(self, state: CommanderState) -> Dict[str, Any]:
         """
-        Takes the user-selected detection, calls GetItemInfoAgent on 3090 via A2A
-        with all available fixed-room RGB images to retrieve 3D
-        position, size, and other properties.
-        Stores result in state["target_object"] for the rest of the session.
+        Takes the fully-prepared selected_target from find_node, refreshes the
+        exact instance from /world_position_data, and delegates multi-view
+        geometry estimation to GetItemInfoNoSam3DAgent.
         """
-        from agents.get_item_info_agent import GetItemInfoAgent
-        from commander.camera import get_camera_image_base64
-        from commander.camera_groups import configured_room_cameras
-        
-        agent = GetItemInfoAgent(http_client=self.http_client)
-        
-        # Get the actual ID defined in objects.yaml
-        target_obj = state.get("target_object", {})
-        yolo_class = target_obj.get("id", "unknown")
+        from agents.get_item_info_agent_no_sam3d import GetItemInfoNoSam3DAgent
+        from .room_topics import get_topic_string_message, save_preview_bbox_annotated
+        from .world_position import find_instance
 
-        selected_detection_id = state.get("selected_detection_id", 0)
-        yolo_detections = state.get("yolo_detections", {})
-        selected_det = (
-            yolo_detections.get(selected_detection_id)
-            or yolo_detections.get(str(selected_detection_id))
-            or {}
-        )
-        selected_camera = str(selected_det.get("camera", "")).strip()
-        room_cameras = configured_room_cameras()
-        primary_camera = selected_camera if selected_camera in room_cameras else ""
+        target_obj = state.get("target_object", {}) or {}
+        selected_target = dict(state.get("selected_target") or {})
+        if not selected_target:
+            logger.error("[get_item_info_no_sam3d_node] selected_target is missing.")
+            print("❌ 失敗：find_node 沒有提供 selected_target。")
+            return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
 
-        if len(room_cameras) < 2:
-            logger.error(
-                "[get_item_info_node] Not enough configured room cameras for triangulation. detection=%s camera=%s configured=%s",
-                selected_detection_id,
-                selected_camera,
-                room_cameras,
+        if self.use_mock:
+            world_position_payload = selected_target.get("world_position_data") or {"data": json.dumps({"mock": []})}
+            refreshed_target = {
+                **selected_target,
+                "center_world": selected_target.get("center_world", [1.2, 0.4, 2.8]),
+            }
+            camera_images = dict(selected_target.get("camera_images", {}) or {})
+        else:
+            world_position_raw = await get_topic_string_message("/world_position_data", timeout_sec=5.0)
+            if not world_position_raw:
+                logger.error("[get_item_info_no_sam3d_node] Failed to refresh /world_position_data.")
+                print("❌ 失敗：進入 no_sam3d 前無法刷新 /world_position_data。")
+                return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+            world_position_payload = {"data": world_position_raw}
+            try:
+                refreshed_target = find_instance(
+                    world_position_payload,
+                    selected_target.get("item_id", ""),
+                    int(selected_target.get("instance_id", -1)),
+                )
+            except Exception as exc:
+                logger.error("[get_item_info_no_sam3d_node] Failed to parse refreshed /world_position_data: %s", exc, exc_info=True)
+                print("❌ 失敗：刷新後的 /world_position_data 格式無法解析。")
+                return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+            if not refreshed_target:
+                logger.error(
+                    "[get_item_info_no_sam3d_node] Instance disappeared. item=%s instance=%s",
+                    selected_target.get("item_id", ""),
+                    selected_target.get("instance_id", -1),
+                )
+                print("❌ 失敗：重新訂閱後找不到剛才選定的 instance。")
+                return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+            camera_images = await self._capture_room_camera_images(
+                refreshed_target.get("camsrc", []) or [],
+                timeout_sec=10.0,
             )
-            print("❌ 失敗: 可用的房間固定相機少於 2 台，無法進行 3D 定位。")
-            return {"current_status": "ITEM_INFO_FAILED"}
 
-        if selected_camera and not primary_camera:
-            logger.warning(
-                "[get_item_info_node] Selected camera %s is not a configured room camera; falling back to multi-view auto selection.",
-                selected_camera,
-            )
-
-        print(f"\n📷 正在擷取全部房間相機 RGB 影像 ({', '.join(room_cameras)})...")
-        image_results = await asyncio.gather(
-            *(get_camera_image_base64(camera_name, timeout_sec=15.0) for camera_name in room_cameras)
-        )
-        camera_images = {
-            camera_name: image_b64
-            for camera_name, image_b64 in zip(room_cameras, image_results)
-            if image_b64
-        }
-        available_cameras = [camera_name for camera_name in room_cameras if camera_images.get(camera_name)]
-        missing_cameras = [
+        primary_camera, primary_bbox = self._pick_primary_room_camera(refreshed_target, camera_images)
+        available_cameras = [
             camera_name
-            for camera_name, image_b64 in zip(room_cameras, image_results)
-            if not image_b64
+            for camera_name in refreshed_target.get("camsrc", []) or []
+            if camera_images.get(camera_name)
         ]
+        if not self.use_mock and not available_cameras:
+            logger.error("[get_item_info_no_sam3d_node] No usable room-camera images for %s.", refreshed_target.get("instance_key", "unknown"))
+            print("❌ 失敗：選定目標沒有任何可用的房間相機影像。")
+            return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+        if not primary_camera and available_cameras:
+            primary_camera = available_cameras[0]
 
-        if len(available_cameras) < 2:
-            logger.error(
-                "[get_item_info_node] Not enough captured room camera images. selected=%s available=%s missing=%s",
-                selected_camera,
-                available_cameras,
-                missing_cameras,
-            )
-            print(
-                f"❌ 失敗: 成功收到的房間相機影像不足 2 張。"
-                f" available={available_cameras}, missing={missing_cameras}"
-            )
-            return {"current_status": "ITEM_INFO_FAILED"}
+        preview_path = str(selected_target.get("preview_path", "") or "")
+        if primary_camera and primary_bbox and camera_images.get(primary_camera):
+            preview_file = Path("logs/find_candidates") / f"{refreshed_target['instance_key']}.jpg"
+            if save_preview_bbox_annotated(camera_images[primary_camera], primary_bbox, preview_file):
+                preview_path = str(preview_file)
 
-        if missing_cameras:
-            logger.warning(
-                "[get_item_info_node] Some room cameras did not return images; continuing with available=%s missing=%s",
-                available_cameras,
-                missing_cameras,
-            )
-            print(f"⚠ 部分房間相機未回圖，改用已收到的相機: {available_cameras}")
-
-        if primary_camera and primary_camera not in camera_images:
-            logger.warning(
-                "[get_item_info_node] Selected primary camera %s did not return an image; clearing primary camera hint.",
-                primary_camera,
-            )
-            primary_camera = ""
-
-        print(
-            f"📡 傳送目標 '{yolo_class}' 與全部可用房間相機 "
-            f"{available_cameras} 至 3090 A2A Server 分析 3D 姿態..."
-        )
+        label = str(
+            selected_target.get("label")
+            or target_obj.get("label")
+            or refreshed_target.get("item_id")
+            or "目標物"
+        ).strip()
         params = {
-            "yolo_class": yolo_class,
+            "target_item_id": refreshed_target.get("item_id"),
+            "target_instance_id": int(refreshed_target.get("instance_id", -1)),
+            "target_instance_key": refreshed_target.get("instance_key"),
+            "target_topic_key": refreshed_target.get("topic_key"),
+            "target_label": label,
             "selected_camera": primary_camera,
             "camera_names": available_cameras,
             "camera_images": {
                 camera_name: camera_images[camera_name]
                 for camera_name in available_cameras
+                if camera_name in camera_images
             },
+            "center_world": list(refreshed_target.get("center_world", [])),
+            "bboxes_by_camera": dict(refreshed_target.get("bboxes_by_camera", {})),
+            "world_position_data": world_position_payload,
         }
-        result = await agent.execute(params)
+        if self.use_mock:
+            agent_result = {
+                "center_world": list(refreshed_target.get("center_world", [])),
+                "center_world_coordinate_frame": "unity_world",
+                "group_ranking": [],
+                "goal_pose_path": "/tmp/mock_goal_pose.json",
+                "primary_camera_id": primary_camera,
+                "target_instance_key": refreshed_target.get("instance_key"),
+                "target_topic_key": refreshed_target.get("topic_key"),
+                "target_object": {
+                    "label": label,
+                    "id": int(refreshed_target.get("instance_id", -1)),
+                    "instance_id": int(refreshed_target.get("instance_id", -1)),
+                    "instance_key": refreshed_target.get("instance_key"),
+                    "topic_key": refreshed_target.get("topic_key"),
+                },
+                "objects": [],
+                "num_matched_objects": 1,
+            }
+        else:
+            agent = GetItemInfoNoSam3DAgent(http_client=self.http_client)
+            print(
+                f"📡 將選定目標 '{refreshed_target.get('instance_key', label)}' 與 "
+                f"{available_cameras} 傳送至 GetItemInfoNoSam3DAgent..."
+            )
+            result = await agent.execute(params, state.get("context_id", ""))
+            if not result.get("success", False):
+                logger.error("[get_item_info_no_sam3d_node] GetItemInfoNoSam3DAgent execution failed.")
+                print("❌ 失敗：GetItemInfoNoSam3DAgent 沒有成功回傳結果。")
+                return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+            agent_result = result.get("result", {}) or {}
+
+        refreshed_selected_target = {
+            **selected_target,
+            **refreshed_target,
+            "label": label,
+            "selected_camera": primary_camera,
+            "primary_camera": primary_camera,
+            "camera_names": available_cameras,
+            "camera_images": {
+                camera_name: camera_images[camera_name]
+                for camera_name in available_cameras
+                if camera_name in camera_images
+            },
+            "preview_path": preview_path,
+            "world_position_data": world_position_payload,
+        }
         target_object = {
             **target_obj,
-            **(result.get("result", {}) or {}),
+            **refreshed_selected_target,
+            **agent_result,
+            "id": refreshed_target.get("item_id", target_obj.get("id")),
+            "label": label,
         }
 
-        pos = target_object.get("center_world", "N/A")
-        logger.info(f"[get_item_info_node] Target '{yolo_class}' 3D info retrieved: {pos}")
-        print(f"\n📦 目標物立體資訊已取得！ 3D 中心點 = {pos}")
-        
         current_rank = int(state.get("current_goal_rank", 1) or 1)
         if current_rank < 1:
             current_rank = 1
+        goal_pose, goal_pose_err = self._goal_pose_for_rank(target_object, current_rank)
+        if goal_pose_err:
+            logger.warning(
+                "[get_item_info_no_sam3d_node] Target '%s' has no goal_pose yet: %s",
+                refreshed_target.get("instance_key", label),
+                goal_pose_err,
+            )
+            print(f"\n📦 no_sam3d 目標資訊已取得！ goal_pose = N/A ({goal_pose_err})")
+        else:
+            logger.info(
+                "[get_item_info_no_sam3d_node] Target '%s' goal_pose retrieved: %s",
+                refreshed_target.get("instance_key", label),
+                goal_pose,
+            )
+            print(f"\n📦 no_sam3d 目標資訊已取得！ goal_pose = {goal_pose}")
 
         return {
+            "selected_target": refreshed_selected_target,
             "target_object": target_object,
             "current_goal_rank": current_rank,
+            "nav_goal_pose": goal_pose if not goal_pose_err else {},
             "nav_move_source": "bootstrap",
             "force_initialpose": False,
-            "current_status": "ITEM_INFO_READY",
+            "current_status": "ITEM_INFO_NO_SAM3D_READY",
         }
 
     # ------------------------------------------------------------------

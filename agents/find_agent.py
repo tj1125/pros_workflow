@@ -100,7 +100,6 @@ class FindAgent:
                 "camera": cam_name,
                 "bbox": [100, 100, 300, 300],       # dummy bbox
                 "label": obj["label"],
-                "conf": 0.9,
                 "annotated_image_base64": None,     # no real image in mock
             }
 
