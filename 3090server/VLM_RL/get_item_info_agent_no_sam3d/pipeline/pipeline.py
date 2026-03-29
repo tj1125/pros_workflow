@@ -15,7 +15,7 @@ from get_item_info_agent_no_sam3d.pipeline.config import (
     validate_required_paths,
     validate_runtime_device,
 )
-from get_item_info_agent.pipeline.steps.goal_pose import compute_goal_pose
+from get_item_info_agent_no_sam3d.pipeline.steps.goal_pose import compute_goal_pose
 from get_item_info_agent_no_sam3d.pipeline.constants import AGENT_ROOT
 from get_item_info_agent_no_sam3d.pipeline.steps.topic_input import (
     canonical_camera_name,
@@ -946,10 +946,6 @@ def run_pipeline(
     image_paths_by_camera: dict[str, Path],
     world_position_data: Any,
     primary_camera_id: str | None = None,
-    target_item_id: str | None = None,
-    target_instance_id: int | str | None = None,
-    target_instance_key: str | None = None,
-    target_topic_key: str | None = None,
 ) -> dict:
     pipeline_start = time.perf_counter()
     topic_parse_s = 0.0
@@ -960,7 +956,7 @@ def run_pipeline(
     prepare_runtime_imports(cfg)
     device = validate_runtime_device(cfg)
 
-    target_label = normalize_label(yolo_class_name or target_item_id or "")
+    target_label = normalize_label(yolo_class_name)
     canonical_images = _canonicalize_image_paths(image_paths_by_camera)
     if not canonical_images:
         raise RuntimeError("No input images were provided.")
@@ -968,24 +964,11 @@ def run_pipeline(
     topic_parse_start = time.perf_counter()
     objects = parse_world_position_data(world_position_data)
     topic_parse_s = float(time.perf_counter() - topic_parse_start)
-    wanted_instance_id = None
-    if target_instance_id not in (None, ""):
-        wanted_instance_id = int(target_instance_id)
-    wanted_topic_key = str(target_topic_key).strip() if target_topic_key else None
-
     target_candidates = [obj for obj in objects if obj.label == target_label]
-    if wanted_instance_id is not None:
-        target_candidates = [obj for obj in target_candidates if int(obj.item_id) == wanted_instance_id]
-    if wanted_topic_key:
-        target_candidates = [obj for obj in target_candidates if str(obj.topic_key) == wanted_topic_key]
     if not target_candidates:
-        available = sorted(f"{obj.label}_{obj.item_id}@{obj.topic_key}" for obj in objects)
-        raise RuntimeError(
-            f"Target '{target_label}' with instance_id={wanted_instance_id} "
-            f"topic_key={wanted_topic_key} not found in world_position_data. Available: {available}"
-        )
+        available = sorted({obj.label for obj in objects})
+        raise RuntimeError(f"Target '{target_label}' not found in world_position_data. Available: {available}")
     target_obj = target_candidates[0]
-    resolved_instance_key = target_instance_key or f"{target_label.replace(' ', '_')}_{int(target_obj.item_id)}"
 
     selected_primary = _normalize_selected_camera(primary_camera_id)
     if (
@@ -1191,13 +1174,14 @@ def run_pipeline(
     if object_colors is not None:
         grasp_debug_npz["pc_object_raw_colors"] = np.asarray(object_colors, dtype=np.uint8)
 
-    visualization_npz_path = _save_visualization_npz(
-        center_world=target_center_world,
-        debug_npz=grasp_debug_npz,
-        primary_camera_id=selected_primary,
-        target_label=target_label,
-        objects=object_reports,
-    )
+    # visualization_npz_path = _save_visualization_npz(
+    #     center_world=target_center_world,
+    #     debug_npz=grasp_debug_npz,
+    #     primary_camera_id=selected_primary,
+    #     target_label=target_label,
+    #     objects=object_reports,
+    # )
+    visualization_npz_path = None
 
     goal_data = compute_goal_pose(target_center_world, grasps, confidences, cfg["map"])
 
@@ -1213,23 +1197,20 @@ def run_pipeline(
         "target_object": {
             "label": target_obj.label,
             "id": target_obj.item_id,
-            "instance_id": int(target_obj.item_id),
-            "instance_key": resolved_instance_key,
-            "topic_key": str(target_obj.topic_key),
             "height_depth_m": None,
             "height_bbox_cap_m": None,
             "height_geometry_base_m": float(target_report["selected_height_before_scale_m"]),
             "height_selected_m": float(target_report["selected_height_m"]),
             "height_source": "geometry",
         },
-        "target_instance_key": resolved_instance_key,
-        "target_topic_key": str(target_obj.topic_key),
         "objects": object_reports,
         "num_matched_objects": int(len(object_reports)),
         "num_obstacle_objects": int(sum(1 for obj in object_reports if obj["label"] != target_label)),
         "num_obstacle_scene_points": int(len(scene_pc_world)),
         "goal_pose_used_map_fallback": bool(goal_data.get("used_map_fallback", False)),
-        "grasp_visualization_npz_path": str(visualization_npz_path),
+        "grasp_visualization_npz_path": (
+            str(visualization_npz_path) if visualization_npz_path is not None else None
+        ),
         "depth_affine_scale": None,
         "depth_affine_offset_m": None,
         "primary_depth_crop_box_xyxy": None,

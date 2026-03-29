@@ -5,10 +5,6 @@ Expected request:
   - parts[0]: JSON text
       {
         "yolo_class": "doll",
-        "target_item_id": "doll",
-        "target_instance_id": 2,
-        "target_instance_key": "doll_2",
-        "target_topic_key": "0",
         "scene_config": "...optional...",
         "selected_camera": "camera_room1_12",
         "camera_names": ["camera_room1_12", "camera_room1_13", ...],
@@ -52,10 +48,6 @@ class GetItemInfoNoSam3dExecutor(AgentExecutor):
 
             body = json.loads(parts[0].root.text)
             yolo_class: str = body.get("yolo_class", "")
-            target_item_id = body.get("target_item_id")
-            target_instance_id = body.get("target_instance_id")
-            target_instance_key = body.get("target_instance_key")
-            target_topic_key = body.get("target_topic_key")
             scene_config_path = Path(body.get("scene_config", str(DEFAULT_SCENE_CONFIG)))
             selected_camera = str(body.get("selected_camera", "")).strip()
             world_position_data = body.get("world_position_data")
@@ -80,10 +72,8 @@ class GetItemInfoNoSam3dExecutor(AgentExecutor):
                 return
 
             logger.info(
-                "GetItemInfoNoSam3D: class=%s, target_instance=%s, topic_key=%s, config=%s, selected_camera=%s, uploaded=%s",
+                "GetItemInfoNoSam3D: class=%s, config=%s, selected_camera=%s, uploaded=%s",
                 yolo_class,
-                target_instance_key or target_instance_id,
-                target_topic_key or "N/A",
                 scene_config_path,
                 selected_camera or "N/A",
                 camera_names,
@@ -114,10 +104,6 @@ class GetItemInfoNoSam3dExecutor(AgentExecutor):
                     image_paths_by_camera=image_paths_by_camera,
                     primary_camera_id=selected_camera or None,
                     world_position_data=world_position_data,
-                    target_instance_id=target_instance_id,
-                    target_instance_key=target_instance_key,
-                    target_topic_key=target_topic_key,
-                    target_item_id=target_item_id,
                 )
 
             logger.info(
@@ -153,3 +139,4 @@ def _extract_bytes(part) -> bytes:
 
 def _safe_camera_name(camera_name: str) -> str:
     return "".join(ch if (ch.isalnum() or ch in ("-", "_")) else "_" for ch in camera_name)
+

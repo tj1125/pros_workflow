@@ -27,6 +27,7 @@ from a2a.types import UnsupportedOperationError
 
 from a2a_utils.response import build_error, build_success
 from get_item_info_agent.pipeline.constants import DEFAULT_SCENE_CONFIG
+from tool.runtime.memory import release_cuda_memory
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,11 @@ class GetItemInfoExecutor(AgentExecutor):
         except Exception as exc:
             logger.error("GetItemInfo execution error: %s", exc, exc_info=True)
             await event_queue.enqueue_event(build_error(str(exc)))
+        finally:
+            try:
+                release_cuda_memory()
+            except Exception as cleanup_exc:
+                logger.warning("GetItemInfo cleanup failed: %s", cleanup_exc)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise UnsupportedOperationError()

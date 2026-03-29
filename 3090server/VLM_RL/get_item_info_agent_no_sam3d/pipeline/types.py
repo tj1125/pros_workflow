@@ -39,3 +39,10 @@ class WorldPositionObject:
     observations: dict[str, TopicObservation]
     topic_key: str
 
+
+@dataclass(frozen=True)
+class MapInfo:
+    resolution: float
+    origin: tuple[float, float, float]
+    width: int
+    height: int

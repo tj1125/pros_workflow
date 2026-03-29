@@ -8,7 +8,7 @@ from typing import Any
 import torch
 import yaml
 
-from get_item_info_agent.pipeline.constants import AGENT_ROOT
+from get_item_info_agent_no_sam3d.pipeline.constants import AGENT_ROOT
 
 
 REQUIRED_SECTIONS = ("camera", "models", "alignment", "map", "runtime")
@@ -46,11 +46,10 @@ def load_scene_config(path: Path) -> tuple[dict[str, Any], Path]:
     map_cfg = cfg["map"]
     runtime = cfg["runtime"]
 
-    _require_keys(camera, ["camera_a", "camera_b", "camera_parameter_dir", "rgb_dir"], "camera")
+    _require_keys(camera, ["camera_a", "camera_b", "camera_parameter_dir"], "camera")
     _require_keys(
         models,
         [
-            "yolo_weights",
             "sam_seg_checkpoint",
             "sam3d_root",
             "graspgen_root",
@@ -92,8 +91,6 @@ def load_scene_config(path: Path) -> tuple[dict[str, Any], Path]:
     base_dir = cfg_path.parent
     path_fields = [
         ("camera", "camera_parameter_dir"),
-        ("camera", "rgb_dir"),
-        ("models", "yolo_weights"),
         ("models", "sam_seg_checkpoint"),
         ("models", "sam3d_root"),
         ("models", "graspgen_root"),
@@ -111,7 +108,6 @@ def load_scene_config(path: Path) -> tuple[dict[str, Any], Path]:
 def validate_required_paths(cfg: dict[str, Any]) -> None:
     checks = [
         ("camera.camera_parameter_dir", cfg["camera"]["camera_parameter_dir"]),
-        ("models.yolo_weights", cfg["models"]["yolo_weights"]),
         ("models.sam_seg_checkpoint", cfg["models"]["sam_seg_checkpoint"]),
         ("models.sam3d_root", cfg["models"]["sam3d_root"]),
         ("models.graspgen_root", cfg["models"]["graspgen_root"]),

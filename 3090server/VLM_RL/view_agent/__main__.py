@@ -1,7 +1,7 @@
 """
 view_agent/__main__.py — A2A Server Entrypoint for ViewAgent
 
-Starts the View Agent SAC Policy inference A2A server on Port 9003.
+Starts the View Agent SAC Policy inference A2A server on Port 8007.
 
 Usage:
     cd /path/to/VLM_RL/3090server/VLM_RL
@@ -32,7 +32,7 @@ from view_agent.agent_executor import ViewAgentExecutor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PORT = 9003
+PORT = 8007
 EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
 
 agent_card = AgentCard(

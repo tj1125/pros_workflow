@@ -58,7 +58,7 @@ def infer_grasps_from_point_cloud_with_collision(
     collision_threshold: float,
     max_scene_points: int = 8192,
     num_collision_samples: int = 2000,
-) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, int], dict[str, np.ndarray]]:
     """Run GraspGen on an object-local point cloud and filter grasps by scene collision."""
     from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
     from grasp_gen.robot import get_gripper_info
@@ -87,13 +87,18 @@ def infer_grasps_from_point_cloud_with_collision(
     if len(grasps) == 0:
         raise RuntimeError("No grasps remain after approach filtering.")
 
+    all_grasps_local = np.array(grasps, copy=True)
+    all_scores = np.array(confidences, copy=True)
     total_after_approach = int(len(grasps))
     scene_points_used = 0
+    collision_free_mask = np.ones(len(grasps), dtype=bool)
+    scene_pc_used = np.zeros((0, 3), dtype=float)
     if scene_pc_local is not None and len(scene_pc_local) > 0:
         scene_pc_local = np.asarray(scene_pc_local, dtype=float)
         if len(scene_pc_local) > max_scene_points:
             idx = np.random.choice(len(scene_pc_local), max_scene_points, replace=False)
             scene_pc_local = scene_pc_local[idx]
+        scene_pc_used = np.array(scene_pc_local, copy=True)
         scene_points_used = int(len(scene_pc_local))
 
         gripper_info = get_gripper_info(cfg.data.gripper_name)
@@ -114,4 +119,14 @@ def infer_grasps_from_point_cloud_with_collision(
         "num_grasps_after_collision_filter": int(len(grasps)),
         "num_scene_points_used_for_collision": scene_points_used,
     }
-    return grasps, confidences, stats
+    debug_data = {
+        "all_grasps_local": all_grasps_local,
+        "all_scores": all_scores,
+        "collision_free_mask": collision_free_mask,
+        "collision_free_grasps_local": all_grasps_local[collision_free_mask],
+        "collision_free_scores": all_scores[collision_free_mask],
+        "object_pc_local": np.asarray(object_pc_local, dtype=float),
+        "scene_pc_local": scene_pc_used,
+        "grasp_inference_coordinate_frame": np.array("object_local"),
+    }
+    return grasps, confidences, stats, debug_data

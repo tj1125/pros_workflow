@@ -183,11 +183,14 @@ def reconstruct_mesh_with_sam3d(
 ):
     """Run SAM3D to reconstruct a 3D mesh from an RGBA crop."""
     inference = Sam3DInference(sam3d_config_path, compile_model=False, device=device)
-    sam_output = inference.run(sam3d_image_rgb, sam3d_mask_bool, seed=int(sam_seed))
-    mesh = sam_output.get("glb")
-    if mesh is None:
-        raise RuntimeError("SAM3D output missing mesh ('glb').")
-    return mesh
+    try:
+        sam_output = inference.run(sam3d_image_rgb, sam3d_mask_bool, seed=int(sam_seed))
+        mesh = sam_output.get("glb")
+        if mesh is None:
+            raise RuntimeError("SAM3D output missing mesh ('glb').")
+        return mesh
+    finally:
+        inference.close()
 
 
 def scale_mesh_to_target_y(mesh: Any, target_y: float) -> Any:
