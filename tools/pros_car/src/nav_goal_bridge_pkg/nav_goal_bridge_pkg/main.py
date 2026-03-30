@@ -112,9 +112,6 @@ class NavGoalBridge(Node):
         if self._active_nav2_goal is not None:
             self._active_nav2_goal.cancel_goal_async()
             self._active_nav2_goal = None
-        if self._active_car_goal is not None:
-            self._active_car_goal.cancel_goal_async()
-            self._active_car_goal = None
 
     def _tick(self) -> None:
         if self._pending_goal is None:
@@ -123,17 +120,6 @@ class NavGoalBridge(Node):
         if not self._nav2_goal_sent:
             self._try_send_nav2_goal()
             return
-
-        if self._car_goal_sent:
-            return
-
-        if self._latest_amcl_pose is None:
-            return
-
-        if self._latest_plan is None or not self._latest_plan.poses:
-            return
-
-        self._try_send_car_goal()
 
     def _try_send_nav2_goal(self) -> None:
         if self._pending_goal is None:
@@ -148,17 +134,6 @@ class NavGoalBridge(Node):
         self._nav2_goal_sent = True
         self.get_logger().info("Forwarded /goal_pose to /navigate_to_pose")
 
-    def _try_send_car_goal(self) -> None:
-        if not self._car_nav_client.wait_for_server(timeout_sec=0.1):
-            return
-
-        goal = NavGoal.Goal()
-        goal.mode = "Manual_Nav"
-        future = self._car_nav_client.send_goal_async(goal)
-        future.add_done_callback(self._handle_car_goal_response)
-        self._car_goal_sent = True
-        self.get_logger().info("Triggered pros car nav_action_server with mode=Manual_Nav")
-
     def _handle_nav2_goal_response(self, future) -> None:
         goal_handle = future.result()
         if goal_handle is None or not goal_handle.accepted:
@@ -169,17 +144,6 @@ class NavGoalBridge(Node):
         self._active_nav2_goal = goal_handle
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._handle_nav2_result)
-
-    def _handle_car_goal_response(self, future) -> None:
-        goal_handle = future.result()
-        if goal_handle is None or not goal_handle.accepted:
-            self._car_goal_sent = False
-            self.get_logger().warn("nav_action_server rejected the goal; will retry")
-            return
-
-        self._active_car_goal = goal_handle
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._handle_car_result)
 
     def _handle_nav2_result(self, future) -> None:
         try:
@@ -192,18 +156,6 @@ class NavGoalBridge(Node):
             f"/navigate_to_pose finished with status={int(result.status)}"
         )
         self._active_nav2_goal = None
-
-    def _handle_car_result(self, future) -> None:
-        try:
-            result = future.result()
-        except Exception as exc:  # pragma: no cover - defensive logging
-            self.get_logger().error(f"nav_action_server result error: {exc}")
-            return
-
-        self.get_logger().info(
-            f"nav_action_server finished with status={int(result.status)}"
-        )
-        self._active_car_goal = None
 
 
 def main(args=None) -> None:

@@ -27,10 +27,18 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
+    nav_goal_bridge_node = Node(
+        package="nav_goal_bridge_pkg",
+        executable="nav_goal_bridge_node",
+        name="nav_goal_bridge_node",
+        output="screen",
+    )
+
     return LaunchDescription(
         [
             localization_launch,
             navigation_launch,
             car_control_node,
+            nav_goal_bridge_node,
         ]
     )
