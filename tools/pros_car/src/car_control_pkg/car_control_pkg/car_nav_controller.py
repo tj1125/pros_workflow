@@ -124,9 +124,9 @@ class NavigationController:
         if diff_angle < 10 and diff_angle > -10:
             action_key = "FORWARD"
         elif diff_angle < -10 and diff_angle > -180:
-            action_key = "CLOCKWISE_ROTATION_MEDIAN"
+            action_key = "CLOCKWISE_ROTATION"
         elif diff_angle > 10 and diff_angle < 180:
-            action_key = "COUNTERCLOCKWISE_ROTATION_MEDIAN"
+            action_key = "COUNTERCLOCKWISE_ROTATION"
         return action_key
 
     def get_next_target_point(
