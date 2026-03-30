@@ -41,7 +41,7 @@ class AutoNavStarter(Node):
         # 確認並發送導航目標
         if self.nav_action_client.wait_for_server(timeout_sec=1.0):
             nav_goal_msg = NavGoal.Goal()
-            nav_goal_msg.mode = 'Customize_Nav'  # 根據預設行為選用 Customize_Nav
+            nav_goal_msg.mode = 'Manual_Nav'  # 使用標準純導航，不混用 YOLO 追蹤以免卡住
             self.nav_send_goal_future = self.nav_action_client.send_goal_async(nav_goal_msg)
             self.nav_send_goal_future.add_done_callback(self.nav_goal_response_callback)
         else:

@@ -20,9 +20,12 @@ class NavigationController:
 
         # Check data validity
         if not car_position or not path_points or not goal_pose:
+            # Send STOP command directly to prevent the car from drifting blindly!
+            self.car_control_node.publish_control("STOP")
+            
             # Determine the specific error message based on what's missing
             message = (
-                "Cannot obtain car position data"
+                "Cannot obtain car position data (localization lost/stale)"
                 if not car_position
                 else (
                     "No path points available for navigation"

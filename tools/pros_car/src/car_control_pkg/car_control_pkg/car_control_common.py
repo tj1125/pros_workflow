@@ -222,12 +222,23 @@ class BaseCarControlNode(Node):
     # Helper methods for navigation data access
     def get_car_position_and_orientation(self):
         """
-        Get current car position and orientation
+        Get current car position and orientation (with staleness safety check)
 
         Returns:
-            Tuple containing (position, orientation) or (None, None) if data unavailable
+            Tuple containing (position, orientation) or (None, None) if data unavailable or stale
         """
         if self.latest_amcl_pose:
+            now = self.get_clock().now()
+            pose_time = rclpy.time.Time.from_msg(self.latest_amcl_pose.header.stamp)
+            staleness = (now - pose_time).nanoseconds / 1e9
+            
+            if staleness > 1.0:
+                self.get_logger().warn(
+                    f"Safety Stop: AMCL pose is stale by {staleness:.2f} seconds! Aborting current control.",
+                    throttle_duration_sec=2.0
+                )
+                return None, None
+
             position = self.latest_amcl_pose.pose.pose.position
             orientation = self.latest_amcl_pose.pose.pose.orientation
             return position, orientation
