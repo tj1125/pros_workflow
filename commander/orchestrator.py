@@ -612,7 +612,7 @@ class Orchestrator:
             "current_goal_rank": current_rank,
             "nav_goal_pose": goal_pose if not goal_pose_err else {},
             "nav_move_source": "bootstrap",
-            "force_initialpose": False,
+            "force_initialpose": True,
             "current_status": "ITEM_INFO_NO_SAM3D_READY",
         }
 
