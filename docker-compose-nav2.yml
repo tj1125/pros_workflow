@@ -21,6 +21,7 @@ services:
   # ------------------------------------
   lidar_tranform:
     image: ghcr.io/screamlab/pros_unity_lidar_trans_image:latest
+    platform: linux/amd64
     container_name: vlm_rl_lidar_transform
     env_file:
       - .env
@@ -37,6 +38,7 @@ services:
   # ------------------------------------
   nav2:
     image: ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
+    platform: linux/amd64
     container_name: vlm_rl_nav2
     env_file:
       - .env
@@ -75,6 +77,7 @@ services:
   rosbridge:
     profiles: ["with-rosbridge"]
     image: ghcr.io/screamlab/pros_base_image:0.0.2
+    platform: linux/amd64
     container_name: vlm_rl_rosbridge
     env_file:
       - .env

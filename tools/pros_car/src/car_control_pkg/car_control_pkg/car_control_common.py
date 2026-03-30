@@ -232,7 +232,7 @@ class BaseCarControlNode(Node):
             pose_time = rclpy.time.Time.from_msg(self.latest_amcl_pose.header.stamp)
             staleness = (now - pose_time).nanoseconds / 1e9
             
-            if staleness > 1.0:
+            if staleness > 3.0:
                 self.get_logger().warn(
                     f"Safety Stop: AMCL pose is stale by {staleness:.2f} seconds! Aborting current control.",
                     throttle_duration_sec=2.0
