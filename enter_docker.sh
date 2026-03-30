@@ -53,7 +53,7 @@ export PATH="$HOME/.local/bin:$PATH"
 alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
 alias run="cd /workspaces/VLM_RL && uv run python main.py --no-mock"
 alias t="cd /workspaces/VLM_RL && uv run python test_client.py --mock-only"
-alias r="cd /workspaces/tools/nav && find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + && colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select vlm_rl_nav --symlink-install && source /workspaces/nav_install/setup.bash && cd /workspaces/VLM_RL"
+alias r="cd /workspaces && find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + && colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav /workspaces/tools/pros_car --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select action_interface car_control_pkg vlm_rl_nav --symlink-install && source /workspaces/nav_install/setup.bash && cd /workspaces/VLM_RL"
 alias logs='cat /workspaces/VLM_RL/logs/trace_logger.jsonl | python3 -m json.tool 2>/dev/null || echo "no logs yet"'
 ENVFILE
 

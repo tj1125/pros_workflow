@@ -30,6 +30,7 @@ services:
     volumes:
       # Mount navigation tool sources only; build/install/log stay in Docker named volumes.
       - ./tools/nav:/workspaces/tools/nav:rw
+      - ./tools/pros_car:/workspaces/tools/pros_car:rw
       - vlm_rl_nav_build:/workspaces/nav_build
       - vlm_rl_nav_install:/workspaces/nav_install
       - vlm_rl_nav_log:/workspaces/nav_log
@@ -39,12 +40,12 @@ services:
     command: >
       bash -c "
         set -e
-        echo '🔧 Building vlm_rl_nav package...'
-        cd /workspaces/tools/nav &&
+        echo '🔧 Building vlm_rl_nav and car_control_pkg...'
+        cd /workspaces &&
         find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
         find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
         find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select vlm_rl_nav --symlink-install &&
+        colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav /workspaces/tools/pros_car --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select action_interface car_control_pkg vlm_rl_nav --symlink-install &&
         source /workspaces/nav_install/setup.bash &&
         echo '🚀 Launching Nav2 (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)...' &&
         ros2 launch vlm_rl_nav navigation.launch.py

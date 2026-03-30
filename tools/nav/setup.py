@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import setup
 
 package_name = "vlm_rl_nav"
@@ -18,6 +20,7 @@ setup(
             ],
         ),
         (f"share/{package_name}/launch", ["navigation.launch.py"]),
+        (f"share/{package_name}/pros_demo", glob("pros_demo/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,

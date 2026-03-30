@@ -717,9 +717,9 @@ class Orchestrator:
     async def _nav_move_node(self, state: CommanderState) -> Dict[str, Any]:
         """
         Blocking navigation executor:
-        1. Warm-up publish /goal_pose for discovery.
-        2. Request a global path from planner_server.
-        3. Follow /received_global_plan with the pros-style discrete wheel controller.
+        1. Publish /initialpose and /goal_pose.
+        2. Wait for the tools-side navigation stack to expose a global plan.
+        3. Observe AMCL until the robot reaches the requested goal pose.
         """
         source = state.get("nav_move_source", "reason_loop")
         target_object = state.get("target_object", {})
@@ -741,13 +741,10 @@ class Orchestrator:
         plan_timeout = float(os.getenv("NAV_PLAN_TIMEOUT_SEC", "8"))
         arrival_timeout = float(os.getenv("NAV_ARRIVAL_TIMEOUT_SEC", "120"))
         publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.5"))
-        replan_period = float(os.getenv("NAV_REPLAN_PERIOD_SEC", "1.5"))
-        follow_control_hz = float(os.getenv("NAV_FOLLOW_CONTROL_HZ", "10"))
         goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.08"))
         goal_heading_tolerance_deg = float(
             os.getenv("NAV_GOAL_HEADING_TOLERANCE_DEG", "5.0")
         )
-        path_target_distance_m = float(os.getenv("NAV_PATH_TARGET_DISTANCE_M", "0.5"))
 
         rank = int(state.get("current_goal_rank", 1) or 1)
         if rank < 1:
@@ -800,11 +797,8 @@ class Orchestrator:
                     "plan_timeout_sec": plan_timeout,
                     "arrival_timeout_sec": arrival_timeout,
                     "publish_interval_sec": publish_interval,
-                    "replan_period_sec": replan_period,
-                    "follow_control_hz": follow_control_hz,
                     "goal_tolerance_m": goal_tolerance_m,
                     "goal_heading_tolerance_deg": goal_heading_tolerance_deg,
-                    "path_target_distance_m": path_target_distance_m,
                     "status_topic": "/nav_move/status",
                     "attempt": attempt,
                     "rank": rank,
