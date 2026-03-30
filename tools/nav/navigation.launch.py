@@ -14,14 +14,10 @@ def generate_launch_description() -> LaunchDescription:
             os.path.join(vlm_rl_nav_dir, "pros_demo", "localization_unity.xml")
         )
     )
+    # NOTE: localization_unity.xml already includes rplidar_unity.xml — do NOT launch it again!
     navigation_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(vlm_rl_nav_dir, "pros_demo", "navigation_unity.xml")
-        )
-    )
-    rplidar_launch = IncludeLaunchDescription(
-        AnyLaunchDescriptionSource(
-            os.path.join(vlm_rl_nav_dir, "pros_demo", "rplidar_unity.xml")
         )
     )
 
@@ -41,7 +37,6 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
-            rplidar_launch,
             localization_launch,
             navigation_launch,
             car_control_node,
