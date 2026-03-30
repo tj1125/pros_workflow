@@ -2,7 +2,7 @@
 # VLM-RL System — Enter Dev Container
 
 LOCAL_IMAGE="vlm-rl-env:latest"
-VOLUME_ARGS="-v $(pwd):/workspaces/VLM_RL -v $(pwd)/tools/nav:/workspaces/tools/nav -v vlm_rl_nav_build:/workspaces/nav_build -v vlm_rl_nav_install:/workspaces/nav_install -v vlm_rl_nav_log:/workspaces/nav_log"
+VOLUME_ARGS="-v $(pwd):/workspaces/VLM_RL -v $(pwd)/tools/nav:/workspaces/tools/nav -v $(pwd)/tools/pros_car:/workspaces/tools/pros_car -v vlm_rl_nav_build:/workspaces/nav_build -v vlm_rl_nav_install:/workspaces/nav_install -v vlm_rl_nav_log:/workspaces/nav_log"
 
 # --- Detect OS and Architecture ---
 ARCH=$(uname -m)
