@@ -35,16 +35,8 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
-    scan_relayer_node = Node(
-        package="vlm_rl_nav",
-        executable="scan_relayer",
-        name="scan_relayer",
-        output="screen",
-    )
-
     return LaunchDescription(
         [
-            scan_relayer_node,
             localization_launch,
             navigation_launch,
             car_control_node,
