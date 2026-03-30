@@ -25,14 +25,13 @@ class NavigationActionServer(Node):
     def goal_callback(self, goal_request):
         self.get_logger().info("Received goal request")
         requested_mode = goal_request.mode
-        if requested_mode == "Manual_Nav":
-            car_position, _ = self.car_control_node.get_car_position_and_orientation()
-            path_points = self.car_control_node.get_path_points(
-                include_orientation=True
-            )
-            if not car_position or not path_points:
-                self.get_logger().error("Cannot start navigation: Missing data")
-                return GoalResponse.REJECT
+        # Always accept Manual_Nav — execute_callback spins at 10Hz and will
+        # tolerate a brief window while BaseCarControlNode caches the first
+        # /received_global_plan callback.  Rejecting here creates a race where
+        # AutoNavStarter fires before the plan or position is stored.
+        if requested_mode not in ("Manual_Nav", "Customize_Nav"):
+            self.get_logger().error(f"Unknown mode: {requested_mode}")
+            return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):

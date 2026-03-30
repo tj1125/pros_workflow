@@ -29,9 +29,7 @@ class NavGoalBridge(Node):
         self._latest_amcl_pose: Optional[PoseWithCovarianceStamped] = None
         self._latest_plan: Optional[Path] = None
         self._nav2_goal_sent = False
-        self._car_goal_sent = False
         self._active_nav2_goal: Optional[ClientGoalHandle] = None
-        self._active_car_goal: Optional[ClientGoalHandle] = None
 
         self._navigate_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self._car_nav_client = ActionClient(self, NavGoal, "nav_action_server")
@@ -84,7 +82,6 @@ class NavGoalBridge(Node):
         self._current_goal_key = goal_key
         self._latest_plan = None
         self._nav2_goal_sent = False
-        self._car_goal_sent = False
         self._clear_received_global_plan()
         self._cancel_active_goals()
         self.get_logger().info(
