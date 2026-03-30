@@ -37,14 +37,19 @@ class NavMoveRunner(Node):
         super().__init__("nav_move_runner")
         self.payload = payload
         self.events = []
-
         status_topic = str(payload.get("status_topic", "/nav_move/status"))
 
-        self.goal_pose_pub = self.create_publisher(PoseStamped, "/goal_pose", 10)
+        latched_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+
+        self.goal_pose_pub = self.create_publisher(PoseStamped, "/goal_pose", latched_qos)
         self.initial_pose_pub = self.create_publisher(
             PoseWithCovarianceStamped,
             "/initialpose",
-            10,
+            latched_qos,
         )
         self.status_pub = self.create_publisher(String, status_topic, 10)
 
