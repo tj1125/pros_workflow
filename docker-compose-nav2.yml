@@ -17,6 +17,22 @@
 
 services:
   # ------------------------------------
+  # Lidar Transform specifically for Unity
+  # ------------------------------------
+  lidar_tranform:
+    image: ghcr.io/screamlab/pros_unity_lidar_trans_image:latest
+    container_name: vlm_rl_lidar_transform
+    env_file:
+      - .env
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
+    networks:
+      - cube_bridge_network
+      - compose_cube_bridge_network
+    command: "ros2 run unity_lidar_transformer lidar_transformer_node"
+    restart: "unless-stopped"
+
+  # ------------------------------------
   # Nav2：VLM-RL 導航基礎設施 (scan matcher + localization + planning servers)
   # ------------------------------------
   nav2:

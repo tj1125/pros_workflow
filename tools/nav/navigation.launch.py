@@ -19,6 +19,11 @@ def generate_launch_description() -> LaunchDescription:
             os.path.join(vlm_rl_nav_dir, "pros_demo", "navigation_unity.xml")
         )
     )
+    rplidar_launch = IncludeLaunchDescription(
+        AnyLaunchDescriptionSource(
+            os.path.join(vlm_rl_nav_dir, "pros_demo", "rplidar_unity.xml")
+        )
+    )
 
     car_control_node = Node(
         package="car_control_pkg",
@@ -36,6 +41,7 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
+            rplidar_launch,
             localization_launch,
             navigation_launch,
             car_control_node,
