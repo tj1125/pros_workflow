@@ -38,18 +38,13 @@ class NavMoveRunner(Node):
         self.payload = payload
         self.events = []
 
-        latched_qos = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
         status_topic = str(payload.get("status_topic", "/nav_move/status"))
 
-        self.goal_pose_pub = self.create_publisher(PoseStamped, "/goal_pose", latched_qos)
+        self.goal_pose_pub = self.create_publisher(PoseStamped, "/goal_pose", 10)
         self.initial_pose_pub = self.create_publisher(
             PoseWithCovarianceStamped,
             "/initialpose",
-            latched_qos,
+            10,
         )
         self.status_pub = self.create_publisher(String, status_topic, 10)
 
@@ -231,8 +226,9 @@ class NavMoveRunner(Node):
 
         initial_pose_sent_at = None
         for idx in range(max(1, warmup_publish_count)):
-            if publish_initialpose and idx == 0:
-                initial_pose_sent_at = self.get_clock().now()
+            if publish_initialpose:
+                if idx == 0:
+                    initial_pose_sent_at = self.get_clock().now()
                 self.initial_pose_pub.publish(initial_pose_msg)
             self.goal_pose_pub.publish(goal_pose_msg)
             rclpy.spin_once(self, timeout_sec=min(warmup_sleep, 0.1))
