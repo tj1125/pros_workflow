@@ -129,21 +129,6 @@ class NavMoveRunner(Node):
             msg.pose.covariance = [float(v) for v in covariance]
         return msg
 
-    def _wait_for_amcl_pose(self, since: Time, timeout_sec: float) -> bool:
-        deadline = time.monotonic() + timeout_sec
-        while time.monotonic() <= deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
-            if self._last_amcl_pose_received_at and self._last_amcl_pose_received_at >= since:
-                return True
-        return False
-
-    def _wait_for_plan(self, timeout_sec: float) -> bool:
-        deadline = time.monotonic() + timeout_sec
-        while time.monotonic() <= deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
-            if self._plan_ready:
-                return True
-        return False
 
     def _goal_heading_error(
         self,
@@ -224,46 +209,32 @@ class NavMoveRunner(Node):
         self._plan_ready = False
         self._last_plan_msg = None
 
-        warmup_detail = "Warm-up publishing /goal_pose"
-        if publish_initialpose:
-            warmup_detail = "Warm-up publishing /initialpose and /goal_pose"
-        self._emit_event("publishing_poses", warmup_detail)
-
-        initial_pose_sent_at = None
-        for idx in range(max(1, warmup_publish_count)):
-            if publish_initialpose:
-                if idx == 0:
-                    initial_pose_sent_at = self.get_clock().now()
-                self.initial_pose_pub.publish(initial_pose_msg)
-            self.goal_pose_pub.publish(goal_pose_msg)
-            rclpy.spin_once(self, timeout_sec=min(warmup_sleep, 0.1))
-            if warmup_sleep > 0.1:
-                time.sleep(max(0.0, warmup_sleep - 0.1))
-
-        if publish_initialpose:
-            self._emit_event("localization_wait", "Waiting for /amcl_pose after one-shot /initialpose")
-            if not self._wait_for_amcl_pose(
-                initial_pose_sent_at or self.get_clock().now(),
-                initial_pose_timeout,
-            ):
-                self._emit_event("attempt_failed", "initial pose was not acknowledged by AMCL")
-                return {
-                    "success": False,
-                    "plan_ready": False,
-                    "message": "initial pose was not acknowledged by AMCL",
-                    "events": self.events,
-                }
-
         self._emit_event(
             "plan_wait",
-            "Waiting for tools-side Nav2 bridge to publish a global plan",
+            "Hard looping /goal_pose (and /initialpose) every 0.1s until global plan is ready...",
         )
-        if not self._wait_for_plan(plan_timeout):
-            self._emit_event("attempt_failed", "failed to observe global plan")
+
+        deadline = time.monotonic() + plan_timeout
+        while time.monotonic() <= deadline:
+            if publish_initialpose:
+                self._stamp_with_now(initial_pose_msg)
+                self.initial_pose_pub.publish(initial_pose_msg)
+            
+            self._stamp_with_now(goal_pose_msg)
+            self.goal_pose_pub.publish(goal_pose_msg)
+            
+            rclpy.spin_once(self, timeout_sec=0.01)
+            if self._plan_ready:
+                break
+                
+            time.sleep(0.1)
+
+        if not self._plan_ready:
+            self._emit_event("attempt_failed", "failed to observe global plan after hard loop")
             return {
                 "success": False,
                 "plan_ready": False,
-                "message": "failed to observe global plan",
+                "message": "failed to observe global plan after hard loop",
                 "events": self.events,
             }
 
