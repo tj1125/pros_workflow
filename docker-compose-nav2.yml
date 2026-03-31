@@ -79,6 +79,8 @@ services:
     image: ghcr.io/screamlab/pros_base_image:0.0.2
     platform: linux/amd64
     container_name: vlm_rl_rosbridge
+    ports:
+      - "9090:9090"
     env_file:
       - .env
     environment:

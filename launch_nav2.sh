@@ -18,11 +18,13 @@ CONTAINER_NAME="vlm_rl_nav2"
 # --- Parse arguments ---
 DETACHED=""
 STOP_MODE=false
+WITH_ROSBRIDGE=false
 
 for arg in "$@"; do
   case $arg in
-    -d|--detach) DETACHED="-d" ;;
-    --stop)      STOP_MODE=true ;;
+    -d|--detach)  DETACHED="-d" ;;
+    --stop)       STOP_MODE=true ;;
+    --rosbridge)  WITH_ROSBRIDGE=true ;;
   esac
 done
 
@@ -41,6 +43,13 @@ if [ "$STOP_MODE" = true ]; then
   exit 0
 fi
 
+# --- Determine Compose Command ---
+COMPOSE_CMD="docker compose -f $COMPOSE_FILE"
+if [ "$WITH_ROSBRIDGE" = true ]; then
+  COMPOSE_CMD="COMPOSE_PROFILES=with-rosbridge $COMPOSE_CMD"
+  echo "🌉 Enabling Rosbridge profile..."
+fi
+
 # --- Start Nav2 ---
 echo "╔═══════════════════════════════════════════════════╗"
 echo "║  VLM-RL Nav2  |  Starting Navigation Stack...     ║"
@@ -51,12 +60,12 @@ echo "🐳 Container:    $CONTAINER_NAME"
 echo ""
 
 if [ -n "$DETACHED" ]; then
-  docker compose -f "$COMPOSE_FILE" up -d
+  eval "$COMPOSE_CMD up -d"
   echo "✅ Nav2 started in background."
   echo "   Logs: docker logs -f $CONTAINER_NAME"
   echo "   Stop: $0 --stop"
 else
   echo "📡 Nav2 log output (press Ctrl+C to stop):"
   echo "────────────────────────────────────────────"
-  docker compose -f "$COMPOSE_FILE" up
+  eval "$COMPOSE_CMD up"
 fi
