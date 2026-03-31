@@ -30,7 +30,7 @@ amcl:
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true
-    transform_tolerance: 1.0
+    transform_tolerance: 0.5
     update_min_a: 0.2    # 原本是負值會導致每次掃描都運算，吃光 AMD 模擬環境的 CPU
     update_min_d: 0.2    # 原本是負值會導致每次掃描都運算，吃光 AMD 模擬環境的 CPU
     z_hit: 0.5
