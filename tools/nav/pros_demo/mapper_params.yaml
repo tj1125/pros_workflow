@@ -18,7 +18,7 @@ amcl:
     laser_min_range: -1.0
     laser_model_type: "likelihood_field_prob"
     max_beams: 100
-    max_particles: 3000
+    max_particles: 500   #3000
     min_particles: 200
     odom_frame_id: "odom"
     pf_err: 0.05
