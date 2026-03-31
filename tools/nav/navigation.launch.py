@@ -11,13 +11,13 @@ def generate_launch_description() -> LaunchDescription:
     vlm_rl_nav_dir = get_package_share_directory("vlm_rl_nav")
     localization_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
-            os.path.join(vlm_rl_nav_dir, "pros_demo", "localization_unity.xml")
+            os.path.join(vlm_rl_nav_dir, "config", "localization_unity.xml")
         )
     )
     # NOTE: localization_unity.xml already includes rplidar_unity.xml — do NOT launch it again!
     navigation_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
-            os.path.join(vlm_rl_nav_dir, "pros_demo", "navigation_unity.xml")
+            os.path.join(vlm_rl_nav_dir, "config", "navigation_unity.xml")
         )
     )
 

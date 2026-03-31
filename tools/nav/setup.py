@@ -14,13 +14,10 @@ setup(
             f"share/{package_name}",
             [
                 "package.xml",
-                "nav2_params.yaml",
-                "map01.yaml",
-                "map01.pgm",
             ],
         ),
         (f"share/{package_name}/launch", ["navigation.launch.py"]),
-        (f"share/{package_name}/pros_demo", glob("pros_demo/*")),
+        (f"share/{package_name}/config", glob("config/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -29,9 +26,6 @@ setup(
     description="VLM-RL self-contained localization and planner package",
     license="MIT",
     entry_points={
-        "console_scripts": [
-            "scan_relayer = vlm_rl_nav.scan_relayer:main",
-            "nav_start_gate = vlm_rl_nav.nav_start_gate:main",
-        ],
+        "console_scripts": [],
     },
 )

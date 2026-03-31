@@ -34,7 +34,13 @@ class NavGoalBridge(Node):
         self._navigate_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self._car_nav_client = ActionClient(self, NavGoal, "nav_action_server")
 
-        self.create_subscription(PoseStamped, "/goal_pose", self._goal_callback, 10)
+        from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+        latched_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(PoseStamped, "/goal_pose", self._goal_callback, latched_qos)
         self.create_subscription(
             PoseWithCovarianceStamped,
             "/amcl_pose",

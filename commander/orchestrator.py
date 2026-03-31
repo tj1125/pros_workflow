@@ -740,7 +740,7 @@ class Orchestrator:
         max_attempt_per_rank = same_rank_retries + 1
         plan_timeout = float(os.getenv("NAV_PLAN_TIMEOUT_SEC", "8"))
         arrival_timeout = float(os.getenv("NAV_ARRIVAL_TIMEOUT_SEC", "120"))
-        publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.5"))
+        publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.1"))
         goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.08"))
         goal_heading_tolerance_deg = float(
             os.getenv("NAV_GOAL_HEADING_TOLERANCE_DEG", "5.0")
