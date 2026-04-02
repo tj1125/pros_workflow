@@ -20,7 +20,6 @@ class MenuApp:
                 "Manual_Control": None,
                 "Manual_Nav": None,
                 "Auto_Nav": None,
-                "Customize_Nav": None,
             },
             "Manual Arm Control": {
                 "0": None,
