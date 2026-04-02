@@ -157,8 +157,9 @@ controller_server:
 
     approach_goal_checker:
       stateful: True
-      plugin: "nav2_controller::PositionGoalChecker"
+      plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.12
+      yaw_goal_tolerance: 0.087266
 
     align_goal_checker:
       stateful: True

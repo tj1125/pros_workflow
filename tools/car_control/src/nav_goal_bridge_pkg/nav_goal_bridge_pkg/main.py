@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 from functools import partial
-from typing import Optional
+from typing import Any, Optional
 
 import rclpy
 from action_msgs.msg import GoalStatus
@@ -11,7 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PointStamped, PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Path
-from rclpy.action import ActionClient, ClientGoalHandle
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String, UInt32
@@ -91,7 +91,7 @@ class NavGoalBridge(Node):
         self._latest_target_received_at = 0.0
         self._active_target_point: Optional[PointStamped] = None
         self._latest_amcl_pose: Optional[PoseWithCovarianceStamped] = None
-        self._active_nav2_goal: Optional[ClientGoalHandle] = None
+        self._active_nav2_goal: Optional[Any] = None
         self._pending_nav2_goal: Optional[tuple[int, str, PoseStamped, str]] = None
         self._nav2_goal_sent = False
         self._mission_id = 0
