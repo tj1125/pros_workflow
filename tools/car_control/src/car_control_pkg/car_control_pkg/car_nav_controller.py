@@ -45,6 +45,7 @@ class NavigationController:
             self.car_control_node.get_car_position_and_orientation()
         )
         goal_position_msg = self.car_control_node.get_goal_pose()
+        two_phase_enabled = self.car_control_node.is_two_phase_enabled()
         active_target_point = self.car_control_node.get_active_target_point()
 
         if not car_position_msg or not goal_position_msg:
@@ -56,7 +57,7 @@ class NavigationController:
             )
             return NavGoal.Result(success=False, message=message)
 
-        if active_target_point is None:
+        if two_phase_enabled and active_target_point is None:
             self.car_control_node.publish_control("STOP")
             return NavGoal.Result(
                 success=False, message="No active target point defined for navigation"
@@ -65,7 +66,13 @@ class NavigationController:
         car_position = [car_position_msg.x, car_position_msg.y]
         car_orientation = [car_orientation_msg.z, car_orientation_msg.w]
         goal_position = [goal_position_msg.x, goal_position_msg.y]
-        return car_position, car_orientation, goal_position, active_target_point
+        return (
+            car_position,
+            car_orientation,
+            goal_position,
+            active_target_point,
+            two_phase_enabled,
+        )
 
     def reset_index(self):
         self.index = 0
@@ -76,13 +83,20 @@ class NavigationController:
         if isinstance(result, NavGoal.Result):
             return result
 
-        car_position, car_orientation, goal_position, active_target_point = result
+        (
+            car_position,
+            car_orientation,
+            goal_position,
+            active_target_point,
+            two_phase_enabled,
+        ) = result
 
         if self.phase == self.APPROACH:
             return self._run_approach_phase(
                 car_position=car_position,
                 car_orientation=car_orientation,
                 goal_position=goal_position,
+                two_phase_enabled=two_phase_enabled,
             )
 
         return self._run_align_phase(
@@ -91,7 +105,13 @@ class NavigationController:
             active_target_point=active_target_point,
         )
 
-    def _run_approach_phase(self, car_position, car_orientation, goal_position):
+    def _run_approach_phase(
+        self,
+        car_position,
+        car_orientation,
+        goal_position,
+        two_phase_enabled: bool,
+    ):
         path_points = self.car_control_node.get_path_points()
         if not path_points:
             self.car_control_node.publish_control("STOP")
@@ -101,9 +121,15 @@ class NavigationController:
 
         target_distance = cal_distance(car_position, goal_position)
         if target_distance <= self.approach_stop_xy_tolerance_m:
+            self.car_control_node.publish_control("STOP")
+            if not two_phase_enabled:
+                return NavGoal.Result(
+                    success=True,
+                    message="Navigation goal reached successfully. Final distance",
+                )
+
             self.phase = self.ALIGN
             self._align_stable_count = 0
-            self.car_control_node.publish_control("STOP")
             self.car_control_node.publish_nav_phase("APPROACH_COMPLETE")
             self.car_control_node.publish_nav_phase(self.ALIGN)
             return None

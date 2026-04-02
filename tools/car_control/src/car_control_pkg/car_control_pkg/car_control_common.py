@@ -3,7 +3,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import PointStamped, PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Path
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Float32MultiArray, String, UInt32
+from std_msgs.msg import Bool, Float32MultiArray, String, UInt32
 
 from car_control_pkg.utils import get_action_mapping, parse_control_signal
 
@@ -88,6 +88,7 @@ class BaseCarControlNode(Node):
         self.latest_cmd_vel = None
         self.active_target_point = None
         self.active_mission_id = 0
+        self.active_two_phase_enabled = False
         self._last_nav_phase_message = None
 
         # Create navigation data subscribers if enabled
@@ -142,6 +143,12 @@ class BaseCarControlNode(Node):
             self._active_mission_id_callback,
             latched_qos,
         )
+        self.active_two_phase_sub = self.create_subscription(
+            Bool,
+            "/nav_active_two_phase_enabled",
+            self._active_two_phase_callback,
+            latched_qos,
+        )
         self.nav_phase_pub = self.create_publisher(String, "/manual_nav/status", 10)
 
         self.get_logger().info("Navigation subscribers created")
@@ -165,6 +172,9 @@ class BaseCarControlNode(Node):
     def _active_mission_id_callback(self, msg):
         self.active_mission_id = int(msg.data)
         self._last_nav_phase_message = None
+
+    def _active_two_phase_callback(self, msg):
+        self.active_two_phase_enabled = bool(msg.data)
 
     def get_goal_pose(self):
         """Get goal position or None if unavailable"""
@@ -192,6 +202,9 @@ class BaseCarControlNode(Node):
 
     def get_active_mission_id(self) -> int:
         return int(self.active_mission_id)
+
+    def is_two_phase_enabled(self) -> bool:
+        return bool(self.active_two_phase_enabled)
 
     def publish_nav_phase(self, phase: str) -> None:
         message = f"{self.get_active_mission_id()}:{phase}"

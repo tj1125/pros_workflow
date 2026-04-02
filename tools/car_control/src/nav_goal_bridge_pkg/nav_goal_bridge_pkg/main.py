@@ -14,7 +14,7 @@ from nav_msgs.msg import Path
 from rclpy.action import ActionClient, ClientGoalHandle
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String, UInt32
+from std_msgs.msg import Bool, String, UInt32
 
 
 class NavGoalBridge(Node):
@@ -66,6 +66,11 @@ class NavGoalBridge(Node):
             "/nav_active_mission_id",
             latched_qos,
         )
+        self._active_two_phase_pub = self.create_publisher(
+            Bool,
+            "/nav_active_two_phase_enabled",
+            latched_qos,
+        )
 
         self.create_subscription(PoseStamped, "/goal_pose", self._goal_callback, latched_qos)
         self.create_subscription(PointStamped, "/target_point", self._target_point_callback, 10)
@@ -91,6 +96,7 @@ class NavGoalBridge(Node):
         self._nav2_goal_sent = False
         self._mission_id = 0
         self._phase = self.APPROACH
+        self._two_phase_enabled = False
         self._manual_align_complete_at: Optional[float] = None
         self._nav2_success_timeout_logged = False
         self._phase2_nav_succeeded = False
@@ -132,13 +138,9 @@ class NavGoalBridge(Node):
 
     def _goal_callback(self, msg: PoseStamped) -> None:
         target_point = self._get_fresh_target_point()
-        if target_point is None:
-            self.get_logger().warn(
-                "Rejecting /goal_pose because /target_point is missing or stale"
-            )
-            return
-
-        goal_key = self._pose_key(msg) + self._point_key(target_point)
+        goal_key = self._pose_key(msg)
+        if target_point is not None:
+            goal_key = goal_key + self._point_key(target_point)
         now = time.monotonic()
         if (
             goal_key == self._last_goal_key
@@ -149,7 +151,10 @@ class NavGoalBridge(Node):
         self._mission_id += 1
         self._last_goal_key = goal_key
         self._last_goal_received_at = now
-        self._active_target_point = self._copy_point(target_point)
+        self._two_phase_enabled = target_point is not None
+        self._active_target_point = (
+            self._copy_point(target_point) if target_point is not None else None
+        )
         self._phase = self.APPROACH
         self._manual_align_complete_at = None
         self._nav2_success_timeout_logged = False
@@ -166,17 +171,18 @@ class NavGoalBridge(Node):
         )
         self.get_logger().info(
             "Accepted new mission: "
-            f"goal=({msg.pose.position.x:.3f}, {msg.pose.position.y:.3f}) "
-            f"target=({target_point.point.x:.3f}, {target_point.point.y:.3f})"
+            f"goal=({msg.pose.position.x:.3f}, {msg.pose.position.y:.3f}), "
+            f"two_phase={self._two_phase_enabled}"
         )
 
     def _publish_mission_context(self) -> None:
-        if self._active_target_point is None:
-            return
-
+        two_phase_msg = Bool()
+        two_phase_msg.data = self._two_phase_enabled
         mission_msg = UInt32()
         mission_msg.data = self._mission_id
-        self._active_target_point_pub.publish(self._active_target_point)
+        self._active_two_phase_pub.publish(two_phase_msg)
+        if self._active_target_point is not None:
+            self._active_target_point_pub.publish(self._active_target_point)
         self._active_mission_id_pub.publish(mission_msg)
 
     def _queue_nav2_goal(
@@ -208,7 +214,8 @@ class NavGoalBridge(Node):
             return
 
         if phase == "APPROACH_COMPLETE" and self._phase == self.APPROACH:
-            self._start_phase2_navigation()
+            if self._two_phase_enabled:
+                self._start_phase2_navigation()
             return
 
         if phase == self.ALIGN_COMPLETE:
@@ -285,7 +292,9 @@ class NavGoalBridge(Node):
             self._try_send_nav2_goal()
 
         if (
-            self._manual_align_complete_at is not None
+            self._two_phase_enabled
+            and self._phase == self.ALIGN
+            and self._manual_align_complete_at is not None
             and not self._phase2_nav_succeeded
             and not self._nav2_success_timeout_logged
             and time.monotonic() - self._manual_align_complete_at > self._nav2_success_timeout_sec
