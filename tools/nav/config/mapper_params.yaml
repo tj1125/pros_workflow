@@ -1,13 +1,6 @@
 car_control_node:
   ros__parameters:
     approach_stop_xy_tolerance_m: 0.10
-    align_stop_yaw_tolerance_deg: 5.0
-    align_stable_cycles: 3
-
-nav_goal_bridge_node:
-  ros__parameters:
-    target_point_timeout_sec: 2.0
-    nav2_success_timeout_sec: 2.0
 
 amcl:
   ros__parameters:
@@ -139,7 +132,7 @@ controller_server:
     failure_tolerance: 1.0
     odom_topic: "odom"
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: [ "general_goal_checker", "approach_goal_checker", "align_goal_checker" ]
+    goal_checker_plugins: [ "general_goal_checker" ]
     controller_plugins: [ "FollowPath"]
 
     # Progress checker parameters
@@ -151,23 +144,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      # Nav2 SimpleGoalChecker: relax position, tighten orientation.
       xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.087266
-
-    approach_goal_checker:
-      stateful: True
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.12
-      yaw_goal_tolerance: 0.087266
-
-    align_goal_checker:
-      stateful: True
-      plugin: "nav2_controller::StoppedGoalChecker"
-      xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.122173
-      trans_stopped_velocity: 0.05
-      rot_stopped_velocity: 0.10
+      yaw_goal_tolerance: 3.14159
 
     # DWB parameters
     FollowPath:

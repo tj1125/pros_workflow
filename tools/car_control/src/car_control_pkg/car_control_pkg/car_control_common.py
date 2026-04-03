@@ -1,9 +1,8 @@
 import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import PointStamped, PoseStamped, PoseWithCovarianceStamped, Twist
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Path
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool, Float32MultiArray, String, UInt32
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray, String
 
 from car_control_pkg.utils import get_action_mapping, parse_control_signal
 
@@ -65,8 +64,6 @@ class BaseCarControlNode(Node):
     def __init__(self, node_name, enable_nav_subscribers=False):
         super().__init__(node_name)
         self.declare_parameter("approach_stop_xy_tolerance_m", 0.10)
-        self.declare_parameter("align_stop_yaw_tolerance_deg", 5.0)
-        self.declare_parameter("align_stable_cycles", 3)
 
         # Create common publishers
         self.rear_wheel_pub, self.front_wheel_pub = (
@@ -86,10 +83,6 @@ class BaseCarControlNode(Node):
         self.latest_goal_pose = None
         self.latest_global_plan = None
         self.latest_cmd_vel = None
-        self.active_target_point = None
-        self.active_mission_id = 0
-        self.active_two_phase_enabled = False
-        self._last_nav_phase_message = None
 
         # Create navigation data subscribers if enabled
         if enable_nav_subscribers:
@@ -110,11 +103,6 @@ class BaseCarControlNode(Node):
         
     def _create_navigation_subscribers(self):
         """Create all subscribers needed for navigation"""
-        latched_qos = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
         self.amcl_sub = self.create_subscription(
             PoseWithCovarianceStamped, "/amcl_pose", self._amcl_callback, 10
         )
@@ -131,26 +119,6 @@ class BaseCarControlNode(Node):
             Twist, "/cmd_vel", self.cmd_vel_callback, 10
         )
 
-        self.active_target_point_sub = self.create_subscription(
-            PointStamped,
-            "/nav_active_target_point",
-            self._active_target_point_callback,
-            latched_qos,
-        )
-        self.active_mission_id_sub = self.create_subscription(
-            UInt32,
-            "/nav_active_mission_id",
-            self._active_mission_id_callback,
-            latched_qos,
-        )
-        self.active_two_phase_sub = self.create_subscription(
-            Bool,
-            "/nav_active_two_phase_enabled",
-            self._active_two_phase_callback,
-            latched_qos,
-        )
-        self.nav_phase_pub = self.create_publisher(String, "/manual_nav/status", 10)
-
         self.get_logger().info("Navigation subscribers created")
 
     # Callback methods for navigation data
@@ -166,16 +134,6 @@ class BaseCarControlNode(Node):
         """Store latest global plan"""
         self.latest_global_plan = msg
 
-    def _active_target_point_callback(self, msg):
-        self.active_target_point = msg
-
-    def _active_mission_id_callback(self, msg):
-        self.active_mission_id = int(msg.data)
-        self._last_nav_phase_message = None
-
-    def _active_two_phase_callback(self, msg):
-        self.active_two_phase_enabled = bool(msg.data)
-
     def get_goal_pose(self):
         """Get goal position or None if unavailable"""
         if self.latest_goal_pose is None:
@@ -187,33 +145,6 @@ class BaseCarControlNode(Node):
             # Handle cases where the message structure is unexpected
             self.get_logger().warn("Goal pose has unexpected structure")
             return None
-
-    def get_active_target_point(self):
-        if self.active_target_point is None:
-            return None
-        if self.active_target_point.header.frame_id != "map":
-            self.get_logger().warn(
-                "Active target point is not in map frame",
-                throttle_duration_sec=2.0,
-            )
-            return None
-        point = self.active_target_point.point
-        return [float(point.x), float(point.y), float(point.z)]
-
-    def get_active_mission_id(self) -> int:
-        return int(self.active_mission_id)
-
-    def is_two_phase_enabled(self) -> bool:
-        return bool(self.active_two_phase_enabled)
-
-    def publish_nav_phase(self, phase: str) -> None:
-        message = f"{self.get_active_mission_id()}:{phase}"
-        if message == self._last_nav_phase_message:
-            return
-        self._last_nav_phase_message = message
-        status = String()
-        status.data = message
-        self.nav_phase_pub.publish(status)
 
     # Helper methods for navigation data access
     def get_car_position_and_orientation(self):

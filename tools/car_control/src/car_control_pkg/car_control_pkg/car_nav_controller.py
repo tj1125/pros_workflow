@@ -8,45 +8,18 @@ from car_control_pkg.nav2_utils import cal_distance, calculate_diff_angle
 
 
 class NavigationController:
-    APPROACH = "APPROACH"
-    ALIGN = "ALIGN"
-
     def __init__(self, car_control_node):
         self.car_control_node = car_control_node
         self.approach_stop_xy_tolerance_m = float(
             self.car_control_node.get_parameter("approach_stop_xy_tolerance_m").value
         )
-        self.align_stop_yaw_tolerance_deg = float(
-            self.car_control_node.get_parameter("align_stop_yaw_tolerance_deg").value
-        )
-        self.align_stable_cycles = int(
-            self.car_control_node.get_parameter("align_stable_cycles").value
-        )
         self.reset_index()
-        self._reset_phase_state()
-
-    def _reset_phase_state(self) -> None:
-        self.phase = self.APPROACH
-        self._align_stable_count = 0
-        self._mission_id = -1
-        self.car_control_node.publish_nav_phase(self.APPROACH)
-
-    def _sync_mission_state(self) -> None:
-        mission_id = self.car_control_node.get_active_mission_id()
-        if mission_id != self._mission_id:
-            self._mission_id = mission_id
-            self.reset_index()
-            self.phase = self.APPROACH
-            self._align_stable_count = 0
-            self.car_control_node.publish_nav_phase(self.APPROACH)
 
     def _get_context(self):
         car_position_msg, car_orientation_msg = (
             self.car_control_node.get_car_position_and_orientation()
         )
         goal_position_msg = self.car_control_node.get_goal_pose()
-        two_phase_enabled = self.car_control_node.is_two_phase_enabled()
-        active_target_point = self.car_control_node.get_active_target_point()
 
         if not car_position_msg or not goal_position_msg:
             self.car_control_node.publish_control("STOP")
@@ -57,61 +30,20 @@ class NavigationController:
             )
             return NavGoal.Result(success=False, message=message)
 
-        if two_phase_enabled and active_target_point is None:
-            self.car_control_node.publish_control("STOP")
-            return NavGoal.Result(
-                success=False, message="No active target point defined for navigation"
-            )
-
         car_position = [car_position_msg.x, car_position_msg.y]
         car_orientation = [car_orientation_msg.z, car_orientation_msg.w]
         goal_position = [goal_position_msg.x, goal_position_msg.y]
-        return (
-            car_position,
-            car_orientation,
-            goal_position,
-            active_target_point,
-            two_phase_enabled,
-        )
+        return car_position, car_orientation, goal_position
 
     def reset_index(self):
         self.index = 0
 
     def manual_nav(self):
-        self._sync_mission_state()
         result = self._get_context()
         if isinstance(result, NavGoal.Result):
             return result
 
-        (
-            car_position,
-            car_orientation,
-            goal_position,
-            active_target_point,
-            two_phase_enabled,
-        ) = result
-
-        if self.phase == self.APPROACH:
-            return self._run_approach_phase(
-                car_position=car_position,
-                car_orientation=car_orientation,
-                goal_position=goal_position,
-                two_phase_enabled=two_phase_enabled,
-            )
-
-        return self._run_align_phase(
-            car_position=car_position,
-            car_orientation=car_orientation,
-            active_target_point=active_target_point,
-        )
-
-    def _run_approach_phase(
-        self,
-        car_position,
-        car_orientation,
-        goal_position,
-        two_phase_enabled: bool,
-    ):
+        car_position, car_orientation, goal_position = result
         path_points = self.car_control_node.get_path_points()
         if not path_points:
             self.car_control_node.publish_control("STOP")
@@ -122,17 +54,10 @@ class NavigationController:
         target_distance = cal_distance(car_position, goal_position)
         if target_distance <= self.approach_stop_xy_tolerance_m:
             self.car_control_node.publish_control("STOP")
-            if not two_phase_enabled:
-                return NavGoal.Result(
-                    success=True,
-                    message="Navigation goal reached successfully. Final distance",
-                )
-
-            self.phase = self.ALIGN
-            self._align_stable_count = 0
-            self.car_control_node.publish_nav_phase("APPROACH_COMPLETE")
-            self.car_control_node.publish_nav_phase(self.ALIGN)
-            return None
+            return NavGoal.Result(
+                success=True,
+                message="Navigation goal reached successfully. Final distance",
+            )
 
         target_point = self.get_next_target_point(
             car_position=car_position, path_points=path_points
@@ -148,31 +73,6 @@ class NavigationController:
         self.car_control_node.publish_control(action_key)
         return None
 
-    def _run_align_phase(self, car_position, car_orientation, active_target_point):
-        yaw_error = calculate_diff_angle(
-            car_position, car_orientation, active_target_point[:2]
-        )
-
-        if abs(yaw_error) <= self.align_stop_yaw_tolerance_deg:
-            self._align_stable_count += 1
-            self.car_control_node.publish_control("STOP")
-            if self._align_stable_count >= self.align_stable_cycles:
-                self.car_control_node.publish_nav_phase("ALIGN_COMPLETE")
-                return NavGoal.Result(
-                    success=True,
-                    message=(
-                        "Navigation goal reached successfully. "
-                        f"Final yaw error {yaw_error:.2f} deg"
-                    ),
-                )
-            return None
-
-        self._align_stable_count = 0
-        action_key = self.choose_rotation_action(yaw_error)
-        self.car_control_node.publish_control(action_key)
-        self.car_control_node.publish_nav_phase(self.ALIGN)
-        return None
-
     @staticmethod
     def choose_path_action(diff_angle):
         if -10 < diff_angle < 10:
@@ -180,14 +80,6 @@ class NavigationController:
         if -180 < diff_angle <= -10:
             return "CLOCKWISE_ROTATION"
         if 10 <= diff_angle < 180:
-            return "COUNTERCLOCKWISE_ROTATION"
-        return "STOP"
-
-    @staticmethod
-    def choose_rotation_action(diff_angle):
-        if diff_angle < 0:
-            return "CLOCKWISE_ROTATION"
-        if diff_angle > 0:
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
 
