@@ -9,6 +9,8 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+from tool.runtime.memory import release_cuda_memory
+
 
 class Sam3DInference:
     """Minimal SAM3D runtime adapter (no notebook/UI dependencies)."""
@@ -47,6 +49,36 @@ class Sam3DInference:
             raise RuntimeError(
                 f"SAM3D instantiated on {actual_device} instead of requested {resolved_device}."
             )
+
+    def close(self) -> None:
+        pipeline = getattr(self, "_pipeline", None)
+        self._pipeline = None
+        if pipeline is None:
+            return
+
+        for candidate in (
+            pipeline,
+            getattr(pipeline, "model", None),
+            getattr(pipeline, "depth_model", None),
+        ):
+            if candidate is None:
+                continue
+            cpu = getattr(candidate, "cpu", None)
+            if callable(cpu):
+                try:
+                    cpu()
+                    continue
+                except Exception:
+                    pass
+            to = getattr(candidate, "to", None)
+            if callable(to):
+                try:
+                    to("cpu")
+                except Exception:
+                    pass
+
+        del pipeline
+        release_cuda_memory()
 
     @staticmethod
     def _merge_mask_to_rgba(image_rgb: np.ndarray, mask_bool: np.ndarray) -> np.ndarray:

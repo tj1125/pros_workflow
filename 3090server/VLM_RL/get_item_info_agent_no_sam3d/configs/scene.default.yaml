@@ -1,0 +1,50 @@
+camera:
+  camera_a: "Camera_Room1_12"
+  camera_b: "Camera_Room1_13"
+  camera_parameter_dir: "../data/camera_parameter"
+
+models:
+  sam_seg_checkpoint: "../../models/segmentation/sam_vit_b_01ec64.pth"
+  sam3d_root: "../vendor/sam3d_runtime"
+  graspgen_root: "../vendor/graspgen_runtime"
+  gripper_config: "../../models/graspgen_checkpoints/graspgen_robotiq_2f_140.yml"
+
+alignment:
+  normal: [-0.8742383830716731, -0.4241241858417162, -0.2362751035304569]
+  origin: [0.0, 0.0, 0.0]
+  scan_y_step: 45.0
+  weight_shape: 0.7
+  rotate_z: 0.0
+  voxel: 0.01
+  width: 64
+  height: 64
+  padding: 0.05
+
+map:
+  map_pgm: "../data/map/map01.pgm"
+  map_yaml: "../data/map/map01.yaml"
+  unity_map_origin: [3.314, 0.0, 6.0]
+  offset: 0.5
+  white_threshold: 250
+
+runtime:
+  device: "cuda"
+  sam_model_type: "vit_b"
+  height_scale: 1.0
+  footprint_max_aspect_ratio: 1.8
+  vertical_line_height_stat: "min"
+  min_valid_height_m: 0.03
+  max_valid_height_m: 1.5
+  sam_seed: 42
+  grasp_threshold: -1.0
+  num_grasps: 200
+  topk_num_grasps: 100
+  num_sample_points: 3000
+  robust_lower_percentile: 5.0
+  robust_upper_percentile: 95.0
+  axis_step_m: 0.05
+  obstacle_point_budget: 1600
+  obstacle_mode: "box"
+  collision_threshold: 0.02
+  max_collision_scene_points: 8192
+  num_collision_samples: 2000

@@ -4,27 +4,20 @@
 cameras:
   - name: Camera_Car        # mounted on the robot car (forward-facing)
     description: 車上手臂第一人稱視角前視相機
-  - name: Camera_Room1_1   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機1
-  - name: Camera_Room1_2   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機2
-  - name: Camera_Room1_3   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機3
-  - name: Camera_Room1_4   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機4
-  - name: Camera_Room1_5   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機5
-  - name: Camera_Room1_6   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機6
-  - name: Camera_Room1_7   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機7
-  - name: Camera_Room1_8   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機8
-  - name: Camera_Room1_9   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機9
-  - name: Camera_Room1_10   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機10
-  - name: Camera_Room1_11   # fixed overhead camera covering the whole room
-    description: 客廳全視角俯瞰相機11
+    role: car
   - name: Camera_Room1_12   # fixed overhead camera covering the whole room
     description: 客廳全視角俯瞰相機12
+    role: room
+    rgb_topic: /camera_room1_12/color/image_raw/compressed
+  - name: Camera_Room1_13   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機13
+    role: room
+    rgb_topic: /camera_room1_13/color/image_raw/compressed
+  - name: Camera_Room1_14   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機14
+    role: room
+    rgb_topic: /camera_room1_14/color/image_raw/compressed
+  - name: Camera_Room1_15   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機15
+    role: room
+    rgb_topic: /camera_room1_15/color/image_raw/compressed

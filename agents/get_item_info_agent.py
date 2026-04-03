@@ -3,13 +3,13 @@ agents/get_item_info_agent.py — Get Item Info Agent
 
 Role in the system:
   - LangGraph Node: called after human confirms the target detection ID
-  - A2A Client: sends the selected camera group RGB images to
+  - A2A Client: sends all available fixed-room RGB images to
                 INF_GET_ITEM_INFO_URL on RTX 3090 for detailed 3D pose,
                 size, and label estimation
 
 Server (3090) responsibilities:
-  - Receive the selected camera plus all RGB images in that group
-  - Choose a usable stereo pair inside the group
+  - Receive the preferred camera plus all uploaded RGB images
+  - Choose a usable multi-view / stereo subset from the upload
   - Run depth estimation / point cloud projection
   - Return full 3D world position, orientation, and bounding box size
 
@@ -36,9 +36,9 @@ class GetItemInfoAgent:
     execute() takes params:
       {
         "yolo_class": "doll",  # or "apple", "wine"
-        "selected_camera": "Camera_Room1_1",
-        "camera_names": ["Camera_Room1_1", "Camera_Room1_2", "Camera_Room1_3"],
-        "camera_images": {"Camera_Room1_1": "...", ...},
+        "selected_camera": "Camera_Room1_12",
+        "camera_names": ["Camera_Room1_12", "Camera_Room1_13", "Camera_Room1_14", "Camera_Room1_15"],
+        "camera_images": {"Camera_Room1_12": "...", ...},
       }
 
     Returns:
@@ -78,7 +78,7 @@ class GetItemInfoAgent:
         return {"result": result, "success": True}
 
     async def _a2a_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
-        """Real: send the selected camera group RGB images to RTX 3090."""
+        """Real: send all available room-camera RGB images to RTX 3090."""
         import json
 
         yolo_class = params.get("yolo_class", "unknown")

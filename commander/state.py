@@ -58,14 +58,17 @@ class CommanderState(TypedDict):
     # Candidate objects returned by find_node (before user confirmation)
     candidate_objects: List[Dict[str, Any]]
 
+    # Fully-prepared target selected by find_node for get_item_info_no_sam3d_node
+    selected_target: Dict[str, Any]
+
     # 1-based index pointing to the rank of the current goal pose to attempt
     current_goal_rank: int
 
     # Whether find_node has been completed (prevents re-running)
     find_complete: bool
 
-    # YOLO detections from find_node: key = global detection number (1-based)
-    # Value: {camera, group_id, bbox, label, conf, annotated_image_base64}
+    # Candidate detections from find_node: key = display number (1-based)
+    # Value: {instance_key, center_world, camsrc, bboxes_by_camera, preview_path, ...}
     yolo_detections: Dict[int, Dict[str, Any]]
 
     # User-selected detection ID (0 = user typed "no")

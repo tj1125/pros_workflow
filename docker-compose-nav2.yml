@@ -7,8 +7,8 @@
 #   ./launch_nav2.sh --stop    # 停止所有服務
 #
 # 啟動的服務：
-#   rosbridge  — Unity WebSocket 橋接 (port 9090)
 #   nav2       — VLM-RL 導航系統 (scan matcher + localization + Nav2 planning)
+#   rosbridge  — optional Unity WebSocket 橋接 (only when pros_cameraapi is NOT running)
 #
 # 恢復雙網路架構：
 # cube_bridge_network: 專為 Unity rosbridge 通訊
@@ -16,13 +16,13 @@
 # =============================================================================
 
 services:
-
   # ------------------------------------
-  # Rosbridge Server：讓 Unity 透過 WebSocket (port 9090) 溝通 ROS 2 topics
+  # Lidar Transform specifically for Unity
   # ------------------------------------
-  rosbridge:
-    image: ghcr.io/screamlab/pros_base_image:0.0.2
-    container_name: vlm_rl_rosbridge
+  lidar_tranform:
+    image: ghcr.io/screamlab/pros_unity_lidar_trans_image:latest
+    platform: linux/amd64
+    container_name: vlm_rl_lidar_transform
     env_file:
       - .env
     environment:
@@ -30,16 +30,15 @@ services:
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
-    ports:
-      - "9090:9090" # Unity connects to ws://<host>:9090
-    command: "ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
-    restart: unless-stopped
+    command: "ros2 run unity_lidar_transformer lidar_transformer_node"
+    restart: "unless-stopped"
 
   # ------------------------------------
   # Nav2：VLM-RL 導航基礎設施 (scan matcher + localization + planning servers)
   # ------------------------------------
   nav2:
     image: ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
+    platform: linux/amd64
     container_name: vlm_rl_nav2
     env_file:
       - .env
@@ -49,28 +48,48 @@ services:
     volumes:
       # Mount navigation tool sources only; build/install/log stay in Docker named volumes.
       - ./tools/nav:/workspaces/tools/nav:rw
+      - ./tools/car_control:/workspaces/tools/car_control:rw
       - vlm_rl_nav_build:/workspaces/nav_build
       - vlm_rl_nav_install:/workspaces/nav_install
       - vlm_rl_nav_log:/workspaces/nav_log
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
-    depends_on:
-      - rosbridge
     command: >
       bash -c "
         set -e
-        echo '🔧 Building vlm_rl_nav package...'
-        cd /workspaces/tools/nav &&
+        echo '🔧 Building vlm_rl_nav and car_control_pkg...'
+        cd /workspaces &&
         find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
         find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
         find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select vlm_rl_nav --symlink-install &&
+        colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav --symlink-install &&
         source /workspaces/nav_install/setup.bash &&
         echo '🚀 Launching Nav2 (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)...' &&
         ros2 launch vlm_rl_nav navigation.launch.py
       "
     restart: "no"
+
+  # ------------------------------------
+  # Optional Rosbridge Server
+  # Use this ONLY when Unity/pros_cameraapi is not already providing rosbridge.
+  # ------------------------------------
+  rosbridge:
+    profiles: ["with-rosbridge"]
+    image: ghcr.io/screamlab/pros_base_image:0.0.2
+    platform: linux/amd64
+    container_name: vlm_rl_rosbridge
+    ports:
+      - "9090:9090"
+    env_file:
+      - .env
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
+    networks:
+      - cube_bridge_network
+      - compose_cube_bridge_network
+    command: "ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
+    restart: unless-stopped
 
 networks:
   # cube_bridge_network: shared between rosbridge and Nav2 (Unity connects via rosbridge)

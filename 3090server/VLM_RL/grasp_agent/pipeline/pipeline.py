@@ -12,6 +12,7 @@ from grasp_agent.pipeline.config import (
     validate_required_paths,
     validate_runtime_device,
 )
+from grasp_agent.pipeline.constants import AGENT_ROOT
 from tool.grasp.graspgen import (
     infer_grasps_from_point_cloud_with_collision,
     prepare_graspgen_runtime_imports,
@@ -26,6 +27,56 @@ class BoundingBox:
     y1: float
     x2: float
     y2: float
+
+
+def _save_debug_npz(
+    *,
+    object_id: str,
+    camera_name: str,
+    image_bgr: np.ndarray,
+    depth_m: np.ndarray,
+    intrinsic_matrix: np.ndarray,
+    bbox: BoundingBox,
+    seg_mask_bool: np.ndarray,
+    object_pc_camera: np.ndarray,
+    object_pc_local: np.ndarray,
+    scene_pc_camera: np.ndarray,
+    scene_pc_local: np.ndarray | None,
+    object_reference_center_camera: np.ndarray,
+    best_grasp_local: np.ndarray,
+    best_grasp_camera: np.ndarray,
+    grasp_debug_npz: dict[str, np.ndarray],
+) -> Path:
+    output_dir = AGENT_ROOT / "data" / "debug_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "latest_grasp_debug.npz"
+    save_data = dict(grasp_debug_npz)
+    save_data.update(
+        {
+            "object_id": np.array(object_id),
+            "camera_name": np.array(camera_name),
+            "image_bgr": np.asarray(image_bgr, dtype=np.uint8),
+            "depth_m": np.asarray(depth_m, dtype=np.float32),
+            "intrinsic_matrix": np.asarray(intrinsic_matrix, dtype=float),
+            "bbox_xyxy": np.array([bbox.x1, bbox.y1, bbox.x2, bbox.y2], dtype=float),
+            "seg_mask_bool": np.asarray(seg_mask_bool, dtype=bool),
+            "object_pc_camera": np.asarray(object_pc_camera, dtype=float),
+            "object_pc_local": np.asarray(object_pc_local, dtype=float),
+            "scene_pc_camera": np.asarray(scene_pc_camera, dtype=float),
+            "scene_pc_local": (
+                np.asarray(scene_pc_local, dtype=float)
+                if scene_pc_local is not None
+                else np.zeros((0, 3), dtype=float)
+            ),
+            "object_reference_center_camera": np.asarray(object_reference_center_camera, dtype=float),
+            "best_grasp_local": np.asarray(best_grasp_local, dtype=float),
+            "best_grasp_camera": np.asarray(best_grasp_camera, dtype=float),
+            "best_grasp_coordinate_frame_local": np.array("object_local"),
+            "best_grasp_coordinate_frame_camera": np.array("camera"),
+        }
+    )
+    np.savez(str(output_path), **save_data)
+    return output_path
 
 
 def _load_intrinsic_matrix(path: Path) -> np.ndarray:
@@ -204,7 +255,7 @@ def run_pipeline(
     object_pc_local = object_pc_camera - object_reference_center_camera[None, :]
     scene_pc_local = scene_pc_camera - object_reference_center_camera[None, :] if len(scene_pc_camera) else None
 
-    grasps_local, confidences, grasp_stats = infer_grasps_from_point_cloud_with_collision(
+    grasps_local, confidences, grasp_stats, grasp_debug_npz = infer_grasps_from_point_cloud_with_collision(
         object_pc_local=object_pc_local,
         gripper_config=Path(cfg["models"]["gripper_config"]),
         grasp_threshold=float(runtime["grasp_threshold"]),
@@ -220,6 +271,23 @@ def run_pipeline(
     best_grasp_local = np.array(grasps_local[best_idx], dtype=float)
     best_grasp_camera = np.array(best_grasp_local, copy=True)
     best_grasp_camera[:3, 3] = best_grasp_camera[:3, 3] + object_reference_center_camera
+    debug_npz_path = _save_debug_npz(
+        object_id=object_id,
+        camera_name=camera_name or str(cfg["camera"]["camera_name"]),
+        image_bgr=image_bgr,
+        depth_m=depth_m,
+        intrinsic_matrix=intrinsic_matrix,
+        bbox=bbox,
+        seg_mask_bool=seg_mask_bool,
+        object_pc_camera=object_pc_camera,
+        object_pc_local=object_pc_local,
+        scene_pc_camera=scene_pc_camera,
+        scene_pc_local=scene_pc_local,
+        object_reference_center_camera=object_reference_center_camera,
+        best_grasp_local=best_grasp_local,
+        best_grasp_camera=best_grasp_camera,
+        grasp_debug_npz=grasp_debug_npz,
+    )
 
     object_depth_values = object_pc_camera[:, 2]
     return {
@@ -238,6 +306,7 @@ def run_pipeline(
         },
         "num_object_points": int(len(object_pc_camera)),
         "num_scene_points": int(len(scene_pc_camera)),
+        "grasp_debug_npz_path": str(debug_npz_path),
         "best_grasp_pose_camera": {
             "frame": "camera",
             "position": best_grasp_camera[:3, 3].astype(float).tolist(),

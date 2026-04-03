@@ -7,6 +7,8 @@ from typing import Protocol
 import cv2
 import numpy as np
 
+from tool.runtime.memory import release_cuda_memory
+
 
 class BBoxLike(Protocol):
     x1: float
@@ -40,22 +42,35 @@ def sam_segment_with_bbox(
     if model_type not in sam_model_registry:
         raise ValueError(f"Unsupported SAM model type: {model_type}")
 
-    sam = sam_model_registry[model_type](checkpoint=str(checkpoint))
-    sam = sam.to(device=device)
-    predictor = SamPredictor(sam)
+    sam = None
+    predictor = None
+    try:
+        sam = sam_model_registry[model_type](checkpoint=str(checkpoint))
+        sam = sam.to(device=device)
+        predictor = SamPredictor(sam)
 
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    predictor.set_image(image_rgb)
-    box = np.array([bbox.x1, bbox.y1, bbox.x2, bbox.y2], dtype=np.float32)
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        predictor.set_image(image_rgb)
+        box = np.array([bbox.x1, bbox.y1, bbox.x2, bbox.y2], dtype=np.float32)
 
-    masks, scores, _ = predictor.predict(
-        point_coords=None,
-        point_labels=None,
-        box=box[None, :],
-        multimask_output=True,
-    )
-    if masks is None or len(masks) == 0:
-        raise RuntimeError("SAM returned no masks for the YOLO bbox prompt.")
+        masks, scores, _ = predictor.predict(
+            point_coords=None,
+            point_labels=None,
+            box=box[None, :],
+            multimask_output=True,
+        )
+        if masks is None or len(masks) == 0:
+            raise RuntimeError("SAM returned no masks for the YOLO bbox prompt.")
 
-    best_idx = int(np.argmax(scores))
-    return masks[best_idx].astype(bool)
+        best_idx = int(np.argmax(scores))
+        return masks[best_idx].astype(bool)
+    finally:
+        if predictor is not None:
+            del predictor
+        if sam is not None:
+            try:
+                sam.cpu()
+            except Exception:
+                pass
+            del sam
+        release_cuda_memory()

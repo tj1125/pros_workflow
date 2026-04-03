@@ -5,7 +5,7 @@ Role in the system:
   - LangGraph Node: triggered when mild occlusion is detected between
     the gripper and the target object (resolvable via arm micro-adjustment).
   - A2A Client: sends current RGB frames, depth frames, joint state and
-    action history to the View Agent inference server (RTX 3090, Port 8007)
+    action history to the View Agent inference server (RTX 3090, Port 9003)
     for SAC policy inference.
 
 Server (3090) responsibilities:
@@ -43,7 +43,7 @@ class ViewAgent:
     Execution flow:
         1. Receive params (rgb_frames_b64, depth_frames_b64, joint_state,
            history_action) from CommanderState
-        2. Send A2A HTTPS request to View SAC server (RTX 3090, Port 8007)
+        2. Send A2A HTTPS request to View SAC server (RTX 3090, Port 9003)
         3. Parse returned 6-DOF joint delta action
         4. Return delta_joints for arm controller execution
 
@@ -110,7 +110,7 @@ class ViewAgent:
         """
         Real mode:
           1. Package rgb_frames, depth_frames, joint_state, history_action as JSON.
-          2. Send to View A2A Server on RTX 3090 (Port 8007).
+          2. Send to View A2A Server on RTX 3090 (Port 9003).
           3. Parse returned delta_joints.
         """
         try:

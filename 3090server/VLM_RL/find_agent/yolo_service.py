@@ -16,6 +16,7 @@ from typing import Any, Dict
 
 from PIL import Image, ImageDraw
 
+from tool.runtime.memory import release_cuda_memory
 from tool.vision.yolo import extract_detections, load_yolo_model, run_yolo
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,45 @@ _MAX_GROUP_CAMERA_INDEX = 12
 
 class YoloService:
     def __init__(self, model_path: str = str(_DEFAULT_MODEL)):
+        self._model_path = str(model_path)
+        self._model = None
+
+    def _ensure_model(self):
+        if self._model is not None:
+            return self._model
+
         try:
-            self._model = load_yolo_model(model_path)
-            logger.info(f"[YoloService] Loaded model: {model_path}")
+            self._model = load_yolo_model(self._model_path)
+            logger.info("[YoloService] Loaded model: %s", self._model_path)
         except Exception as e:
-            logger.error(f"[YoloService] Failed to load YOLO or weights not found: {e}")
+            logger.error("[YoloService] Failed to load YOLO or weights not found: %s", e)
             self._model = None
+        return self._model
+
+    def close(self) -> None:
+        model = self._model
+        self._model = None
+        if model is None:
+            return
+
+        predictor = getattr(model, "predictor", None)
+        predictor_model = getattr(predictor, "model", None)
+        inner_model = getattr(model, "model", None)
+        for candidate in (predictor_model, inner_model):
+            if candidate is None:
+                continue
+            cpu = getattr(candidate, "cpu", None)
+            if callable(cpu):
+                try:
+                    cpu()
+                except Exception:
+                    pass
+
+        del predictor_model
+        del inner_model
+        del predictor
+        del model
+        release_cuda_memory()
 
     def detect_and_annotate(
         self,
@@ -48,7 +82,8 @@ class YoloService:
             "annotated_images": { "1": "<base64>", "2": "<base64>"}
         }
         """
-        if not self._model:
+        model = self._ensure_model()
+        if not model:
             raise RuntimeError("YOLO model not initialized.")
 
         logger.info(f"[YoloService] Running detection on {len(camera_images)} images.")
@@ -63,7 +98,7 @@ class YoloService:
                 img_bytes = base64.b64decode(b64_str)
                 pil_img   = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-                result = run_yolo(self._model, pil_img)
+                result = run_yolo(model, pil_img)
                 num_det = 0 if result.boxes is None else len(result.boxes)
                 logger.info(f"[YoloService] {cam_name}: Detected {num_det} objects.")
 

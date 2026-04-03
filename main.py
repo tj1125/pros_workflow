@@ -19,7 +19,7 @@ from commander.logger import TraceLogger
 from commander.orchestrator import Orchestrator
 
 
-load_dotenv()
+load_dotenv(override=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -130,9 +130,11 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
         "task_complete": False,
         "target_object": {},
         "candidate_objects": [],
+        "selected_target": {},
         "find_complete": False,
         "yolo_detections": {},
         "selected_detection_id": 0,
+        "current_goal_rank": 1,
         "nav_move_source": "",
         "nav_goal_pose": {},
         "nav_plan_ready": False,

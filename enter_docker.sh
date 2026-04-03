@@ -2,7 +2,7 @@
 # VLM-RL System — Enter Dev Container
 
 LOCAL_IMAGE="vlm-rl-env:latest"
-VOLUME_ARGS="-v $(pwd):/workspaces/VLM_RL -v $(pwd)/tools/nav:/workspaces/tools/nav -v vlm_rl_nav_build:/workspaces/nav_build -v vlm_rl_nav_install:/workspaces/nav_install -v vlm_rl_nav_log:/workspaces/nav_log"
+VOLUME_ARGS="-v $(pwd):/workspaces/VLM_RL -v vlm_rl_nav_install:/workspaces/nav_install"
 
 # --- Detect OS and Architecture ---
 ARCH=$(uname -m)
@@ -53,8 +53,18 @@ export PATH="$HOME/.local/bin:$PATH"
 alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
 alias run="cd /workspaces/VLM_RL && uv run python main.py --no-mock"
 alias t="cd /workspaces/VLM_RL && uv run python test_client.py --mock-only"
-alias r="cd /workspaces/tools/nav && find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + && colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select vlm_rl_nav --symlink-install && source /workspaces/nav_install/setup.bash && cd /workspaces/VLM_RL"
 alias logs='cat /workspaces/VLM_RL/logs/trace_logger.jsonl | python3 -m json.tool 2>/dev/null || echo "no logs yet"'
+unalias r 2>/dev/null || true
+r() {
+    source /opt/ros/humble/setup.bash
+    cd /workspaces || return 1
+    colcon --log-base /workspaces/nav_log build \
+        --base-paths /workspaces/VLM_RL/tools/nav /workspaces/VLM_RL/tools/car_control \
+        --build-base /workspaces/nav_build \
+        --install-base /workspaces/nav_install \
+        --symlink-install \
+        "$@"
+}
 ENVFILE
 
 grep -q ".container_env.sh" ~/.bashrc || echo "source /workspaces/VLM_RL/.container_env.sh" >> ~/.bashrc
@@ -67,8 +77,9 @@ echo "╠═══════════════════════�
 echo "║  mock   → main.py --mock                         ║"
 echo "║  run    → main.py --no-mock (needs real .env)    ║"
 echo "║  t      → test_client.py --mock-only             ║"
-echo "║  r      → build nav tool workspace               ║"
+echo "║  r      → colcon build (tools only)              ║"
 echo "║  logs   → print trace log                        ║"
+echo "║  Nav2   → launch from host via ./launch_nav2.sh  ║"
 echo "╚═══════════════════════════════════════════════════╝"
 
 cd /workspaces/VLM_RL

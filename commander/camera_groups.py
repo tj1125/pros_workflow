@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import yaml
 
@@ -23,11 +23,56 @@ def room1_camera_group_id(camera_name: str) -> Optional[int]:
     return ((camera_idx - 1) // _GROUP_SIZE) + 1
 
 
-def _load_camera_names() -> List[str]:
+def _load_camera_entries() -> List[Dict[str, str]]:
     with open(_CONFIG_PATH, encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
         cameras = payload.get("cameras", [])
-    return [str(camera.get("name", "")).strip() for camera in cameras if camera.get("name")]
+    entries: List[Dict[str, str]] = []
+    for camera in cameras:
+        name = str(camera.get("name", "")).strip()
+        if not name:
+            continue
+        entries.append(
+            {
+                "name": name,
+                "description": str(camera.get("description", "")).strip(),
+                "role": str(camera.get("role", "")).strip(),
+                "rgb_topic": str(camera.get("rgb_topic", "")).strip(),
+            }
+        )
+    return entries
+
+
+def _load_camera_names() -> List[str]:
+    return [entry["name"] for entry in _load_camera_entries()]
+
+
+def configured_room_cameras() -> List[str]:
+    """Return all configured fixed room cameras in config order."""
+    return [
+        camera_name
+        for camera_name in _load_camera_names()
+        if room1_camera_group_id(camera_name) is not None
+    ]
+
+
+def configured_room_camera_entries() -> List[Dict[str, str]]:
+    """Return configured fixed room cameras with their RGB topic metadata."""
+    return [
+        entry
+        for entry in _load_camera_entries()
+        if room1_camera_group_id(entry["name"]) is not None
+    ]
+
+
+def room_camera_topic(camera_name: str) -> Optional[str]:
+    """Return the configured RGB topic for a room camera, if present."""
+    wanted = str(camera_name).strip()
+    for entry in configured_room_camera_entries():
+        if entry["name"] == wanted:
+            topic = entry.get("rgb_topic", "").strip()
+            return topic or None
+    return None
 
 
 def cameras_in_group(group_id: int) -> List[str]:

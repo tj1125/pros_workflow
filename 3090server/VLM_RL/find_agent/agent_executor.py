@@ -58,6 +58,11 @@ class FindAgentExecutor(AgentExecutor):
         except Exception as e:
             logger.error(f"FindAgent execution error: {e}", exc_info=True)
             await event_queue.enqueue_event(build_error(str(e)))
+        finally:
+            try:
+                self.yolo_service.close()
+            except Exception as exc:
+                logger.warning("FindAgent cleanup failed: %s", exc)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise UnsupportedOperationError("Cancellation not supported")

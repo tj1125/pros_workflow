@@ -9,6 +9,11 @@ from nav_msgs.msg import Path
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
+from .nav_settings import (
+    goal_heading_tolerance_deg_default,
+    goal_tolerance_m_default,
+)
+
 
 WHEEL_SPEED = 20.0
 
@@ -68,14 +73,22 @@ class ProsPathFollower:
         self,
         node: Node,
         *,
-        goal_tolerance_m: float = 0.08,
-        goal_heading_tolerance_deg: float = 5.0,
+        goal_tolerance_m: Optional[float] = None,
+        goal_heading_tolerance_deg: Optional[float] = None,
         min_target_distance_m: float = 0.5,
         target_heading_point: Optional[tuple[float, float]] = None,
     ) -> None:
         self.node = node
-        self.goal_tolerance_m = goal_tolerance_m
-        self.goal_heading_tolerance_deg = goal_heading_tolerance_deg
+        self.goal_tolerance_m = (
+            goal_tolerance_m_default()
+            if goal_tolerance_m is None
+            else float(goal_tolerance_m)
+        )
+        self.goal_heading_tolerance_deg = (
+            goal_heading_tolerance_deg_default()
+            if goal_heading_tolerance_deg is None
+            else float(goal_heading_tolerance_deg)
+        )
         self.min_target_distance_m = min_target_distance_m
         self.target_heading_point = target_heading_point
         self.front_pub = node.create_publisher(Float32MultiArray, "/car_C_front_wheel", 10)
