@@ -2,7 +2,7 @@
 # VLM-RL System — Enter Dev Container
 
 LOCAL_IMAGE="vlm-rl-env:latest"
-VOLUME_ARGS="-v $(pwd):/workspaces/VLM_RL -v $(pwd)/tools/nav:/workspaces/tools/nav -v $(pwd)/tools/pros_car:/workspaces/tools/pros_car -v vlm_rl_nav_build:/workspaces/nav_build -v vlm_rl_nav_install:/workspaces/nav_install -v vlm_rl_nav_log:/workspaces/nav_log"
+VOLUME_ARGS="-v $(pwd):/workspaces/VLM_RL -v vlm_rl_nav_install:/workspaces/nav_install"
 
 # --- Detect OS and Architecture ---
 ARCH=$(uname -m)
@@ -53,7 +53,6 @@ export PATH="$HOME/.local/bin:$PATH"
 alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
 alias run="cd /workspaces/VLM_RL && uv run python main.py --no-mock"
 alias t="cd /workspaces/VLM_RL && uv run python test_client.py --mock-only"
-alias r="cd /workspaces && find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + && find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + && colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav /workspaces/tools/pros_car --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav --symlink-install && source /workspaces/nav_install/setup.bash && cd /workspaces/VLM_RL"
 alias logs='cat /workspaces/VLM_RL/logs/trace_logger.jsonl | python3 -m json.tool 2>/dev/null || echo "no logs yet"'
 ENVFILE
 
@@ -67,8 +66,8 @@ echo "╠═══════════════════════�
 echo "║  mock   → main.py --mock                         ║"
 echo "║  run    → main.py --no-mock (needs real .env)    ║"
 echo "║  t      → test_client.py --mock-only             ║"
-echo "║  r      → build nav tool workspace               ║"
 echo "║  logs   → print trace log                        ║"
+echo "║  Nav2   → launch from host via ./launch_nav2.sh  ║"
 echo "╚═══════════════════════════════════════════════════╝"
 
 cd /workspaces/VLM_RL
