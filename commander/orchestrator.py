@@ -15,6 +15,10 @@ from langgraph.graph import END, StateGraph
 
 from .brain import Brain
 from .logger import TraceLogger
+from .nav_settings import (
+    goal_heading_tolerance_deg_default,
+    goal_tolerance_m_default,
+)
 from .state import CommanderState
 
 logger = logging.getLogger(__name__)
@@ -741,9 +745,14 @@ class Orchestrator:
         plan_timeout = float(os.getenv("NAV_PLAN_TIMEOUT_SEC", "8"))
         arrival_timeout = float(os.getenv("NAV_ARRIVAL_TIMEOUT_SEC", "120"))
         publish_interval = float(os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.1"))
-        goal_tolerance_m = float(os.getenv("NAV_GOAL_TOLERANCE_M", "0.15"))
+        goal_tolerance_m = float(
+            os.getenv("NAV_GOAL_TOLERANCE_M", str(goal_tolerance_m_default()))
+        )
         goal_heading_tolerance_deg = float(
-            os.getenv("NAV_GOAL_HEADING_TOLERANCE_DEG", "5.0")
+            os.getenv(
+                "NAV_GOAL_HEADING_TOLERANCE_DEG",
+                str(goal_heading_tolerance_deg_default()),
+            )
         )
 
         rank = int(state.get("current_goal_rank", 1) or 1)

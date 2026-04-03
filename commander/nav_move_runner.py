@@ -19,6 +19,11 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from std_msgs.msg import String
 
+from .nav_settings import (
+    goal_heading_tolerance_deg_default,
+    goal_tolerance_m_default,
+)
+
 
 def _yaw_deg_from_quaternion(z: float, w: float) -> float:
     return degrees(2.0 * atan2(z, w))
@@ -199,9 +204,14 @@ class NavMoveRunner(Node):
         publish_initialpose = bool(self.payload.get("publish_initialpose", False))
         warmup_publish_count = int(self.payload.get("warmup_publish_count", 3))
         warmup_sleep = float(self.payload.get("publish_interval_sec", 0.2))
-        goal_tolerance_m = float(self.payload.get("goal_tolerance_m", 0.08))
+        goal_tolerance_m = float(
+            self.payload.get("goal_tolerance_m", goal_tolerance_m_default())
+        )
         goal_heading_tolerance_deg = float(
-            self.payload.get("goal_heading_tolerance_deg", 5.0)
+            self.payload.get(
+                "goal_heading_tolerance_deg",
+                goal_heading_tolerance_deg_default(),
+            )
         )
 
         goal_pose_msg = self._make_goal_pose()
