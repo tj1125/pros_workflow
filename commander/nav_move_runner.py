@@ -7,8 +7,9 @@ Output: single-line JSON result on stdout.
 
 import argparse
 import json
+import math
 import time
-from math import atan2, degrees, hypot
+from math import atan2, hypot
 from typing import Any, Dict, Optional
 
 import rclpy
@@ -20,20 +21,20 @@ from rclpy.time import Time
 from std_msgs.msg import String
 
 from .nav_settings import (
-    goal_heading_tolerance_deg_default,
+    goal_heading_tolerance_rad_default,
     goal_tolerance_m_default,
 )
 
 
-def _yaw_deg_from_quaternion(z: float, w: float) -> float:
-    return degrees(2.0 * atan2(z, w))
+def _yaw_rad_from_quaternion(z: float, w: float) -> float:
+    return 2.0 * atan2(z, w)
 
 
-def _normalize_angle_deg(angle: float) -> float:
-    while angle > 180.0:
-        angle -= 360.0
-    while angle < -180.0:
-        angle += 360.0
+def _normalize_angle_rad(angle: float) -> float:
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
     return angle
 
 
@@ -140,9 +141,9 @@ class NavMoveRunner(Node):
         car_orientation: tuple[float, float],
         goal_orientation: tuple[float, float],
     ) -> float:
-        car_yaw = _yaw_deg_from_quaternion(car_orientation[0], car_orientation[1])
-        goal_yaw = _yaw_deg_from_quaternion(goal_orientation[0], goal_orientation[1])
-        return _normalize_angle_deg(goal_yaw - car_yaw)
+        car_yaw = _yaw_rad_from_quaternion(car_orientation[0], car_orientation[1])
+        goal_yaw = _yaw_rad_from_quaternion(goal_orientation[0], goal_orientation[1])
+        return _normalize_angle_rad(goal_yaw - car_yaw)
 
     def _observe_until_arrival(
         self,
@@ -150,7 +151,7 @@ class NavMoveRunner(Node):
         *,
         arrival_timeout: float,
         goal_tolerance_m: float,
-        goal_heading_tolerance_deg: float,
+        goal_heading_tolerance_rad: float,
     ) -> Dict[str, Any]:
         goal_position_msg = goal_pose_msg.pose.position
         goal_orientation_msg = goal_pose_msg.pose.orientation
@@ -176,7 +177,7 @@ class NavMoveRunner(Node):
             heading_error = self._goal_heading_error(car_orientation, goal_orientation)
             detail = (
                 f"distance={distance_to_goal:.2f} "
-                f"goal_heading_error={heading_error:.1f}"
+                f"goal_heading_error={heading_error:.3f}rad"
             )
 
             if detail != last_detail:
@@ -185,7 +186,7 @@ class NavMoveRunner(Node):
 
             if (
                 distance_to_goal <= goal_tolerance_m
-                and abs(heading_error) <= goal_heading_tolerance_deg
+                and abs(heading_error) <= goal_heading_tolerance_rad
             ):
                 return {
                     "success": True,
@@ -207,10 +208,13 @@ class NavMoveRunner(Node):
         goal_tolerance_m = float(
             self.payload.get("goal_tolerance_m", goal_tolerance_m_default())
         )
-        goal_heading_tolerance_deg = float(
+        legacy_goal_heading_tolerance_deg = self.payload.get("goal_heading_tolerance_deg")
+        goal_heading_tolerance_rad = float(
             self.payload.get(
-                "goal_heading_tolerance_deg",
-                goal_heading_tolerance_deg_default(),
+                "goal_heading_tolerance_rad",
+                math.radians(float(legacy_goal_heading_tolerance_deg))
+                if legacy_goal_heading_tolerance_deg is not None
+                else goal_heading_tolerance_rad_default(),
             )
         )
 
@@ -256,7 +260,7 @@ class NavMoveRunner(Node):
             goal_pose_msg,
             arrival_timeout=arrival_timeout,
             goal_tolerance_m=goal_tolerance_m,
-            goal_heading_tolerance_deg=goal_heading_tolerance_deg,
+            goal_heading_tolerance_rad=goal_heading_tolerance_rad,
         )
         if nav_result["success"]:
             self._emit_event("arrived", nav_result["message"])

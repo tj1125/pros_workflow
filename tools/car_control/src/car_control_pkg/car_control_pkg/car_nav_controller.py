@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from action_interface.action import NavGoal
@@ -17,8 +18,8 @@ class NavigationController:
         self.approach_stop_xy_tolerance_m = float(
             self.car_control_node.get_parameter("approach_stop_xy_tolerance_m").value
         )
-        self.align_stop_yaw_tolerance_deg = float(
-            self.car_control_node.get_parameter("align_stop_yaw_tolerance_deg").value
+        self.align_stop_yaw_tolerance_rad = float(
+            self.car_control_node.get_parameter("align_stop_yaw_tolerance_rad").value
         )
         self.reset_index()
 
@@ -90,14 +91,14 @@ class NavigationController:
         target_distance: float,
     ):
         heading_error = calculate_goal_heading_error(car_orientation, goal_orientation)
-        if abs(heading_error) <= self.align_stop_yaw_tolerance_deg:
+        if abs(heading_error) <= self.align_stop_yaw_tolerance_rad:
             self.car_control_node.publish_control("STOP")
             return NavGoal.Result(
                 success=True,
                 message=(
                     "Navigation goal reached successfully. "
                     f"Final distance {target_distance:.3f} m, "
-                    f"heading error {heading_error:.2f} deg"
+                    f"heading error {heading_error:.3f} rad"
                 ),
             )
 
@@ -118,13 +119,13 @@ class NavigationController:
     @staticmethod
     def choose_rotation_action(diff_angle):
         abs_diff = abs(diff_angle)
-        if abs_diff <= 3.0:
+        if abs_diff <= math.radians(3.0):
             return (
                 "CLOCKWISE_ROTATION_SLOW"
                 if diff_angle < 0
                 else "COUNTERCLOCKWISE_ROTATION_SLOW"
             )
-        if abs_diff <= 10.0:
+        if abs_diff <= math.radians(10.0):
             return (
                 "CLOCKWISE_ROTATION_MEDIAN"
                 if diff_angle < 0

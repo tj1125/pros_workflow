@@ -83,6 +83,14 @@ def normalize_angle_deg(angle_deg):
     return angle_deg
 
 
+def normalize_angle_rad(angle_rad):
+    while angle_rad > math.pi:
+        angle_rad -= 2.0 * math.pi
+    while angle_rad < -math.pi:
+        angle_rad += 2.0 * math.pi
+    return angle_rad
+
+
 def round_to_decimal_places(data_list, decimal_places=3):
     return [round(num, decimal_places) for num in data_list]
 
@@ -99,6 +107,6 @@ def calculate_diff_angle(car_position, car_orientation, target_point):
 
 
 def calculate_goal_heading_error(car_orientation, goal_orientation):
-    car_yaw = get_yaw_from_quaternion(car_orientation[0], car_orientation[1])
-    goal_yaw = get_yaw_from_quaternion(goal_orientation[0], goal_orientation[1])
-    return normalize_angle_deg(goal_yaw - car_yaw)
+    car_yaw = quaternion_to_euler(car_orientation[0], car_orientation[1])
+    goal_yaw = quaternion_to_euler(goal_orientation[0], goal_orientation[1])
+    return normalize_angle_rad(goal_yaw - car_yaw)

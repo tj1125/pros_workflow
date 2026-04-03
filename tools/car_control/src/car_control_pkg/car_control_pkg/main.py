@@ -18,8 +18,8 @@ class AutoNavStarter(Node):
         self.approach_stop_xy_tolerance_m = float(
             self.car_control_node.get_parameter("approach_stop_xy_tolerance_m").value
         )
-        self.align_stop_yaw_tolerance_deg = float(
-            self.car_control_node.get_parameter("align_stop_yaw_tolerance_deg").value
+        self.align_stop_yaw_tolerance_rad = float(
+            self.car_control_node.get_parameter("align_stop_yaw_tolerance_rad").value
         )
         
         self.plan_sub = self.create_subscription(Path, '/received_global_plan', self.plan_callback, 10)
@@ -45,7 +45,7 @@ class AutoNavStarter(Node):
                 )
                 if (
                     target_distance <= self.approach_stop_xy_tolerance_m
-                    and abs(heading_error) <= self.align_stop_yaw_tolerance_deg
+                    and abs(heading_error) <= self.align_stop_yaw_tolerance_rad
                 ):
                     return
                     

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import atan2, degrees, hypot
+from math import atan2, degrees, hypot, pi
 from typing import Optional
 
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
@@ -10,7 +10,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
 from .nav_settings import (
-    goal_heading_tolerance_deg_default,
+    goal_heading_tolerance_rad_default,
     goal_tolerance_m_default,
 )
 
@@ -30,11 +30,23 @@ def _yaw_deg_from_quaternion(z: float, w: float) -> float:
     return degrees(2.0 * atan2(z, w))
 
 
+def _yaw_rad_from_quaternion(z: float, w: float) -> float:
+    return 2.0 * atan2(z, w)
+
+
 def _normalize_angle_deg(angle: float) -> float:
     while angle > 180.0:
         angle -= 360.0
     while angle < -180.0:
         angle += 360.0
+    return angle
+
+
+def _normalize_angle_rad(angle: float) -> float:
+    while angle > pi:
+        angle -= 2.0 * pi
+    while angle < -pi:
+        angle += 2.0 * pi
     return angle
 
 
@@ -50,13 +62,21 @@ def calculate_diff_angle(
     return _normalize_angle_deg(target_yaw - car_yaw)
 
 
+def calculate_diff_angle_rad(
+    car_position: tuple[float, float],
+    car_orientation: tuple[float, float],
+    target_point: tuple[float, float],
+) -> float:
+    return (calculate_diff_angle(car_position, car_orientation, target_point) * pi) / 180.0
+
+
 def calculate_goal_heading_error(
     car_orientation: tuple[float, float],
     goal_orientation: tuple[float, float],
 ) -> float:
-    car_yaw = _yaw_deg_from_quaternion(car_orientation[0], car_orientation[1])
-    goal_yaw = _yaw_deg_from_quaternion(goal_orientation[0], goal_orientation[1])
-    return _normalize_angle_deg(goal_yaw - car_yaw)
+    car_yaw = _yaw_rad_from_quaternion(car_orientation[0], car_orientation[1])
+    goal_yaw = _yaw_rad_from_quaternion(goal_orientation[0], goal_orientation[1])
+    return _normalize_angle_rad(goal_yaw - car_yaw)
 
 
 @dataclass
@@ -74,7 +94,7 @@ class ProsPathFollower:
         node: Node,
         *,
         goal_tolerance_m: Optional[float] = None,
-        goal_heading_tolerance_deg: Optional[float] = None,
+        goal_heading_tolerance_rad: Optional[float] = None,
         min_target_distance_m: float = 0.5,
         target_heading_point: Optional[tuple[float, float]] = None,
     ) -> None:
@@ -84,10 +104,10 @@ class ProsPathFollower:
             if goal_tolerance_m is None
             else float(goal_tolerance_m)
         )
-        self.goal_heading_tolerance_deg = (
-            goal_heading_tolerance_deg_default()
-            if goal_heading_tolerance_deg is None
-            else float(goal_heading_tolerance_deg)
+        self.goal_heading_tolerance_rad = (
+            goal_heading_tolerance_rad_default()
+            if goal_heading_tolerance_rad is None
+            else float(goal_heading_tolerance_rad)
         )
         self.min_target_distance_m = min_target_distance_m
         self.target_heading_point = target_heading_point
@@ -165,9 +185,9 @@ class ProsPathFollower:
 
     @staticmethod
     def _choose_rotation_action(diff_angle: float) -> str:
-        if diff_angle <= -1.0:
+        if diff_angle <= -(pi / 180.0):
             return "CLOCKWISE_ROTATION"
-        if diff_angle >= 1.0:
+        if diff_angle >= (pi / 180.0):
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
 
@@ -179,7 +199,11 @@ class ProsPathFollower:
     ) -> tuple[float, str]:
         if self.target_heading_point is not None:
             return (
-                calculate_diff_angle(car_position, car_orientation, self.target_heading_point),
+                calculate_diff_angle_rad(
+                    car_position,
+                    car_orientation,
+                    self.target_heading_point,
+                ),
                 "target_heading_error",
             )
         return (
@@ -232,7 +256,7 @@ class ProsPathFollower:
             goal_orientation,
         )
         if distance_to_goal < self.goal_tolerance_m:
-            if abs(final_heading_error) <= self.goal_heading_tolerance_deg:
+            if abs(final_heading_error) <= self.goal_heading_tolerance_rad:
                 self.stop()
                 return FollowStep(
                     action_key="STOP",
@@ -240,7 +264,7 @@ class ProsPathFollower:
                     arrived=True,
                     detail=(
                         "goal_reached "
-                        f"{final_heading_label}={final_heading_error:.1f}"
+                        f"{final_heading_label}={final_heading_error:.3f}rad"
                     ),
                 )
 
@@ -251,7 +275,7 @@ class ProsPathFollower:
                 distance_to_goal=distance_to_goal,
                 detail=(
                     "final_heading_align "
-                    f"{final_heading_label}={final_heading_error:.1f}"
+                    f"{final_heading_label}={final_heading_error:.3f}rad"
                 ),
             )
 
@@ -273,8 +297,8 @@ class ProsPathFollower:
             distance_to_goal=distance_to_goal,
             detail=(
                 f"target=({target_point[0]:.2f},{target_point[1]:.2f}) "
-                f"diff_angle={diff_angle:.1f} "
-                f"goal_heading_error={goal_heading_error:.1f} "
-                f"{final_heading_label}={final_heading_error:.1f}"
+                f"diff_angle={diff_angle:.1f}deg "
+                f"goal_heading_error={goal_heading_error:.3f}rad "
+                f"{final_heading_label}={final_heading_error:.3f}rad"
             ),
         )
