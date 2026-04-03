@@ -54,6 +54,17 @@ alias mock="cd /workspaces/VLM_RL && uv run python main.py --mock"
 alias run="cd /workspaces/VLM_RL && uv run python main.py --no-mock"
 alias t="cd /workspaces/VLM_RL && uv run python test_client.py --mock-only"
 alias logs='cat /workspaces/VLM_RL/logs/trace_logger.jsonl | python3 -m json.tool 2>/dev/null || echo "no logs yet"'
+unalias r 2>/dev/null || true
+r() {
+    source /opt/ros/humble/setup.bash
+    cd /workspaces || return 1
+    colcon --log-base /workspaces/nav_log build \
+        --base-paths /workspaces/VLM_RL/tools/nav /workspaces/VLM_RL/tools/car_control \
+        --build-base /workspaces/nav_build \
+        --install-base /workspaces/nav_install \
+        --symlink-install \
+        "$@"
+}
 ENVFILE
 
 grep -q ".container_env.sh" ~/.bashrc || echo "source /workspaces/VLM_RL/.container_env.sh" >> ~/.bashrc
@@ -66,6 +77,7 @@ echo "╠═══════════════════════�
 echo "║  mock   → main.py --mock                         ║"
 echo "║  run    → main.py --no-mock (needs real .env)    ║"
 echo "║  t      → test_client.py --mock-only             ║"
+echo "║  r      → colcon build (tools only)              ║"
 echo "║  logs   → print trace log                        ║"
 echo "║  Nav2   → launch from host via ./launch_nav2.sh  ║"
 echo "╚═══════════════════════════════════════════════════╝"
