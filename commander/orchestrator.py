@@ -16,7 +16,7 @@ from langgraph.graph import END, StateGraph
 from .brain import Brain
 from .logger import TraceLogger
 from .nav_settings import (
-    goal_heading_tolerance_deg_default,
+    goal_heading_tolerance_rad_default,
     goal_tolerance_m_default,
 )
 from .state import CommanderState
@@ -748,10 +748,15 @@ class Orchestrator:
         goal_tolerance_m = float(
             os.getenv("NAV_GOAL_TOLERANCE_M", str(goal_tolerance_m_default()))
         )
-        goal_heading_tolerance_deg = float(
+        legacy_goal_heading_tolerance_deg = os.getenv("NAV_GOAL_HEADING_TOLERANCE_DEG")
+        goal_heading_tolerance_rad = float(
             os.getenv(
-                "NAV_GOAL_HEADING_TOLERANCE_DEG",
-                str(goal_heading_tolerance_deg_default()),
+                "NAV_GOAL_HEADING_TOLERANCE_RAD",
+                str(
+                    math.radians(float(legacy_goal_heading_tolerance_deg))
+                    if legacy_goal_heading_tolerance_deg is not None
+                    else goal_heading_tolerance_rad_default()
+                ),
             )
         )
 
@@ -807,7 +812,7 @@ class Orchestrator:
                     "arrival_timeout_sec": arrival_timeout,
                     "publish_interval_sec": publish_interval,
                     "goal_tolerance_m": goal_tolerance_m,
-                    "goal_heading_tolerance_deg": goal_heading_tolerance_deg,
+                    "goal_heading_tolerance_rad": goal_heading_tolerance_rad,
                     "status_topic": "/nav_move/status",
                     "attempt": attempt,
                     "rank": rank,

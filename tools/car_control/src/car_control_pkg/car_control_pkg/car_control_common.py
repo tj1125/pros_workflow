@@ -64,7 +64,7 @@ class BaseCarControlNode(Node):
     def __init__(self, node_name, enable_nav_subscribers=False):
         super().__init__(node_name)
         self.declare_parameter("approach_stop_xy_tolerance_m", 0.10)
-        self.declare_parameter("align_stop_yaw_tolerance_deg", 1.0)
+        self.declare_parameter("align_stop_yaw_tolerance_rad", 0.017453292519943295)
 
         # Create common publishers
         self.rear_wheel_pub, self.front_wheel_pub = (
