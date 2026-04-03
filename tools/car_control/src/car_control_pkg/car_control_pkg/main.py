@@ -7,7 +7,7 @@ from action_interface.action import NavGoal, ArmGoal
 from car_control_pkg.car_action_server import NavigationActionServer
 from car_control_pkg.car_control_common import BaseCarControlNode
 from car_control_pkg.car_manual import ManualControlNode
-from car_control_pkg.nav2_utils import cal_distance
+from car_control_pkg.nav2_utils import cal_distance, calculate_goal_heading_error
 
 class AutoNavStarter(Node):
     def __init__(self, car_control_node):
@@ -15,6 +15,12 @@ class AutoNavStarter(Node):
         self.car_control_node = car_control_node
         self.nav_action_client = ActionClient(self, NavGoal, 'nav_action_server')
         self.arm_action_client = ActionClient(self, ArmGoal, 'arm_action_server')
+        self.approach_stop_xy_tolerance_m = float(
+            self.car_control_node.get_parameter("approach_stop_xy_tolerance_m").value
+        )
+        self.align_stop_yaw_tolerance_deg = float(
+            self.car_control_node.get_parameter("align_stop_yaw_tolerance_deg").value
+        )
         
         self.plan_sub = self.create_subscription(Path, '/received_global_plan', self.plan_callback, 10)
         self.navigating = False
@@ -25,11 +31,22 @@ class AutoNavStarter(Node):
             
         if not self.navigating:
             # 檢查是否已經到達終點
-            car_position, _ = self.car_control_node.get_car_position_and_orientation()
+            car_position, car_orientation = self.car_control_node.get_car_position_and_orientation()
             goal_pose = self.car_control_node.get_goal_pose()
-            if car_position and goal_pose:
-                target_distance = cal_distance([car_position.x, car_position.y], [goal_pose.x, goal_pose.y])
-                if target_distance < 0.2:
+            goal_orientation = self.car_control_node.get_goal_orientation()
+            if car_position and car_orientation and goal_pose and goal_orientation:
+                target_distance = cal_distance(
+                    [car_position.x, car_position.y],
+                    [goal_pose.x, goal_pose.y],
+                )
+                heading_error = calculate_goal_heading_error(
+                    [car_orientation.z, car_orientation.w],
+                    [goal_orientation.z, goal_orientation.w],
+                )
+                if (
+                    target_distance <= self.approach_stop_xy_tolerance_m
+                    and abs(heading_error) <= self.align_stop_yaw_tolerance_deg
+                ):
                     return
                     
             self.get_logger().info('收到新路徑，啟動全自動導航 (Auto Navigation)')

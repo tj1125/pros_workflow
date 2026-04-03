@@ -64,6 +64,7 @@ class BaseCarControlNode(Node):
     def __init__(self, node_name, enable_nav_subscribers=False):
         super().__init__(node_name)
         self.declare_parameter("approach_stop_xy_tolerance_m", 0.10)
+        self.declare_parameter("align_stop_yaw_tolerance_deg", 1.0)
 
         # Create common publishers
         self.rear_wheel_pub, self.front_wheel_pub = (
@@ -143,6 +144,17 @@ class BaseCarControlNode(Node):
             return self.latest_goal_pose.pose.position
         except AttributeError:
             # Handle cases where the message structure is unexpected
+            self.get_logger().warn("Goal pose has unexpected structure")
+            return None
+
+    def get_goal_orientation(self):
+        """Get goal orientation or None if unavailable"""
+        if self.latest_goal_pose is None:
+            return None
+
+        try:
+            return self.latest_goal_pose.pose.orientation
+        except AttributeError:
             self.get_logger().warn("Goal pose has unexpected structure")
             return None
 

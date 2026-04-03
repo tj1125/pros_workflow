@@ -4,7 +4,11 @@ from typing import Optional
 
 from action_interface.action import NavGoal
 
-from car_control_pkg.nav2_utils import cal_distance, calculate_diff_angle
+from car_control_pkg.nav2_utils import (
+    cal_distance,
+    calculate_diff_angle,
+    calculate_goal_heading_error,
+)
 
 
 class NavigationController:
@@ -13,6 +17,9 @@ class NavigationController:
         self.approach_stop_xy_tolerance_m = float(
             self.car_control_node.get_parameter("approach_stop_xy_tolerance_m").value
         )
+        self.align_stop_yaw_tolerance_deg = float(
+            self.car_control_node.get_parameter("align_stop_yaw_tolerance_deg").value
+        )
         self.reset_index()
 
     def _get_context(self):
@@ -20,8 +27,9 @@ class NavigationController:
             self.car_control_node.get_car_position_and_orientation()
         )
         goal_position_msg = self.car_control_node.get_goal_pose()
+        goal_orientation_msg = self.car_control_node.get_goal_orientation()
 
-        if not car_position_msg or not goal_position_msg:
+        if not car_position_msg or not goal_position_msg or not goal_orientation_msg:
             self.car_control_node.publish_control("STOP")
             message = (
                 "Cannot obtain car position data (localization lost/stale)"
@@ -33,7 +41,8 @@ class NavigationController:
         car_position = [car_position_msg.x, car_position_msg.y]
         car_orientation = [car_orientation_msg.z, car_orientation_msg.w]
         goal_position = [goal_position_msg.x, goal_position_msg.y]
-        return car_position, car_orientation, goal_position
+        goal_orientation = [goal_orientation_msg.z, goal_orientation_msg.w]
+        return car_position, car_orientation, goal_position, goal_orientation
 
     def reset_index(self):
         self.index = 0
@@ -43,20 +52,20 @@ class NavigationController:
         if isinstance(result, NavGoal.Result):
             return result
 
-        car_position, car_orientation, goal_position = result
+        car_position, car_orientation, goal_position, goal_orientation = result
+        target_distance = cal_distance(car_position, goal_position)
+        if target_distance <= self.approach_stop_xy_tolerance_m:
+            return self._run_final_heading_alignment(
+                car_orientation=car_orientation,
+                goal_orientation=goal_orientation,
+                target_distance=target_distance,
+            )
+
         path_points = self.car_control_node.get_path_points()
         if not path_points:
             self.car_control_node.publish_control("STOP")
             return NavGoal.Result(
                 success=False, message="No path points available for navigation"
-            )
-
-        target_distance = cal_distance(car_position, goal_position)
-        if target_distance <= self.approach_stop_xy_tolerance_m:
-            self.car_control_node.publish_control("STOP")
-            return NavGoal.Result(
-                success=True,
-                message="Navigation goal reached successfully. Final distance",
             )
 
         target_point = self.get_next_target_point(
@@ -73,6 +82,29 @@ class NavigationController:
         self.car_control_node.publish_control(action_key)
         return None
 
+    def _run_final_heading_alignment(
+        self,
+        *,
+        car_orientation,
+        goal_orientation,
+        target_distance: float,
+    ):
+        heading_error = calculate_goal_heading_error(car_orientation, goal_orientation)
+        if abs(heading_error) <= self.align_stop_yaw_tolerance_deg:
+            self.car_control_node.publish_control("STOP")
+            return NavGoal.Result(
+                success=True,
+                message=(
+                    "Navigation goal reached successfully. "
+                    f"Final distance {target_distance:.3f} m, "
+                    f"heading error {heading_error:.2f} deg"
+                ),
+            )
+
+        action_key = self.choose_rotation_action(heading_error)
+        self.car_control_node.publish_control(action_key)
+        return None
+
     @staticmethod
     def choose_path_action(diff_angle):
         if -10 < diff_angle < 10:
@@ -82,6 +114,23 @@ class NavigationController:
         if 10 <= diff_angle < 180:
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
+
+    @staticmethod
+    def choose_rotation_action(diff_angle):
+        abs_diff = abs(diff_angle)
+        if abs_diff <= 3.0:
+            return (
+                "CLOCKWISE_ROTATION_SLOW"
+                if diff_angle < 0
+                else "COUNTERCLOCKWISE_ROTATION_SLOW"
+            )
+        if abs_diff <= 10.0:
+            return (
+                "CLOCKWISE_ROTATION_MEDIAN"
+                if diff_angle < 0
+                else "COUNTERCLOCKWISE_ROTATION_MEDIAN"
+            )
+        return "CLOCKWISE_ROTATION" if diff_angle < 0 else "COUNTERCLOCKWISE_ROTATION"
 
     def get_next_target_point(
         self, car_position, path_points, min_required_distance=0.5

@@ -52,6 +52,16 @@ def goal_tolerance_m_default() -> float:
 
 def goal_heading_tolerance_deg_default() -> float:
     payload = _load_mapper_params()
+    heading_tolerance_deg = _nested_get(
+        payload,
+        "car_control_node",
+        "ros__parameters",
+        "align_stop_yaw_tolerance_deg",
+        default=None,
+    )
+    if heading_tolerance_deg is not None:
+        return float(heading_tolerance_deg)
+
     yaw_tolerance_rad = _nested_get(
         payload,
         "controller_server",
@@ -61,4 +71,3 @@ def goal_heading_tolerance_deg_default() -> float:
         default=math.pi,
     )
     return math.degrees(float(yaw_tolerance_rad))
-

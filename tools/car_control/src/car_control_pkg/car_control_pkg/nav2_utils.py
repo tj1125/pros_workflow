@@ -75,6 +75,14 @@ def calculate_angle_to_target(vehicle_pos, target_pos, vehicle_orientation):
     return degrees(angle_difference)
 
 
+def normalize_angle_deg(angle_deg):
+    while angle_deg > 180.0:
+        angle_deg -= 360.0
+    while angle_deg < -180.0:
+        angle_deg += 360.0
+    return angle_deg
+
+
 def round_to_decimal_places(data_list, decimal_places=3):
     return [round(num, decimal_places) for num in data_list]
 
@@ -88,3 +96,9 @@ def calculate_diff_angle(car_position, car_orientation, target_point):
         car_orientation[0], car_orientation[1], car_position, target_point
     )
     return diff_angle
+
+
+def calculate_goal_heading_error(car_orientation, goal_orientation):
+    car_yaw = get_yaw_from_quaternion(car_orientation[0], car_orientation[1])
+    goal_yaw = get_yaw_from_quaternion(goal_orientation[0], goal_orientation[1])
+    return normalize_angle_deg(goal_yaw - car_yaw)
