@@ -34,6 +34,23 @@ HEIGHT_WEIGHT_RATIO_ANCHORS = np.array([0.70, 1.03, 2.28], dtype=np.float32)
 HEIGHT_WEIGHT_VALUE_ANCHORS = np.array([0.65, 0.80, 0.90], dtype=np.float32)
 
 
+def _filter_grasps_by_approach_direction(
+    grasps: np.ndarray,
+    scores: np.ndarray,
+    max_angle_to_y: float = 60.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Drop grasps whose approach axis is too aligned with world +/-Y."""
+    target_pos_y = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    target_neg_y = np.array([0.0, -1.0, 0.0], dtype=np.float32)
+    approach = np.asarray(grasps[:, :3, 2], dtype=np.float32)
+    norms = np.linalg.norm(approach, axis=1, keepdims=True)
+    norms = np.where(norms <= 1e-8, 1.0, norms)
+    approach = approach / norms
+    cos_threshold = float(np.cos(np.deg2rad(max_angle_to_y)))
+    keep_mask = (approach @ target_pos_y < cos_threshold) & (approach @ target_neg_y < cos_threshold)
+    return grasps[keep_mask], scores[keep_mask]
+
+
 def _save_visualization_npz(
     center_world: np.ndarray,
     debug_npz: dict[str, np.ndarray],
@@ -686,7 +703,7 @@ def _estimate_object_size_from_masks(
         ],
         dtype=np.float32,
     )
-    yaw_rad_unity = -float(footprint_fit["yaw_rad"])
+    yaw_rad_unity = float(footprint_fit["yaw_rad"]) + math.pi
     return {
         "center_world_unity": center_world_unity.astype(float).tolist(),
         "center_world_cv": center_world_cv.astype(float).tolist(),
@@ -703,7 +720,7 @@ def _estimate_object_size_from_masks(
         "size_xyz_m": size_xyz.astype(float).tolist(),
         "size_xyz_mm": (size_xyz * 1000.0).astype(float).tolist(),
         "yaw_rad": float(yaw_rad_unity),
-        "yaw_deg": float(np.degrees(yaw_rad_unity)),
+        "yaw_deg": float(np.degrees(float(footprint_fit["yaw_rad"])) + 180.0),
         "sam_mask_width_by_camera_m": {camera_id: float(value) for camera_id, value in width_by_camera.items()},
         "predicted_width_by_camera_m": {
             camera_id: float(value)
@@ -1116,6 +1133,13 @@ def run_pipeline(
         )
     graspgen_inference_s = float(time.perf_counter() - grasp_stage_start)
 
+    num_total_grasps = int(len(grasps_c))
+    approach_filter_start = time.perf_counter()
+    grasps_c, confidences = _filter_grasps_by_approach_direction(grasps_c, confidences)
+    approach_filter_s = float(time.perf_counter() - approach_filter_start)
+    if len(grasps_c) == 0:
+        raise RuntimeError("No grasps remain after approach filtering.")
+
     object_pc_raw_c = tra.transform_points(object_points, t_center)
     if len(scene_pc_world) > 0:
         collision_start = time.perf_counter()
@@ -1144,7 +1168,7 @@ def run_pipeline(
 
     grasp_stats = {
         "used_outlier_filter": bool(used_outlier_filter),
-        "num_total_grasps": int(len(grasps_c)),
+        "num_total_grasps": num_total_grasps,
         "num_collision_free_grasps": int(len(grasps)),
         "num_grasps_after_approach_filter": int(len(grasps_c)),
         "num_grasps_after_collision_filter": int(len(grasps)),
@@ -1152,7 +1176,7 @@ def run_pipeline(
         "surface_sample_s": 0.0,
         "graspgen_model_init_s": 0.0,
         "graspgen_inference_s": graspgen_inference_s,
-        "approach_filter_s": 0.0,
+        "approach_filter_s": approach_filter_s,
         "collision_filter_s": collision_filter_s,
         "grasp_stage_total_s": float(time.perf_counter() - grasp_stage_start),
     }
