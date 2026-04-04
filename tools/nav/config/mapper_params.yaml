@@ -1,7 +1,7 @@
 car_control_node:
   ros__parameters:
-    approach_stop_xy_tolerance_m: 0.05
-    align_stop_yaw_tolerance_rad: 0.3
+    approach_stop_xy_tolerance_m: 0.08
+    align_stop_yaw_tolerance_rad: 0.4
 
 amcl:
   ros__parameters:
@@ -146,7 +146,7 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.10
-      yaw_goal_tolerance: 0.4
+      yaw_goal_tolerance: 0.6
 
     # DWB parameters
     FollowPath:
