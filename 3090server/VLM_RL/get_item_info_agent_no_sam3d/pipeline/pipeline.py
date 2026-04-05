@@ -703,7 +703,7 @@ def _estimate_object_size_from_masks(
         ],
         dtype=np.float32,
     )
-    yaw_rad_unity = -float(footprint_fit["yaw_rad"])
+    yaw_rad_unity = float(footprint_fit["yaw_rad"]) + math.pi
     return {
         "center_world_unity": center_world_unity.astype(float).tolist(),
         "center_world_cv": center_world_cv.astype(float).tolist(),
@@ -720,7 +720,7 @@ def _estimate_object_size_from_masks(
         "size_xyz_m": size_xyz.astype(float).tolist(),
         "size_xyz_mm": (size_xyz * 1000.0).astype(float).tolist(),
         "yaw_rad": float(yaw_rad_unity),
-        "yaw_deg": float(np.degrees(yaw_rad_unity)),
+        "yaw_deg": float(np.degrees(float(footprint_fit["yaw_rad"])) + 180.0),
         "sam_mask_width_by_camera_m": {camera_id: float(value) for camera_id, value in width_by_camera.items()},
         "predicted_width_by_camera_m": {
             camera_id: float(value)
