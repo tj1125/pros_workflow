@@ -150,6 +150,11 @@ def _voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
     return points[np.sort(keep_idx)]
 
 
+def _flip_mask_for_depth_alignment(mask_bool: np.ndarray) -> np.ndarray:
+    """Flip the SAM mask vertically before depth backprojection."""
+    return np.flip(mask_bool, axis=0).copy()
+
+
 def _rotation_matrix_to_quaternion_xyzw(rotation: np.ndarray) -> list[float]:
     m = rotation
     trace = float(m[0, 0] + m[1, 1] + m[2, 2])
@@ -217,6 +222,7 @@ def run_pipeline(
         checkpoint=Path(cfg["models"]["sam_seg_checkpoint"]),
         device=device,
     )
+    seg_mask_bool = _flip_mask_for_depth_alignment(seg_mask_bool)
 
     runtime = cfg["runtime"]
     object_pc_camera = _depth_to_point_cloud(
