@@ -1,11 +1,18 @@
-from typing import Annotated, TypedDict, List, Dict, Any, Optional
-import operator
+from typing import Annotated, TypedDict, List, Dict, Any
 
 
 def _keep_last_three(existing: List, new: List) -> List:
     """Reducer: append new items and keep only the last 3 entries."""
     combined = existing + new
     return combined[-3:]
+
+
+LATEST_RESULT_KEYS = (
+    "latest_nav_result",
+    "latest_grasp_result",
+    "latest_view_result",
+    "latest_approach_result",
+)
 
 
 class CommanderState(TypedDict):
@@ -45,8 +52,8 @@ class CommanderState(TypedDict):
     # Latency measured during the reasoning step (seconds)
     decision_latency: float
 
-    # Result text returned by the last executed agent
-    agent_result: str
+    # Result payload returned by the last executed agent
+    agent_result: Any
 
     # Whether the task has been marked complete
     task_complete: bool
@@ -89,3 +96,51 @@ class CommanderState(TypedDict):
     # Navigation and action execution feedback
     nav_move_events: List[Dict[str, Any]]
     agent_success: bool
+
+    # Latest structured results for downstream nodes and debugging
+    latest_nav_result: Dict[str, Any]
+    latest_grasp_result: Dict[str, Any]
+    latest_view_result: Dict[str, Any]
+    latest_approach_result: Dict[str, Any]
+
+
+def create_initial_state(
+    context_id: str,
+    *,
+    task_description: str = "",
+    current_observation: Dict[str, Any] | None = None,
+) -> CommanderState:
+    """Build a fully-populated initial CommanderState."""
+    return {
+        "task_description": task_description,
+        "current_observation": current_observation or {"description": "System initialising..."},
+        "reasoning": "",
+        "call_module": "",
+        "module_params": {},
+        "history_buffer": [],
+        "current_status": "INIT",
+        "context_id": context_id,
+        "retry_count": 0,
+        "decision_latency": 0.0,
+        "agent_result": "",
+        "task_complete": False,
+        "target_object": {},
+        "candidate_objects": [],
+        "selected_target": {},
+        "find_complete": False,
+        "yolo_detections": {},
+        "selected_detection_id": 0,
+        "current_goal_rank": 1,
+        "nav_move_source": "",
+        "nav_goal_pose": {},
+        "nav_plan_ready": False,
+        "nav_arrived": False,
+        "nav_attempt": 0,
+        "force_initialpose": False,
+        "nav_move_events": [],
+        "agent_success": False,
+        "latest_nav_result": {},
+        "latest_grasp_result": {},
+        "latest_view_result": {},
+        "latest_approach_result": {},
+    }

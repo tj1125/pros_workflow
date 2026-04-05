@@ -961,6 +961,163 @@ class Orchestrator:
             "_exec_latency": exec_latency,
         }
 
+    @staticmethod
+    def _condense_text(value: Any, max_len: int = 240) -> str:
+        """Convert arbitrary values to a short, single-line summary."""
+        if isinstance(value, str):
+            text = value
+        else:
+            try:
+                text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            except TypeError:
+                text = str(value)
+        compact = " ".join(text.split())
+        if len(compact) <= max_len:
+            return compact
+        return compact[: max_len - 3] + "..."
+
+    def _build_memory_outcome(
+        self,
+        module: str,
+        result: Any,
+        success: bool,
+        state: CommanderState,
+    ) -> tuple[str, Dict[str, Any]]:
+        """Build a concise outcome summary and key facts for rolling memory."""
+        if module == "nav_agent":
+            rank = int(state.get("current_goal_rank", 0) or 0)
+            attempt = int(state.get("nav_attempt", 0) or 0)
+            arrived = bool(state.get("nav_arrived", False))
+            plan_ready = bool(state.get("nav_plan_ready", False))
+            summary = self._condense_text(result)
+            if not summary:
+                if success:
+                    summary = f"Navigation reached rank {rank} on attempt {attempt}."
+                else:
+                    summary = f"Navigation failed at rank {rank} on attempt {attempt}."
+            return summary, {
+                "rank": rank,
+                "attempt": attempt,
+                "arrived": arrived,
+                "plan_ready": plan_ready,
+            }
+
+        if module == "grasp_agent":
+            payload = result if isinstance(result, dict) else {}
+            object_id = payload.get("object_id") or state.get("target_object", {}).get("id")
+            grasp_confidence = payload.get("grasp_confidence")
+            pose_ready = bool(payload.get("best_grasp_pose_camera"))
+            if success and pose_ready:
+                confidence_text = (
+                    f"{float(grasp_confidence):.3f}"
+                    if grasp_confidence is not None
+                    else "n/a"
+                )
+                summary = (
+                    f"Best grasp ready for object_id={object_id} "
+                    f"(confidence={confidence_text})."
+                )
+            else:
+                summary = self._condense_text(payload.get("error") or result)
+            return summary, {
+                "object_id": object_id,
+                "grasp_confidence": grasp_confidence,
+                "pose_ready": pose_ready,
+            }
+
+        if module == "view_agent":
+            payload = result if isinstance(result, dict) else {}
+            delta_joints = payload.get("delta_joints", [])
+            confidence = payload.get("confidence", 0.0)
+            if success:
+                summary = (
+                    "View adjustment computed "
+                    f"(confidence={float(confidence):.3f})."
+                )
+            else:
+                summary = self._condense_text(result)
+            return summary, {
+                "confidence": confidence,
+                "has_delta_joints": bool(delta_joints),
+            }
+
+        if module == "approach_agent":
+            summary = self._condense_text(result)
+            return summary, {
+                "success": success,
+                "raw_kind": type(result).__name__,
+            }
+
+        return self._condense_text(result), {}
+
+    def _build_latest_result_update(
+        self,
+        module: str,
+        result: Any,
+        success: bool,
+        state: CommanderState,
+        trace_id: str,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """Build dedicated latest-result state for the executed module."""
+        if module == "nav_agent":
+            nav_events = [
+                event
+                for event in (state.get("nav_move_events", []) or [])
+                if str((event or {}).get("event", "") or "").strip().lower() != "tracking"
+            ]
+            latest_key = "latest_nav_result"
+            latest_value = {
+                "trace_id": trace_id,
+                "message": self._condense_text(result),
+                "goal_pose": state.get("nav_goal_pose", {}),
+                "rank": int(state.get("current_goal_rank", 0) or 0),
+                "attempt": int(state.get("nav_attempt", 0) or 0),
+                "arrived": bool(state.get("nav_arrived", False)),
+                "plan_ready": bool(state.get("nav_plan_ready", False)),
+                "event_count": len(nav_events),
+                "last_event": nav_events[-1] if nav_events else {},
+            }
+            return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
+
+        if module == "grasp_agent":
+            payload = result if isinstance(result, dict) else {}
+            latest_key = "latest_grasp_result"
+            latest_value = {
+                "trace_id": trace_id,
+                "object_id": payload.get("object_id") or state.get("target_object", {}).get("id"),
+                "camera_name": payload.get("camera_name", "Camera_Car"),
+                "grasp_confidence": payload.get("grasp_confidence"),
+                "num_candidate_grasps": payload.get("num_candidate_grasps"),
+                "best_grasp_pose_camera": payload.get("best_grasp_pose_camera", {}),
+                "object_reference_center_camera": payload.get(
+                    "object_reference_center_camera",
+                    [],
+                ),
+            }
+            return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
+
+        if module == "view_agent":
+            payload = result if isinstance(result, dict) else {}
+            latest_key = "latest_view_result"
+            latest_value = {
+                "trace_id": trace_id,
+                "delta_joints": payload.get("delta_joints", []),
+                "confidence": payload.get("confidence", 0.0),
+            }
+            return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
+
+        if module == "approach_agent":
+            latest_key = "latest_approach_result"
+            latest_value = {
+                "trace_id": trace_id,
+                "summary": self._condense_text(result),
+                "success": success,
+                "raw_kind": type(result).__name__,
+            }
+            return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
+
+        return {}, {}
+
     # ------------------------------------------------------------------
     # Node: update memory
     # ------------------------------------------------------------------
@@ -973,15 +1130,32 @@ class Orchestrator:
         decision_latency = state.get("decision_latency", 0.0)
         exec_latency = state.get("_exec_latency", 0.0)
         context_id = state.get("context_id", "")
-
-        mem_entry = {
-            "action": module,
-            "reasoning": reasoning,
-            "result": result,
-            "success": bool(state.get("agent_success", bool(result))),
-        }
+        trace_id = uuid.uuid4().hex
 
         success_flag = bool(state.get("agent_success", bool(result)))
+        outcome_summary, key_facts = self._build_memory_outcome(
+            module,
+            result,
+            success_flag,
+            state,
+        )
+        memory_reasoning = self._condense_text(reasoning, max_len=320)
+        mem_entry = {
+            "action": module,
+            "reasoning": memory_reasoning,
+            "result": outcome_summary,
+            "success": success_flag,
+            "key_facts": key_facts,
+            "trace_id": trace_id,
+        }
+        latest_update, state_refs = self._build_latest_result_update(
+            module,
+            result,
+            success_flag,
+            state,
+            trace_id,
+        )
+
         self.logger.log_trace(
             agent_called=module,
             reasoning=reasoning,
@@ -989,7 +1163,10 @@ class Orchestrator:
             execution_latency=exec_latency,
             success=success_flag,
             context_id=context_id,
-            extra_info={"result": result},
+            trace_id=trace_id,
+            memory_entry=mem_entry,
+            state_refs=state_refs,
+            extra_info={"raw_result": result},
         )
 
         logger.info("[update_memory_node] History updated and trace logged.")
@@ -997,6 +1174,7 @@ class Orchestrator:
             "history_buffer": [mem_entry],
             "retry_count": state.get("retry_count", 0) + 1,
             "current_status": "MEMORY_UPDATED",
+            **latest_update,
         }
 
     @staticmethod

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import time
@@ -89,11 +90,7 @@ class Brain:
         target = state.get("target_object", {})
 
         history_summary = "\n".join(
-            [
-                f"  - Action: {h.get('action')}, Result: {h.get('result')}, "
-                f"Success: {h.get('success')}"
-                for h in history
-            ]
+            [self._format_history_entry(h) for h in history]
         ) or "  (no history yet)"
 
         obs_desc = obs.get("description", "Camera image unavailable (mock mode)")
@@ -115,6 +112,27 @@ class Brain:
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
             ]
         return text_content
+
+    @staticmethod
+    def _format_history_entry(entry: Dict[str, Any]) -> str:
+        """Format one memory entry for the Brain prompt."""
+        result = entry.get("result", "")
+        if isinstance(result, dict):
+            result = json.dumps(result, ensure_ascii=False, sort_keys=True)
+
+        key_facts = entry.get("key_facts") or {}
+        if isinstance(key_facts, dict) and key_facts:
+            facts_text = ", ".join(
+                f"{key}={value}" for key, value in key_facts.items()
+            )
+            facts_text = f" | KeyFacts: {facts_text}"
+        else:
+            facts_text = ""
+
+        return (
+            f"  - Action: {entry.get('action')}, Result: {result}, "
+            f"Success: {entry.get('success')}{facts_text}"
+        )
 
     async def reason(self, state: CommanderState) -> Dict[str, Any]:
         """

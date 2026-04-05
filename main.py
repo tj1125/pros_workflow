@@ -10,13 +10,14 @@ import logging
 import os
 import sys
 import uuid
-from pathlib import Path
 
 import click
 from dotenv import load_dotenv
 
 from commander.logger import TraceLogger
 from commander.orchestrator import Orchestrator
+from commander.session_store import SessionMemoryStore
+from commander.state import create_initial_state
 
 
 load_dotenv(override=True)
@@ -111,39 +112,12 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
     logger.info(f"Starting VLM-RL system [{'MOCK' if use_mock else 'REAL'} MODE]")
 
     trace_logger = TraceLogger(log_file=log_path)
+    context_id = uuid.uuid4().hex
     orchestrator = Orchestrator(trace_logger=trace_logger, use_mock=use_mock)
 
     # Build initial LangGraph state
-    context_id = uuid.uuid4().hex
-    initial_state = {
-        "task_description": "",  # filled by input_node
-        "current_observation": {"description": "System initialising..."},
-        "reasoning": "",
-        "call_module": "",
-        "module_params": {},
-        "history_buffer": [],
-        "current_status": "INIT",
-        "context_id": context_id,
-        "retry_count": 0,
-        "decision_latency": 0.0,
-        "agent_result": "",
-        "task_complete": False,
-        "target_object": {},
-        "candidate_objects": [],
-        "selected_target": {},
-        "find_complete": False,
-        "yolo_detections": {},
-        "selected_detection_id": 0,
-        "current_goal_rank": 1,
-        "nav_move_source": "",
-        "nav_goal_pose": {},
-        "nav_plan_ready": False,
-        "nav_arrived": False,
-        "nav_attempt": 0,
-        "force_initialpose": False,
-        "nav_move_events": [],
-        "agent_success": False,
-    }
+    initial_state = create_initial_state(context_id)
+    session_store = SessionMemoryStore(context_id=context_id, initial_state=initial_state)
 
     logger.info(f"Starting LangGraph loop | context_id={context_id}")
 
@@ -157,6 +131,11 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
                 status = state_update.get("current_status", "")
                 module = state_update.get("call_module", "")
                 step += 1
+                session_store.record_event(
+                    step=step,
+                    node_name=node_name,
+                    state_update=state_update,
+                )
                 print(
                     f"\n[Step {step:02d}] Node='{node_name}' "
                     f"status={status} module={module}"
@@ -166,12 +145,6 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
         logger.error(f"LangGraph execution error: {e}", exc_info=True)
     finally:
         await orchestrator.aclose()
-        # Cleanup: delete find_candidates after session ends
-        import shutil
-        candidates_dir = Path("logs/find_candidates")
-        if candidates_dir.exists():
-            shutil.rmtree(candidates_dir)
-            logger.info("[Cleanup] Deleted logs/find_candidates")
 
     print("\n" + "=" * 60)
     print(f"  Task complete. Trace log: {log_path}")

@@ -16,7 +16,6 @@ import logging
 import os
 import sys
 import uuid
-from typing import Any
 
 import click
 import httpx
@@ -42,6 +41,8 @@ async def test_mock_langgraph_loop() -> bool:
     """
     from commander.logger import TraceLogger
     from commander.orchestrator import Orchestrator
+    from commander.session_store import SessionMemoryStore
+    from commander.state import create_initial_state
 
     print("\n" + "=" * 50)
     print("Test 1: Mock LangGraph Loop")
@@ -51,20 +52,12 @@ async def test_mock_langgraph_loop() -> bool:
     orchestrator = Orchestrator(trace_logger=trace_logger, use_mock=True)
 
     context_id = uuid.uuid4().hex
-    initial_state = {
-        "task_description": "Test: grab the red cup on the table",  # bypass input_node stdin
-        "current_observation": {"description": "Test scene: red cup on white table"},
-        "reasoning": "",
-        "call_module": "",
-        "module_params": {},
-        "history_buffer": [],
-        "current_status": "INIT",
-        "context_id": context_id,
-        "retry_count": 0,
-        "decision_latency": 0.0,
-        "agent_result": "",
-        "task_complete": False,
-    }
+    initial_state = create_initial_state(
+        context_id,
+        task_description="Test: grab the red cup on the table",
+        current_observation={"description": "Test scene: red cup on white table"},
+    )
+    session_store = SessionMemoryStore(context_id=context_id, initial_state=initial_state)
 
     steps_executed = []
     try:
@@ -76,6 +69,11 @@ async def test_mock_langgraph_loop() -> bool:
                 status = state_update.get("current_status", "")
                 module = state_update.get("call_module", "")
                 steps_executed.append(node_name)
+                session_store.record_event(
+                    step=len(steps_executed),
+                    node_name=node_name,
+                    state_update=state_update,
+                )
                 print(f"  ✓ Node='{node_name}' status={status} module={module}")
 
     finally:
