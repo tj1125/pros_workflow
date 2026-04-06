@@ -4,10 +4,13 @@ set -euo pipefail
 
 COMPOSE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/docker-compose-nav2.yml"
 CONTAINER_NAME="vlm_rl_nav2"
+NAV_IMAGE="vlm-rl-nav2:latest"
+NAV_SERVICE="nav2"
 
 DETACHED=""
 STOP_MODE=false
 WITH_ROSBRIDGE=false
+REBUILD_IMAGE=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -19,6 +22,9 @@ for arg in "$@"; do
             ;;
         --rosbridge)
             WITH_ROSBRIDGE=true
+            ;;
+        --rebuild)
+            REBUILD_IMAGE=true
             ;;
     esac
 done
@@ -34,6 +40,11 @@ if [ "$STOP_MODE" = true ]; then
     echo "Stopping Nav container..."
     docker compose -f "$COMPOSE_FILE" down
     exit 0
+fi
+
+if [ "$REBUILD_IMAGE" = true ] || ! docker image inspect "$NAV_IMAGE" >/dev/null 2>&1; then
+    echo "Building local Nav image '$NAV_IMAGE'..."
+    docker compose -f "$COMPOSE_FILE" build "$NAV_SERVICE"
 fi
 
 COMPOSE_PREFIX=()

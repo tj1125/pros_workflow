@@ -1,0 +1,20 @@
+FROM ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
+
+ENV ROS2_VENDOR_WS=/tmp/nav_vendor_ws
+ENV ROS2_VENDOR_INSTALL=/opt/ros/vendor_laser_scan_matcher
+
+RUN apt-get update --allow-insecure-repositories && \
+    apt-get install -y --allow-unauthenticated \
+        build-essential \
+        cmake \
+        git \
+        libcairo2-dev \
+        libeigen3-dev \
+        libgsl-dev \
+        libboost-dev \
+        pkg-config && \
+    mkdir -p ${ROS2_VENDOR_WS}/src && \
+    git clone --depth 1 https://github.com/AlexKaravaev/csm.git ${ROS2_VENDOR_WS}/src/csm && \
+    git clone --depth 1 https://github.com/AlexKaravaev/ros2_laser_scan_matcher.git ${ROS2_VENDOR_WS}/src/ros2_laser_scan_matcher && \
+    /bin/bash -lc "source /opt/ros/humble/setup.bash && cd ${ROS2_VENDOR_WS} && colcon build --merge-install --install-base ${ROS2_VENDOR_INSTALL}" && \
+    rm -rf ${ROS2_VENDOR_WS} /var/lib/apt/lists/*

@@ -37,7 +37,10 @@ services:
   # Nav2：VLM-RL 導航基礎設施 (scan matcher + localization + planning servers)
   # ------------------------------------
   nav2:
-    image: ghcr.io/screamlab/pros_jetson_driver_image:0.1.0
+    build:
+      context: .
+      dockerfile: Dockerfile.nav2
+    image: vlm-rl-nav2:latest
     platform: linux/amd64
     container_name: vlm_rl_nav2
     env_file:
@@ -55,19 +58,22 @@ services:
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
-    command: >
-      bash -c "
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
         set -e
+        source /opt/ros/humble/setup.bash
+        source /opt/ros/vendor_laser_scan_matcher/setup.bash
         echo '🔧 Building vlm_rl_nav and car_control_pkg...'
-        cd /workspaces &&
-        find /workspaces/build -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        find /workspaces/install -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        find /workspaces/log -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        colcon --log-base /workspaces/log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/build --install-base /workspaces/install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav --symlink-install &&
-        source /workspaces/install/setup.bash &&
-        echo '🚀 Launching Nav2 (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)...' &&
-        ros2 launch vlm_rl_nav navigation.launch.py
-      "
+        cd /workspaces
+        find /workspaces/build -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        find /workspaces/install -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        find /workspaces/log -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        colcon --log-base /workspaces/log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/build --install-base /workspaces/install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav --symlink-install
+        source /workspaces/install/setup.bash
+        echo '🚀 Launching Nav2...'
+        exec ros2 launch vlm_rl_nav navigation.launch.py
     restart: "no"
 
   # ------------------------------------
@@ -88,7 +94,13 @@ services:
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
-    command: "ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+        set -e
+        source /opt/ros/humble/setup.bash
+        exec ros2 launch rosbridge_server rosbridge_websocket_launch.xml
     restart: unless-stopped
 
 networks:

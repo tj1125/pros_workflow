@@ -64,7 +64,10 @@ uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 ### 啟動 Nav 導航系統（先於 `run` 啟動）
 
 ```bash
-# 前景模式（建議除錯時使用——可直接看 Nav2 log）
+# 第一次或 Dockerfile.nav2 有改時，先重建本地 Nav image
+./launch_nav.sh --rebuild
+
+# 前景模式（建議除錯時使用，可直接看 Nav2 log）
 ./launch_nav.sh
 
 # 背景模式（啟動後可繼續在同一終端執行 run）
@@ -83,6 +86,8 @@ uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 # Dockerfile 有改時強制重建 image
 ./enter_docker.sh --rebuild
 ```
+
+離開 `enter_docker.sh` 後，dev container 的 `/workspaces/build`、`/workspaces/install`、`/workspaces/log` 會自動清空；下次重新進容器時請重新執行 `r`。
 
 容器內的 ROS 工作流：
 
@@ -112,6 +117,7 @@ VLM_RL/
 ├── main.py                # 系統進入點 (Click CLI)
 ├── pyproject.toml         # uv 套件管理
 ├── Dockerfile             # VLM-RL 開發容器建置
+├── Dockerfile.nav2        # Nav2 專用 image（含 laser_scan_matcher）
 ├── enter_docker.sh        # 進入開發容器
 ├── container_env.sh       # 容器 shell rc + ROS workspace helper
 ├── launch_nav.sh          # 一鍵啟動 Nav 導航系統
