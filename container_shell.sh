@@ -1,14 +1,7 @@
-export PATH="$HOME/.local/bin:$PATH"
-export UV_PYTHON_INSTALL_DIR=/workspaces/VLM_RL/.uv_python
-export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
-
-PS1='\[\033[01;34m\]\u@\h\[\033[00m\]:\[\033[01;36m\]\w\[\033[00m\]\$ '
-
-source /opt/ros/humble/setup.bash
 source /workspaces/VLM_RL/container_env.sh
+_ros_source_base
+ros_ws_source >/dev/null 2>&1 || true
 
-if [ -f /workspaces/install/setup.bash ] && find /workspaces/build -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
-    source /workspaces/install/setup.bash
-fi
+PS1='\[\033[0;33m\]⚡\[\033[0m\] \[\033[97;44m\] \u@\h \[\033[0;34m\]\[\033[30;104m\] \w \[\033[0;34m\]\[\033[0m\] '
 
 cd /workspaces/VLM_RL || return 1

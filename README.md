@@ -87,22 +87,22 @@ uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 容器內的 ROS 工作流：
 
 ```bash
-# 乾淨重建一次 ROS workspace，並自動載入 overlay
+# 建置並載入 ROS workspace
 r
 
-# 完整名稱也可以
-ros_ws_build
-
-# 如果只想重新載入既有 overlay
-ros_ws_source
-
-# 直接用 ros2 run 啟動控制節點
+# 直接啟動控制節點
 ros2 run car_control_pkg car_control_node
 ros2 run arm_control_pkg arm_control_node
 ros2 run keyboard_mode_interface_pkg keyboard_control_node
 
 # 啟動導航 launch
 ros2 launch vlm_rl_nav navigation.launch.py
+```
+
+如果你只是重新開一個已經 build 過的容器，overlay 會自動載入；真的要手動重載才用：
+
+```bash
+ros_ws_source
 ```
 
 ## 目錄結構
