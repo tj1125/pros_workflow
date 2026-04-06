@@ -22,14 +22,6 @@ def generate_launch_description() -> LaunchDescription:
         )
     )
 
-    car_control_node = Node(
-        package="car_control_pkg",
-        executable="car_control_node",
-        name="car_control_node",
-        output="screen",
-        parameters=[params_file],
-    )
-
     nav_goal_bridge_node = Node(
         package="nav_goal_bridge_pkg",
         executable="nav_goal_bridge_node",
@@ -42,7 +34,6 @@ def generate_launch_description() -> LaunchDescription:
         [
             localization_launch,
             navigation_launch,
-            car_control_node,
             nav_goal_bridge_node,
         ]
     )

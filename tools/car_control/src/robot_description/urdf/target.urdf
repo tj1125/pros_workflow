@@ -1,0 +1,285 @@
+<?xml version="1.0"?>
+<robot name="vlm_rl_arm">
+  <material name="silver">
+    <color rgba="0.70 0.70 0.70 1.0"/>
+  </material>
+  <material name="dark">
+    <color rgba="0.20 0.20 0.20 1.0"/>
+  </material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.12 0.12 0.04"/>
+      </geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.12 0.12 0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="base_link_2_1">
+    <inertial>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+      <mass value="0.6"/>
+      <inertia ixx="0.004" iyy="0.004" izz="0.004" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.045" length="0.04"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.045" length="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="base_link2_v2_1">
+    <inertial>
+      <origin xyz="0.0 0.0 0.04" rpy="0 0 0"/>
+      <mass value="0.8"/>
+      <inertia ixx="0.005" iyy="0.005" izz="0.005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.035" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.04" length="0.07"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.035" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.04" length="0.07"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="link3_v1_1">
+    <inertial>
+      <origin xyz="0.07 0.0 0.08" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" iyy="0.02" izz="0.02" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.07 0.0 0.08" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.025" length="0.18"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0.07 0.0 0.08" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.025" length="0.18"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="link4_v1_1">
+    <inertial>
+      <origin xyz="0.12 0.0 0.02" rpy="0 0 0"/>
+      <mass value="0.9"/>
+      <inertia ixx="0.01" iyy="0.02" izz="0.02" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.12 0.0 0.02" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.022" length="0.24"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0.12 0.0 0.02" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.022" length="0.24"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="robot_ver7_link_4_v1_1">
+    <inertial>
+      <origin xyz="0.03 0.0 0.0" rpy="0 0 0"/>
+      <mass value="0.4"/>
+      <inertia ixx="0.003" iyy="0.003" izz="0.003" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.03 0.0 0.0" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.018" length="0.08"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0.03 0.0 0.0" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.018" length="0.08"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="robot_ver7_grap2_2_v1_1">
+    <inertial>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="0.0005" iyy="0.0005" izz="0.0005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.06 0.01 0.015"/>
+      </geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.06 0.01 0.015"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="robot_ver7_grap1_2_v1_1">
+    <inertial>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="0.0005" iyy="0.0005" izz="0.0005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.06 0.01 0.015"/>
+      </geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.06 0.01 0.015"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="camera_1">
+    <inertial>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="0.0005" iyy="0.0005" izz="0.0005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.04 0.03 0.03"/>
+      </geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.04 0.03 0.03"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="link3_mid_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.0001" iyy="0.0001" izz="0.0001" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.018"/>
+      </geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.018"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="Revolute 1" type="revolute">
+    <origin xyz="0.0 0.0 0.036" rpy="0 0 0"/>
+    <parent link="base_link_2_1"/>
+    <child link="base_link2_v2_1"/>
+    <axis xyz="0.0 0.0 1.0"/>
+    <limit upper="3.141593" lower="0.0" effort="100" velocity="100"/>
+  </joint>
+
+  <joint name="Revolute 2" type="revolute">
+    <origin xyz="0.0 0.0 0.070342" rpy="0 0 0"/>
+    <parent link="base_link2_v2_1"/>
+    <child link="link3_v1_1"/>
+    <axis xyz="-0.0 -1.0 0.0"/>
+    <limit upper="2.094395" lower="0.0" effort="100" velocity="100"/>
+  </joint>
+
+  <joint name="Revolute 3" type="revolute">
+    <origin xyz="0.137776 0.0 0.164195" rpy="0 0 0"/>
+    <parent link="link3_v1_1"/>
+    <child link="link4_v1_1"/>
+    <axis xyz="-0.0 -1.0 0.0"/>
+    <limit upper="2.617994" lower="0.0" effort="100" velocity="100"/>
+  </joint>
+
+  <joint name="Revolute 4" type="revolute">
+    <origin xyz="0.230283 0.0 0.042126" rpy="0 0 0"/>
+    <parent link="link4_v1_1"/>
+    <child link="robot_ver7_link_4_v1_1"/>
+    <axis xyz="0.984808 0.0 0.173648"/>
+    <limit upper="3.141593" lower="0.0" effort="100" velocity="100"/>
+  </joint>
+
+  <joint name="Revolute 5" type="revolute">
+    <origin xyz="0.041559 -0.0125 0.007328" rpy="0 0 0"/>
+    <parent link="robot_ver7_link_4_v1_1"/>
+    <child link="robot_ver7_grap2_2_v1_1"/>
+    <axis xyz="0.173648 -0.0 -0.984808"/>
+    <limit upper="1.22173" lower="0.0" effort="100" velocity="100"/>
+  </joint>
+
+  <joint name="Revolute 6" type="revolute">
+    <origin xyz="0.041559 0.0125 0.007328" rpy="0 0 0"/>
+    <parent link="robot_ver7_link_4_v1_1"/>
+    <child link="robot_ver7_grap1_2_v1_1"/>
+    <axis xyz="-0.173648 0.0 0.984808"/>
+    <limit upper="1.22173" lower="0.0" effort="100" velocity="100"/>
+  </joint>
+
+  <joint name="Rigid 8" type="fixed">
+    <origin xyz="-0.001193 -0.001505 0.039689" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="base_link_2_1"/>
+  </joint>
+
+  <joint name="Rigid 11" type="fixed">
+    <origin xyz="0.235764 0.0 -0.035601" rpy="0 0 0"/>
+    <parent link="link4_v1_1"/>
+    <child link="camera_1"/>
+  </joint>
+
+  <joint name="Rigid 12" type="fixed">
+    <origin xyz="0.146134 0.0 0.174155" rpy="0 0 0"/>
+    <parent link="link3_v1_1"/>
+    <child link="link3_mid_1"/>
+  </joint>
+</robot>

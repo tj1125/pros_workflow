@@ -1,8 +1,11 @@
 from glob import glob
+import os
 
 from setuptools import find_packages, setup
 
-package_name = "car_control_pkg"
+
+package_name = "arm_control_pkg"
+
 
 setup(
     name=package_name,
@@ -11,18 +14,19 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
+        (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
+        (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="root",
     maintainer_email="root@todo.todo",
-    description="TODO: Package description",
+    description="Arm control package with PyBullet IK support.",
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "car_control_node = car_control_pkg.main:main",
-        ],
+            "arm_control_node = arm_control_pkg.main:main",
+        ]
     },
 )
