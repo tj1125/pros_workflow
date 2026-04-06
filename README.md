@@ -87,10 +87,13 @@ uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 容器內的 ROS 工作流：
 
 ```bash
-# 建一次 ROS workspace（結果會留在 Docker volume）
+# 乾淨重建一次 ROS workspace，並自動載入 overlay
+r
+
+# 完整名稱也可以
 ros_ws_build
 
-# 載入 overlay
+# 如果只想重新載入既有 overlay
 ros_ws_source
 
 # 直接用 ros2 run 啟動控制節點

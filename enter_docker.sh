@@ -82,12 +82,16 @@ fi
 cat >/tmp/vlm_rl_shell_rc <<'RCFILE'
 source /opt/ros/humble/setup.bash
 source /workspaces/VLM_RL/container_env.sh
+if [ -f /workspaces/install/setup.bash ] && find /workspaces/build -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+    source /workspaces/install/setup.bash
+fi
 cd /workspaces/VLM_RL
 RCFILE
 
 echo "Container ready."
-echo "Run 'ros_ws_build' once for ROS packages, then 'ros_ws_source'."
+echo "Run 'r' once to build and load the ROS workspace."
 echo "Examples:"
+echo "  r"
 echo "  ros2 run car_control_pkg car_control_node"
 echo "  ros2 run arm_control_pkg arm_control_node"
 echo "  ros2 launch vlm_rl_nav navigation.launch.py"
@@ -96,7 +100,7 @@ exec bash --noprofile --rcfile /tmp/vlm_rl_shell_rc -i
 DOCKER_EOF
 
 if [ "$ARCH" = "x86_64" ] || { [ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]; }; then
-    docker "${DOCKER_ARGS[@]}" "${GPU_FLAGS[@]}" "$LOCAL_IMAGE" /bin/bash -lc "$DOCKER_CMD"
+    docker "${DOCKER_ARGS[@]}" "${GPU_FLAGS[@]}" "$LOCAL_IMAGE" /bin/bash -c "$DOCKER_CMD"
 else
-    docker "${DOCKER_ARGS[@]}" --runtime=nvidia "$LOCAL_IMAGE" /bin/bash -lc "$DOCKER_CMD"
+    docker "${DOCKER_ARGS[@]}" --runtime=nvidia "$LOCAL_IMAGE" /bin/bash -c "$DOCKER_CMD"
 fi

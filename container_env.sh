@@ -29,12 +29,21 @@ logs() {
 ros_ws_build() {
     source /opt/ros/humble/setup.bash
     cd "$ROS_WS_ROOT" || return 1
+    mkdir -p "$ROS_WS_BUILD" "$ROS_WS_INSTALL" "$ROS_WS_LOG"
+    find "$ROS_WS_BUILD" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    find "$ROS_WS_INSTALL" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    find "$ROS_WS_LOG" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
     colcon --log-base "$ROS_WS_LOG" build \
         --base-paths "$VLM_RL_ROOT/tools/nav" "$VLM_RL_ROOT/tools/car_control" \
         --build-base "$ROS_WS_BUILD" \
         --install-base "$ROS_WS_INSTALL" \
         --symlink-install \
         "$@"
+    source "$ROS_WS_INSTALL/setup.bash"
+}
+
+r() {
+    ros_ws_build "$@"
 }
 
 ros_ws_source() {
