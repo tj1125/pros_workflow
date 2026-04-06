@@ -2,9 +2,9 @@
 # VLM-RL Nav2 + Rosbridge Docker Compose
 # =============================================================================
 # 使用方式：
-#   ./launch_nav2.sh           # 前景模式（看 log）
-#   ./launch_nav2.sh -d        # 背景模式
-#   ./launch_nav2.sh --stop    # 停止所有服務
+#   ./launch_nav.sh           # 前景模式（看 log）
+#   ./launch_nav.sh -d        # 背景模式
+#   ./launch_nav.sh --stop    # 停止所有服務
 #
 # 啟動的服務：
 #   nav2       — VLM-RL 導航系統 (scan matcher + localization + Nav2 planning)
@@ -46,12 +46,12 @@ services:
       # Must match ROS_DOMAIN_ID used by rosbridge and vlm-rl-env
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
     volumes:
-      # Mount navigation tool sources only; build/install/log stay in Docker named volumes.
+      # Mount navigation tool sources only; runtime build/install/log stay isolated from dev shell volumes.
       - ./tools/nav:/workspaces/tools/nav:rw
       - ./tools/car_control:/workspaces/tools/car_control:rw
-      - vlm_rl_build:/workspaces/build
-      - vlm_rl_install:/workspaces/install
-      - vlm_rl_log:/workspaces/log
+      - vlm_rl_nav_build:/workspaces/build
+      - vlm_rl_nav_install:/workspaces/install
+      - vlm_rl_nav_log:/workspaces/log
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
@@ -101,9 +101,9 @@ networks:
     external: true
 
 volumes:
-  vlm_rl_build:
-    name: vlm_rl_build
-  vlm_rl_install:
-    name: vlm_rl_install
-  vlm_rl_log:
-    name: vlm_rl_log
+  vlm_rl_nav_build:
+    name: vlm_rl_nav_build
+  vlm_rl_nav_install:
+    name: vlm_rl_nav_install
+  vlm_rl_nav_log:
+    name: vlm_rl_nav_log

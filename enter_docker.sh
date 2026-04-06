@@ -51,11 +51,11 @@ DOCKER_ARGS=(
     -v
     "$SCRIPT_DIR:/workspaces/VLM_RL"
     -v
-    vlm_rl_build:/workspaces/build
+    vlm_rl_dev_build:/workspaces/build
     -v
-    vlm_rl_install:/workspaces/install
+    vlm_rl_dev_install:/workspaces/install
     -v
-    vlm_rl_log:/workspaces/log
+    vlm_rl_dev_log:/workspaces/log
     -w
     /workspaces/VLM_RL
 )
@@ -65,7 +65,7 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 fi
 
 if [ "$ARCH" = "x86_64" ] || { [ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]; }; then
-    docker "${DOCKER_ARGS[@]}" "${GPU_FLAGS[@]}" "$LOCAL_IMAGE" --noprofile --rcfile /workspaces/VLM_RL/container_shell.sh -i
+    docker "${DOCKER_ARGS[@]}" "${GPU_FLAGS[@]}" "$LOCAL_IMAGE" --noprofile --rcfile /workspaces/VLM_RL/container_env.sh -i
 else
-    docker "${DOCKER_ARGS[@]}" --runtime=nvidia "$LOCAL_IMAGE" --noprofile --rcfile /workspaces/VLM_RL/container_shell.sh -i
+    docker "${DOCKER_ARGS[@]}" --runtime=nvidia "$LOCAL_IMAGE" --noprofile --rcfile /workspaces/VLM_RL/container_env.sh -i
 fi

@@ -73,3 +73,10 @@ ros_ws_build() {
 r() {
     ros_ws_build "$@"
 }
+
+if [[ $- == *i* ]]; then
+    _ros_source_base
+    ros_ws_source >/dev/null 2>&1 || true
+    PS1='\[\E[0m\]\[\E[0;40m\] \[\E[33m\]⚡\[\E[0;40m\] root@\h \[\E[30;44m\]\[\E[0;44;30m\] \w \[\E[0;34m\] \[\E[0m\]'
+    cd "$VLM_RL_ROOT" || :
+fi
