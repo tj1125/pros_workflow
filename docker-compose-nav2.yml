@@ -70,7 +70,7 @@ services:
         find /workspaces/build -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         find /workspaces/install -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         find /workspaces/log -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-        colcon --log-base /workspaces/log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/build --install-base /workspaces/install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav --symlink-install
+        colcon --log-base /workspaces/log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/build --install-base /workspaces/install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav
         source /workspaces/install/setup.bash
         echo '🚀 Launching Nav2...'
         exec ros2 launch vlm_rl_nav navigation.launch.py

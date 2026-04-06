@@ -104,7 +104,7 @@ ros2 run keyboard_mode_interface_pkg keyboard_control_node
 ros2 launch vlm_rl_nav navigation.launch.py
 ```
 
-如果你只是重新開一個已經 build 過的容器，overlay 會自動載入；真的要手動重載才用：
+同一輪 dev container 內如果你已經跑過 `r`，overlay 會自動載入；真的要手動重載才用：
 
 ```bash
 ros_ws_source

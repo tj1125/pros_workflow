@@ -63,7 +63,6 @@ ros_ws_build() {
             --base-paths "$VLM_RL_ROOT/tools/nav" "$VLM_RL_ROOT/tools/car_control" \
             --build-base "$ROS_WS_BUILD" \
             --install-base "$ROS_WS_INSTALL" \
-            --symlink-install \
             "$@"
     ) || return 1
 
