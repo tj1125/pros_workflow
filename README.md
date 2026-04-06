@@ -114,6 +114,7 @@ VLM_RL/
 ├── Dockerfile             # VLM-RL 開發容器建置
 ├── enter_docker.sh        # 進入開發容器
 ├── container_env.sh       # 容器內 shell helper / ROS workspace helper
+├── container_shell.sh     # 容器 interactive shell rc
 ├── launch_nav.sh          # 一鍵啟動 Nav 導航系統
 ├── launch_nav2.sh         # launch_nav.sh 相容包裝
 ├── docker-compose-nav2.yml # Nav2 容器編排

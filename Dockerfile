@@ -7,5 +7,10 @@ RUN apt-get update --allow-insecure-repositories && \
         python3-scipy \
         python3-urwid \
         ros-humble-nav2-msgs && \
-    python3 -m pip install --no-cache-dir pybullet && \
+    python3 -m pip install --no-cache-dir pybullet uv && \
     rm -rf /var/lib/apt/lists/*
+
+# Do not inherit project-specific shell startup behavior from the base image.
+ENV BASH_ENV=
+ENV ENV=
+ENTRYPOINT ["/bin/bash"]

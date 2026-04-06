@@ -29,6 +29,15 @@ if ! docker network ls --format '{{.Name}}' | grep -q '^compose_cube_bridge_netw
     docker network create --driver bridge compose_cube_bridge_network
 fi
 
+GPU_FLAGS=()
+if [ "$OS" = "Linux" ]; then
+    if [ -f "/etc/nv_tegra_release" ]; then
+        GPU_FLAGS=(--runtime=nvidia)
+    elif docker info --format '{{json .}}' 2>/dev/null | grep -q '"Runtimes".*nvidia'; then
+        GPU_FLAGS=(--gpus all)
+    fi
+fi
+
 DOCKER_ARGS=(
     run
     -it
@@ -55,52 +64,8 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     DOCKER_ARGS+=(--env-file "$SCRIPT_DIR/.env")
 fi
 
-GPU_FLAGS=()
-if [ "$OS" = "Linux" ]; then
-    if [ -f "/etc/nv_tegra_release" ]; then
-        GPU_FLAGS=(--runtime=nvidia)
-    elif docker info --format '{{json .}}' 2>/dev/null | grep -q '"Runtimes".*nvidia'; then
-        GPU_FLAGS=(--gpus all)
-    fi
-fi
-
-read -r -d '' DOCKER_CMD <<'DOCKER_EOF' || true
-set -e
-
-export PATH="$HOME/.local/bin:$PATH"
-export UV_PYTHON_INSTALL_DIR=/workspaces/VLM_RL/.uv_python
-export UV_PROJECT_ENVIRONMENT=/workspaces/VLM_RL/.venv_linux
-
-if ! command -v uv >/dev/null 2>&1 || [ ! -d "$UV_PROJECT_ENVIRONMENT" ]; then
-    echo "Initializing uv environment..."
-    pip install -q uv --no-warn-script-location 2>/dev/null
-    uv python install 3.12 --quiet
-    cd /workspaces/VLM_RL
-    uv sync --frozen --no-dev --python 3.12 --quiet
-fi
-
-cat >/tmp/vlm_rl_shell_rc <<'RCFILE'
-source /opt/ros/humble/setup.bash
-source /workspaces/VLM_RL/container_env.sh
-if [ -f /workspaces/install/setup.bash ] && find /workspaces/build -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
-    source /workspaces/install/setup.bash
-fi
-cd /workspaces/VLM_RL
-RCFILE
-
-echo "Container ready."
-echo "Run 'r' once to build and load the ROS workspace."
-echo "Examples:"
-echo "  r"
-echo "  ros2 run car_control_pkg car_control_node"
-echo "  ros2 run arm_control_pkg arm_control_node"
-echo "  ros2 launch vlm_rl_nav navigation.launch.py"
-
-exec bash --noprofile --rcfile /tmp/vlm_rl_shell_rc -i
-DOCKER_EOF
-
 if [ "$ARCH" = "x86_64" ] || { [ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]; }; then
-    docker "${DOCKER_ARGS[@]}" "${GPU_FLAGS[@]}" "$LOCAL_IMAGE" /bin/bash -c "$DOCKER_CMD"
+    docker "${DOCKER_ARGS[@]}" "${GPU_FLAGS[@]}" "$LOCAL_IMAGE" --noprofile --rcfile /workspaces/VLM_RL/container_shell.sh -i
 else
-    docker "${DOCKER_ARGS[@]}" --runtime=nvidia "$LOCAL_IMAGE" /bin/bash -c "$DOCKER_CMD"
+    docker "${DOCKER_ARGS[@]}" --runtime=nvidia "$LOCAL_IMAGE" --noprofile --rcfile /workspaces/VLM_RL/container_shell.sh -i
 fi
