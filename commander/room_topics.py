@@ -28,7 +28,7 @@ def _ros_python_bin() -> str:
 def _ros_setup_scripts() -> list[str]:
     return [
         os.getenv("ROS_SETUP_BASH", "/opt/ros/humble/setup.bash"),
-        os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/nav_install/setup.bash"),
+        os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/install/setup.bash"),
     ]
 
 

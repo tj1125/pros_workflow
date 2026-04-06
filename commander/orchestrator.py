@@ -1254,7 +1254,7 @@ class Orchestrator:
         cmd = (
             "unset VIRTUAL_ENV PYTHONPATH PYTHONHOME && "
             "source /opt/ros/humble/setup.bash && "
-            "source /workspaces/nav_install/setup.bash 2>/dev/null || true && "
+            "source /workspaces/install/setup.bash 2>/dev/null || true && "
             f"export LD_LIBRARY_PATH={ros_lib}:${{LD_LIBRARY_PATH:-}} && "
             f"PYTHONPATH={ros_py} "
             f"/usr/bin/python3 -m commander.nav_move_runner --payload {safe_payload}"

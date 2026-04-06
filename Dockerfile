@@ -1,7 +1,11 @@
 FROM registry.screamtrumpet.csie.ncku.edu.tw/unity_env/pros_rl_image:latest
 
-# Install ros-humble-nav2-msgs (GPG key may be expired in base image; bypass auth)
-# Also install python3-urwid which is required for keyboard_control_node
+# Install ROS and Python runtime dependencies needed by the control packages.
 RUN apt-get update --allow-insecure-repositories && \
-    apt-get install -y --allow-unauthenticated ros-humble-nav2-msgs python3-urwid && \
+    apt-get install -y --allow-unauthenticated \
+        python3-pip \
+        python3-scipy \
+        python3-urwid \
+        ros-humble-nav2-msgs && \
+    python3 -m pip install --no-cache-dir pybullet && \
     rm -rf /var/lib/apt/lists/*

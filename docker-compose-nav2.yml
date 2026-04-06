@@ -49,9 +49,9 @@ services:
       # Mount navigation tool sources only; build/install/log stay in Docker named volumes.
       - ./tools/nav:/workspaces/tools/nav:rw
       - ./tools/car_control:/workspaces/tools/car_control:rw
-      - vlm_rl_nav_build:/workspaces/nav_build
-      - vlm_rl_nav_install:/workspaces/nav_install
-      - vlm_rl_nav_log:/workspaces/nav_log
+      - vlm_rl_build:/workspaces/build
+      - vlm_rl_install:/workspaces/install
+      - vlm_rl_log:/workspaces/log
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
@@ -60,11 +60,11 @@ services:
         set -e
         echo '🔧 Building vlm_rl_nav and car_control_pkg...'
         cd /workspaces &&
-        find /workspaces/nav_build -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        find /workspaces/nav_install -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        find /workspaces/nav_log -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
-        colcon --log-base /workspaces/nav_log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/nav_build --install-base /workspaces/nav_install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav --symlink-install &&
-        source /workspaces/nav_install/setup.bash &&
+        find /workspaces/build -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+        find /workspaces/install -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+        find /workspaces/log -mindepth 1 -maxdepth 1 -exec rm -rf {} + &&
+        colcon --log-base /workspaces/log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/build --install-base /workspaces/install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav --symlink-install &&
+        source /workspaces/install/setup.bash &&
         echo '🚀 Launching Nav2 (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)...' &&
         ros2 launch vlm_rl_nav navigation.launch.py
       "
@@ -101,9 +101,9 @@ networks:
     external: true
 
 volumes:
-  vlm_rl_nav_build:
-    name: vlm_rl_nav_build
-  vlm_rl_nav_install:
-    name: vlm_rl_nav_install
-  vlm_rl_nav_log:
-    name: vlm_rl_nav_log
+  vlm_rl_build:
+    name: vlm_rl_build
+  vlm_rl_install:
+    name: vlm_rl_install
+  vlm_rl_log:
+    name: vlm_rl_log

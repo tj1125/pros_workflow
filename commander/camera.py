@@ -32,7 +32,7 @@ def _ros_setup_scripts() -> list[str]:
     """Return ROS setup scripts to source before running the ROS-side helper."""
     return [
         os.getenv("ROS_SETUP_BASH", "/opt/ros/humble/setup.bash"),
-        os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/nav_install/setup.bash"),
+        os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/install/setup.bash"),
     ]
 
 

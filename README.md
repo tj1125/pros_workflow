@@ -61,31 +61,45 @@ uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 
 ## Docker 部署 & 導航系統啟動
 
-### 啟動 Nav2 導航系統（先於 run 啟動）
+### 啟動 Nav 導航系統（先於 `run` 啟動）
 
 ```bash
 # 前景模式（建議除錯時使用——可直接看 Nav2 log）
-./launch_nav2.sh
+./launch_nav.sh
 
 # 背景模式（啟動後可繼續在同一終端執行 run）
-./launch_nav2.sh -d
+./launch_nav.sh -d
 
 # 停止 Nav2
-./launch_nav2.sh --stop
+./launch_nav.sh --stop
 ```
 
 ### 進入 VLM-RL 開發容器
 
 ```bash
-# 複製並填寫設定
-cp .env.example .env
+# 第一次進入會自動 build 本地 image
+./enter_docker.sh
 
-# 建置並啟動
-docker compose up --build
+# Dockerfile 有改時強制重建 image
+./enter_docker.sh --rebuild
+```
 
-# 或使用 podman
-podman build . -f Containerfile -t vlm-rl-system
-podman run --env-file .env vlm-rl-system
+容器內的 ROS 工作流：
+
+```bash
+# 建一次 ROS workspace（結果會留在 Docker volume）
+ros_ws_build
+
+# 載入 overlay
+ros_ws_source
+
+# 直接用 ros2 run 啟動控制節點
+ros2 run car_control_pkg car_control_node
+ros2 run arm_control_pkg arm_control_node
+ros2 run keyboard_mode_interface_pkg keyboard_control_node
+
+# 啟動導航 launch
+ros2 launch vlm_rl_nav navigation.launch.py
 ```
 
 ## 目錄結構
@@ -96,7 +110,9 @@ VLM_RL/
 ├── pyproject.toml         # uv 套件管理
 ├── Dockerfile             # VLM-RL 開發容器建置
 ├── enter_docker.sh        # 進入開發容器
-├── launch_nav2.sh         # 一鍵啟動 Nav2 導航系統
+├── container_env.sh       # 容器內 shell helper / ROS workspace helper
+├── launch_nav.sh          # 一鍵啟動 Nav 導航系統
+├── launch_nav2.sh         # launch_nav.sh 相容包裝
 ├── docker-compose-nav2.yml # Nav2 容器編排
 ├── .env.example           # 環境變數範本
 ├── test_client.py         # 端對端測試
@@ -139,4 +155,4 @@ VLM_RL/
 | `ROS_DOMAIN_ID` | ROS 2 DDS Domain，必須和相機 / Nav2 同步 | `1` |
 | `ROS_PYTHON_BIN` | 具有 `rclpy` 的 Python 執行檔 | `/usr/bin/python3` |
 | `ROS_SETUP_BASH` | ROS 2 base setup script | `/opt/ros/humble/setup.bash` |
-| `ROS_OVERLAY_SETUP_BASH` | ROS overlay setup script | `/workspaces/nav_install/setup.bash` |
+| `ROS_OVERLAY_SETUP_BASH` | ROS overlay setup script | `/workspaces/install/setup.bash` |

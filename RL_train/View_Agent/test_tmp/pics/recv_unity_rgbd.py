@@ -164,7 +164,7 @@ class RecvCameraCarRGBD(Node):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="接收 Unity Camera_Room1_* 的 RGBD 圖。")
-    parser.add_argument("--start", type=int, default=1, help="起始相機編號，預設 1。")
+    parser.add_argument("--start", type=int, default=12, help="起始相機編號，預設 1。")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SEC, help="等待服務與 topic 的 timeout 秒數。")
     parser.add_argument(
         "--out-dir",
