@@ -772,13 +772,18 @@ class Orchestrator:
         while rank <= len(group_ranking):
             goal_data, goal_err = self._goal_pose_for_rank(target_object, rank)
             if goal_err:
+                next_rank = rank + 1
+                print(
+                    f"\n🔁 切換 goal_pose：rank {rank} -> rank {next_rank}，原因：{goal_err}",
+                    flush=True,
+                )
                 all_events.append({
                     "event": "rank_advanced",
                     "rank_from": rank,
-                    "rank_to": rank + 1,
+                    "rank_to": next_rank,
                     "detail": goal_err,
                 })
-                rank += 1
+                rank = next_rank
                 continue
 
             for attempt in range(1, max_attempt_per_rank + 1):
@@ -853,15 +858,20 @@ class Orchestrator:
                     }
                 )
 
+            next_rank = rank + 1
+            print(
+                f"\n🔁 切換 goal_pose：rank {rank} -> rank {next_rank}，原因：{last_error}",
+                flush=True,
+            )
             all_events.append(
                 {
                     "event": "rank_advanced",
                     "rank_from": rank,
-                    "rank_to": rank + 1,
+                    "rank_to": next_rank,
                     "detail": "exhausted retries on current rank",
                 }
             )
-            rank += 1
+            rank = next_rank
 
         all_events.append(
             {
