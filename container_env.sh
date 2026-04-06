@@ -77,6 +77,12 @@ r() {
 if [[ $- == *i* ]]; then
     _ros_source_base
     ros_ws_source >/dev/null 2>&1 || true
-    PS1='\[\E[0m\]\[\E[0;40m\] \[\E[33m\]⚡\[\E[0;40m\] root@\h \[\E[30;44m\]\[\E[0;44;30m\] \w \[\E[0;34m\] \[\E[0m\]'
+    if [ -r /root/.oh-my-bash/oh-my-bash.sh ]; then
+        export OSH=/root/.oh-my-bash
+        OSH_THEME='agnoster'
+        source "$OSH"/oh-my-bash.sh
+    else
+        PS1='\[\E[0m\]\[\E[0;40m\] \[\E[33m\]⚡\[\E[0;40m\] root@\h \[\E[30;44m\]\[\E[0;44;30m\] \w \[\E[0;34m\] \[\E[0m\]'
+    fi
     cd "$VLM_RL_ROOT" || :
 fi
