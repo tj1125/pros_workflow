@@ -23,9 +23,9 @@ ACTION_MAPPINGS = {
     ],  # 左自轉
     "COUNTERCLOCKWISE_ROTATION_SLOW": [
         -rotate_vel_slow*0.8,
-        rotate_vel_slow*1.18,
-        -rotate_vel_slow*1.18,
-        rotate_vel_slow*1.18,
+        rotate_vel_slow*1.3,
+        -rotate_vel_slow*1.3,
+        rotate_vel_slow*1.3,
     ],  # 慢左自轉
     "COUNTERCLOCKWISE_ROTATION_MEDIAN": [
         -rotate_vel_median,
@@ -37,10 +37,10 @@ ACTION_MAPPINGS = {
     "BACKWARD_SLOW": [-vel_slow, -vel_slow, -vel_slow, -vel_slow],  # 後退
     "CLOCKWISE_ROTATION": [rotate_vel, -rotate_vel, rotate_vel, -rotate_vel],  # 右自轉
     "CLOCKWISE_ROTATION_SLOW": [
-        rotate_vel_slow*1.18,
+        rotate_vel_slow*1.3,
         -rotate_vel_slow*0.8,
-        rotate_vel_slow*1.18,
-        -rotate_vel_slow*1.18,
+        rotate_vel_slow*1.3,
+        -rotate_vel_slow*1.3,
     ],  # 右慢自轉
     "CLOCKWISE_ROTATION_MEDIAN": [
         rotate_vel_median,
