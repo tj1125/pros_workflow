@@ -159,6 +159,8 @@ class NavMoveRunner(Node):
         goal_orientation = (float(goal_orientation_msg.z), float(goal_orientation_msg.w))
         deadline = time.monotonic() + arrival_timeout
         last_detail = ""
+        last_distance_to_goal: Optional[float] = None
+        last_heading_error: Optional[float] = None
 
         while time.monotonic() <= deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -175,6 +177,8 @@ class NavMoveRunner(Node):
                 car_position[1] - goal_position[1],
             )
             heading_error = self._goal_heading_error(car_orientation, goal_orientation)
+            last_distance_to_goal = distance_to_goal
+            last_heading_error = heading_error
             detail = (
                 f"distance={distance_to_goal:.2f} "
                 f"goal_heading_error={heading_error:.3f}rad"
@@ -193,9 +197,23 @@ class NavMoveRunner(Node):
                     "message": "goal pose reached",
                 }
 
+        if last_distance_to_goal is None or last_heading_error is None:
+            timeout_reason = "no amcl pose"
+        else:
+            distance_ok = last_distance_to_goal <= goal_tolerance_m
+            heading_ok = abs(last_heading_error) <= goal_heading_tolerance_rad
+            if not distance_ok and not heading_ok:
+                timeout_reason = "distance and heading not met"
+            elif not distance_ok:
+                timeout_reason = "distance not met"
+            elif not heading_ok:
+                timeout_reason = "heading not met"
+            else:
+                timeout_reason = "goal checker conditions not satisfied"
+
         return {
             "success": False,
-            "message": "arrival timeout",
+            "message": f"arrival timeout: {timeout_reason}",
         }
 
     def run(self) -> Dict[str, Any]:

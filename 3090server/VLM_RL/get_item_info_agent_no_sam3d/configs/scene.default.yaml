@@ -24,7 +24,7 @@ map:
   map_pgm: "../data/map/map01.pgm"
   map_yaml: "../data/map/map01.yaml"
   unity_map_origin: [3.314, 0.0, 6.0]
-  offset: 0.5
+  offset: 0.4
   white_threshold: 250
 
 runtime:

@@ -1,6 +1,7 @@
 car_control_node:
   ros__parameters:
-    approach_stop_xy_tolerance_m: 0.08
+    # Shared final-goal tolerances used by car_control and commander/nav_move_runner.
+    approach_stop_xy_tolerance_m: 0.15
     align_stop_yaw_tolerance_rad: 0.2
 
 amcl:
@@ -143,10 +144,11 @@ controller_server:
       movement_time_allowance: 10.0
 
     general_goal_checker:
+      # Keep Nav2's own goal checker aligned with the shared final-goal tolerances.
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.4
+      yaw_goal_tolerance: 0.2
 
     # DWB parameters
     FollowPath:
@@ -184,8 +186,8 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.5
-      # Nav2 RotateToGoalCritic uses this window to switch to rotate-in-place behavior.
-      xy_goal_tolerance: 0.15
+      # Keep the rotate-to-goal handoff window aligned with the shared xy tolerance.
+      xy_goal_tolerance: 0.2
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -213,7 +215,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05 #0.05
-      robot_radius: 0.3
+      robot_radius: 0.32
       plugins: [ "obstacle_layer","voxel_layer", "inflation_layer" ]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -266,7 +268,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_footprint
       use_sim_time: false
-      robot_radius: 0.3
+      robot_radius: 0.32
       resolution: 0.05
       track_unknown_space: true
       plugins: [ "static_layer", "obstacle_layer", "inflation_layer" ]

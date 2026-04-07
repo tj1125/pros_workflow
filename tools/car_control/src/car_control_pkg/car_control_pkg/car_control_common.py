@@ -1,10 +1,82 @@
+from functools import lru_cache
+from pathlib import Path as FilePath
+
 import rclpy
+import yaml
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Path
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, String
 
 from car_control_pkg.utils import get_action_mapping, parse_control_signal
+
+
+_DEFAULT_APPROACH_STOP_XY_TOLERANCE_M = 0.10
+_DEFAULT_ALIGN_STOP_YAW_TOLERANCE_RAD = 0.017453292519943295
+
+
+def _nested_get(payload: dict, *keys, default=None):
+    current = payload
+    for key in keys:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+        if current is None:
+            return default
+    return current
+
+
+@lru_cache(maxsize=1)
+def _load_shared_mapper_params() -> dict:
+    try:
+        nav_share_dir = FilePath(get_package_share_directory("vlm_rl_nav"))
+    except PackageNotFoundError:
+        return {}
+
+    params_path = nav_share_dir / "config" / "mapper_params.yaml"
+    try:
+        with params_path.open(encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}
+    except FileNotFoundError:
+        return {}
+
+
+def _shared_goal_tolerances() -> tuple[float, float]:
+    payload = _load_shared_mapper_params()
+    xy_tolerance = float(
+        _nested_get(
+            payload,
+            "car_control_node",
+            "ros__parameters",
+            "approach_stop_xy_tolerance_m",
+            default=_nested_get(
+                payload,
+                "controller_server",
+                "ros__parameters",
+                "general_goal_checker",
+                "xy_goal_tolerance",
+                default=_DEFAULT_APPROACH_STOP_XY_TOLERANCE_M,
+            ),
+        )
+    )
+    yaw_tolerance = _nested_get(
+        payload,
+        "car_control_node",
+        "ros__parameters",
+        "align_stop_yaw_tolerance_rad",
+        default=None,
+    )
+    if yaw_tolerance is None:
+        yaw_tolerance = _nested_get(
+            payload,
+            "controller_server",
+            "ros__parameters",
+            "general_goal_checker",
+            "yaw_goal_tolerance",
+            default=_DEFAULT_ALIGN_STOP_YAW_TOLERANCE_RAD,
+        )
+    return xy_tolerance, float(yaw_tolerance)
 
 
 class CarControlPublishers:
@@ -63,8 +135,9 @@ class BaseCarControlNode(Node):
 
     def __init__(self, node_name, enable_nav_subscribers=False):
         super().__init__(node_name)
-        self.declare_parameter("approach_stop_xy_tolerance_m", 0.10)
-        self.declare_parameter("align_stop_yaw_tolerance_rad", 0.017453292519943295)
+        xy_tolerance, yaw_tolerance = _shared_goal_tolerances()
+        self.declare_parameter("approach_stop_xy_tolerance_m", xy_tolerance)
+        self.declare_parameter("align_stop_yaw_tolerance_rad", yaw_tolerance)
 
         # Create common publishers
         self.rear_wheel_pub, self.front_wheel_pub = (
