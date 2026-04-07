@@ -102,7 +102,7 @@ class NavigationController:
                 ),
             )
 
-        action_key = self.choose_rotation_action(heading_error)
+        action_key = self.choose_final_align_action(heading_error)
         self.car_control_node.publish_control(action_key)
         return None
 
@@ -132,6 +132,14 @@ class NavigationController:
                 else "COUNTERCLOCKWISE_ROTATION_MEDIAN"
             )
         return "CLOCKWISE_ROTATION" if diff_angle < 0 else "COUNTERCLOCKWISE_ROTATION"
+
+    @staticmethod
+    def choose_final_align_action(diff_angle):
+        return (
+            "CLOCKWISE_ROTATION_SLOW"
+            if diff_angle < 0
+            else "COUNTERCLOCKWISE_ROTATION_SLOW"
+        )
 
     def get_next_target_point(
         self, car_position, path_points, min_required_distance=0.5
