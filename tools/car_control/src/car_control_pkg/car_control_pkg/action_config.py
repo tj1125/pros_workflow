@@ -8,9 +8,9 @@ vel, rotate_vel為自走車PID數值, 可於arduino程式碼查看
 """
 vel = 10.0
 vel_slow = 3.0
-rotate_vel = 10.0
+rotate_vel = 9.0
 rotate_vel_slow = 7.0
-rotate_vel_median = 9.0
+rotate_vel_median = 8.0
 ACTION_MAPPINGS = {
     "FORWARD": [vel, vel, vel, vel],  # 前進
     "FORWARD_SLOW": [vel_slow, vel_slow, vel_slow, vel_slow],  # 前進
@@ -22,10 +22,10 @@ ACTION_MAPPINGS = {
         rotate_vel,
     ],  # 左自轉
     "COUNTERCLOCKWISE_ROTATION_SLOW": [
-        -rotate_vel_slow*0.8,
-        rotate_vel_slow*1.3,
-        -rotate_vel_slow*1.3,
-        rotate_vel_slow*1.3,
+        -rotate_vel_slow*0.7,
+        rotate_vel_slow*1.2,
+        -rotate_vel_slow*1.2,
+        rotate_vel_slow*1.2,
     ],  # 慢左自轉
     "COUNTERCLOCKWISE_ROTATION_MEDIAN": [
         -rotate_vel_median,
@@ -37,10 +37,10 @@ ACTION_MAPPINGS = {
     "BACKWARD_SLOW": [-vel_slow, -vel_slow, -vel_slow, -vel_slow],  # 後退
     "CLOCKWISE_ROTATION": [rotate_vel, -rotate_vel, rotate_vel, -rotate_vel],  # 右自轉
     "CLOCKWISE_ROTATION_SLOW": [
-        rotate_vel_slow*1.3,
-        -rotate_vel_slow*0.8,
-        rotate_vel_slow*1.3,
-        -rotate_vel_slow*1.3,
+        rotate_vel_slow*1.2,
+        -rotate_vel_slow*0.7,
+        rotate_vel_slow*1.2,
+        -rotate_vel_slow*1.2,
     ],  # 右慢自轉
     "CLOCKWISE_ROTATION_MEDIAN": [
         rotate_vel_median,
