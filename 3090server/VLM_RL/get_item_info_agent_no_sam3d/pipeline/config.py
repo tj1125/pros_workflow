@@ -46,7 +46,7 @@ def load_scene_config(path: Path) -> tuple[dict[str, Any], Path]:
     map_cfg = cfg["map"]
     runtime = cfg["runtime"]
 
-    _require_keys(camera, ["camera_a", "camera_b", "camera_parameter_dir"], "camera")
+    _require_keys(camera, ["camera_parameter_dir"], "camera")
     _require_keys(
         models,
         [

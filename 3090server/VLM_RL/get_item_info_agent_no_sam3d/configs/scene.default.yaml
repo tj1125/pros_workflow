@@ -1,6 +1,4 @@
 camera:
-  camera_a: "Camera_Room1_12"
-  camera_b: "Camera_Room1_13"
   camera_parameter_dir: "../data/camera_parameter"
 
 models:
