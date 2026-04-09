@@ -24,7 +24,7 @@ map:
   map_pgm: "../data/map/map01.pgm"
   map_yaml: "../data/map/map01.yaml"
   unity_map_origin: [3.314, 0.0, 6.0]
-  offset: 0.3
+  offset: 0.5
   white_threshold: 250
 
 runtime:
@@ -45,6 +45,6 @@ runtime:
   axis_step_m: 0.05
   obstacle_point_budget: 1600
   obstacle_mode: "box"
-  collision_threshold: 0.02
+  collision_threshold: 0.04
   max_collision_scene_points: 8192
   num_collision_samples: 2000

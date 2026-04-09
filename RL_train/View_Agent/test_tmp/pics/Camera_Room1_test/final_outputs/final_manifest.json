@@ -1,0 +1,884 @@
+{
+  "pipeline_name": "multicam_geometry_sam_size_then_grasp",
+  "entrypoint": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/final.py",
+  "target_label": "doll",
+  "skip_grasp": false,
+  "inputs": {
+    "image_dir": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test",
+    "camera_parameter_dir": "/home/tjchen/workspace/VLM_RL/3090server/VLM_RL/get_item_info_agent/data/camera_parameter",
+    "camera_ids": [
+      "Camera_Room1_12",
+      "Camera_Room1_13",
+      "Camera_Room1_14",
+      "Camera_Room1_15"
+    ],
+    "reference_camera_id": "Camera_Room1_12",
+    "labels": [
+      "doll",
+      "apple",
+      "wine"
+    ]
+  },
+  "parameters": {
+    "conf_thresh": 0.2,
+    "size_estimation_mode": "geometry",
+    "height_scale": 1.0,
+    "footprint_max_aspect_ratio": 1.8,
+    "robust_lower": 5.0,
+    "robust_upper": 95.0,
+    "axis_step_m": 0.05,
+    "min_valid_height_m": 0.03,
+    "max_valid_height_m": 1.5,
+    "vertical_line_height_stat": "min",
+    "disable_yolo_height_cap": false,
+    "point_budget": 1800,
+    "num_grasps": 200,
+    "topk": 100,
+    "collision_thresh": 0.02
+  },
+  "outputs": {
+    "size_summary_json": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_summary.json",
+    "size_summary_markdown": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_summary.md",
+    "pointcloud_npz": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_pointclouds.npz",
+    "crop_rgbd_pointcloud_npz": null,
+    "union_crop_pointcloud_npz": null,
+    "full_scene_pointcloud_npz": null,
+    "crop_rgb_png": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_crop_rgb.png",
+    "crop_depth_relative_vis_png": null,
+    "crop_depth_metric_vis_png": null,
+    "crop_depth_metric_mm_u16_png": null,
+    "union_crop_rgb_png": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_union_crop_rgb.png",
+    "union_crop_depth_relative_vis_png": null,
+    "union_crop_depth_metric_vis_png": null,
+    "union_crop_depth_metric_mm_u16_png": null,
+    "final_manifest_json": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/final_manifest.json",
+    "pipeline_description_json": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/current_pipeline_description_zh.json",
+    "grasp_report_json": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/doll_single_depth_multicam_sam_size_grasp_report.json",
+    "grasp_result_npz": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/doll_single_depth_multicam_sam_size_grasp_result.npz"
+  },
+  "size_stage": {
+    "summary_json": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_summary.json",
+    "timings_s": {
+      "camera_model_load": 0.008456234820187092,
+      "yolo_inference": 0.00017753243446350098,
+      "yolo_cache": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/obstacle_yolo_cache_Camera_Room1_12_Camera_Room1_13_Camera_Room1_14_Camera_Room1_15.json",
+      "multicam_matching": 0.0022245952859520912,
+      "sam_model_load": 2.9353722762316465,
+      "sam_inference_total": 1.6361478501930833,
+      "sam_inference_by_camera": {
+        "Camera_Room1_12": 0.6400527805089951,
+        "Camera_Room1_13": 0.33024646807461977,
+        "Camera_Room1_14": 0.33120913431048393,
+        "Camera_Room1_15": 0.3346394672989845
+      },
+      "report_write": 0.00021501444280147552,
+      "per_label_size_estimation": {
+        "doll": 0.04913077503442764,
+        "apple": 0.04816367011517286,
+        "wine": 0.04807180818170309
+      },
+      "pointcloud_npz_write": 0.006986001506447792,
+      "crop_rgbd_pointcloud_npz_write": 0.0,
+      "union_crop_pointcloud_npz_write": 0.0,
+      "full_scene_pointcloud_npz_write": 0.0,
+      "crop_depth_image_write": 0.000523407943546772,
+      "total": 5.01633823569864
+    },
+    "labels": {
+      "doll": {
+        "reference_camera_id": "Camera_Room1_12",
+        "reference_height_m": 0.23497871165335305,
+        "reference_height_mm": 234.97871165335306,
+        "reference_height_m_by_camera": {},
+        "reference_height_mm_by_camera": {},
+        "reference_world_y_height_m_by_camera": {},
+        "reference_world_y_height_mm_by_camera": {},
+        "yolo_height_cap_enabled": false,
+        "yolo_height_m": 0.23497871165335305,
+        "yolo_height_mm": 234.97871165335306,
+        "selected_height_before_scale_m": 0.23497871165335305,
+        "selected_height_before_scale_mm": 234.97871165335306,
+        "selected_height_m": 0.1812852937375078,
+        "selected_height_mm": 181.2852937375078,
+        "shape_ratio_h_over_x_plus_z": 0.9672926389339892,
+        "shape_height_weight": 0.7714966707492411,
+        "applied_height_multiplier": 0.7714966707492411,
+        "height_scale": 1.0,
+        "height_source": "geometry",
+        "center_world_unity": [
+          2.361999988555908,
+          0.4329998195171356,
+          8.465999603271484
+        ],
+        "center_world_cv": [
+          2.361999988555908,
+          0.4329998195171356,
+          -8.465999603271484
+        ],
+        "reference_center_world_m": [
+          2.361999988555908,
+          0.4329998195171356,
+          8.465999603271484
+        ],
+        "multicam_center_world_m": [
+          2.361999988555908,
+          0.4329998195171356,
+          8.465999603271484
+        ],
+        "size_xyz_m": [
+          0.08675861358642578,
+          0.1812852919101715,
+          0.15616551041603088
+        ],
+        "size_xyz_mm": [
+          86.75861358642578,
+          181.28529357910156,
+          156.16551208496094
+        ],
+        "yaw_rad": 4.132067004096575,
+        "yaw_deg": 236.75,
+        "reprojection_error_px": 1.7460344285855445,
+        "mean_confidence": 0.780951589345932,
+        "selected_cameras": [
+          "Camera_Room1_12",
+          "Camera_Room1_13",
+          "Camera_Room1_14",
+          "Camera_Room1_15"
+        ],
+        "sam_mask_width_by_camera_m": {
+          "Camera_Room1_12": 0.12278833249343662,
+          "Camera_Room1_13": 0.16072655866679894,
+          "Camera_Room1_14": 0.12655276968913678,
+          "Camera_Room1_15": 0.1805280095726506
+        },
+        "predicted_width_by_camera_m": {
+          "Camera_Room1_12": 0.11227026099031091,
+          "Camera_Room1_13": 0.16027162931053562,
+          "Camera_Room1_14": 0.14131604835584344,
+          "Camera_Room1_15": 0.1749256051582301
+        },
+        "footprint_max_aspect_ratio": 1.8,
+        "camera_azimuth_rad_by_camera": {
+          "Camera_Room1_12": 0.7527795555944151,
+          "Camera_Room1_13": -1.040032762967158,
+          "Camera_Room1_14": -2.1558694680571744,
+          "Camera_Room1_15": 2.453750288539336
+        },
+        "footprint_fit_rmse_m": 0.009489179641539218,
+        "bbox_height_estimates_m": {
+          "Camera_Room1_12": 0.24605731246649867,
+          "Camera_Room1_13": 0.2438671686175852,
+          "Camera_Room1_14": 0.21191026786871123,
+          "Camera_Room1_15": 0.20871486475923054
+        },
+        "vertical_line_height_median_m": 0.25901559961922427,
+        "vertical_line_height_min_m": 0.23497871165335305,
+        "vertical_line_height_selected_m": 0.23497871165335305,
+        "reference_height_details": {
+          "reference_camera_id": "Camera_Room1_12",
+          "height_estimation_mode": "geometry",
+          "center_world_m": [
+            2.361999988555908,
+            0.4329998195171356,
+            8.465999603271484
+          ],
+          "center_world_unity": [
+            2.361999988555908,
+            0.4329998195171356,
+            8.465999603271484
+          ],
+          "center_world_cv": [
+            2.361999988555908,
+            0.4329998195171356,
+            -8.465999603271484
+          ],
+          "bbox_height_estimates_m": {
+            "Camera_Room1_12": 0.24605731246649867,
+            "Camera_Room1_13": 0.2438671686175852,
+            "Camera_Room1_14": 0.21191026786871123,
+            "Camera_Room1_15": 0.20871486475923054
+          },
+          "vertical_line_height_median_m": 0.25901559961922427,
+          "vertical_line_height_min_m": 0.23497871165335305,
+          "vertical_line_height_selected_m": 0.23497871165335305,
+          "selected_geometry_height_before_scale_m": 0.23497871165335305,
+          "selected_geometry_height_before_scale_mm": 234.97871165335306,
+          "selected_geometry_height_m": 0.1812852937375078,
+          "selected_geometry_height_mm": 181.2852937375078,
+          "shape_ratio_h_over_x_plus_z": 0.9672926389339892,
+          "shape_height_weight": 0.7714966707492411,
+          "applied_height_multiplier": 0.7714966707492411,
+          "height_scale": 1.0,
+          "crop_box_xyxy": [
+            891,
+            371,
+            920,
+            412
+          ]
+        },
+        "reference_height_details_by_camera": {},
+        "per_camera_measurements": {
+          "Camera_Room1_12": {
+            "mask_height_px": 31.809993171691886,
+            "mask_width_px": 16.622339916229244,
+            "width_m_from_height_ratio": 0.12278833249343662,
+            "center_uv": [
+              895.2293090820312,
+              394.770751953125
+            ],
+            "axis_x_img": [
+              0.9643911719322205,
+              0.26447999477386475
+            ],
+            "axis_y_img": [
+              0.2828320264816284,
+              -0.9591694474220276
+            ],
+            "bbox_xyxy": [
+              889.0272216796875,
+              367.2235107421875,
+              920.4827880859375,
+              413.21759033203125
+            ],
+            "confidence": 0.8454760313034058
+          },
+          "Camera_Room1_13": {
+            "mask_height_px": 21.851354312896728,
+            "mask_width_px": 14.94643049240112,
+            "width_m_from_height_ratio": 0.16072655866679894,
+            "center_uv": [
+              670.8645629882812,
+              258.4996643066406
+            ],
+            "axis_x_img": [
+              0.9994692206382751,
+              0.03257710486650467
+            ],
+            "axis_y_img": [
+              0.03883754834532738,
+              -0.9992455244064331
+            ],
+            "bbox_xyxy": [
+              655.7450561523438,
+              236.69007873535156,
+              681.9180908203125,
+              269.41644287109375
+            ],
+            "confidence": 0.695088267326355
+          },
+          "Camera_Room1_14": {
+            "mask_height_px": 23.31398401260376,
+            "mask_width_px": 12.556240642070772,
+            "width_m_from_height_ratio": 0.12655276968913678,
+            "center_uv": [
+              710.8809814453125,
+              231.42269897460938
+            ],
+            "axis_x_img": [
+              0.9975597262382507,
+              0.06981854885816574
+            ],
+            "axis_y_img": [
+              0.08738362789154053,
+              -0.9961747527122498
+            ],
+            "bbox_xyxy": [
+              695.539794921875,
+              215.2288360595703,
+              719.12060546875,
+              246.0784454345703
+            ],
+            "confidence": 0.7556793689727783
+          },
+          "Camera_Room1_15": {
+            "mask_height_px": 24.665157032012935,
+            "mask_width_px": 18.94959621429443,
+            "width_m_from_height_ratio": 0.1805280095726506,
+            "center_uv": [
+              683.4656372070312,
+              347.35455322265625
+            ],
+            "axis_x_img": [
+              0.9989764094352722,
+              0.045234646648168564
+            ],
+            "axis_y_img": [
+              0.04661593586206436,
+              -0.9989128708839417
+            ],
+            "bbox_xyxy": [
+              669.342529296875,
+              331.19036865234375,
+              701.0975952148438,
+              365.9703063964844
+            ],
+            "confidence": 0.827562689781189
+          }
+        }
+      },
+      "apple": {
+        "reference_camera_id": "Camera_Room1_12",
+        "reference_height_m": 0.16809047746722988,
+        "reference_height_mm": 168.09047746722987,
+        "reference_height_m_by_camera": {},
+        "reference_height_mm_by_camera": {},
+        "reference_world_y_height_m_by_camera": {},
+        "reference_world_y_height_mm_by_camera": {},
+        "yolo_height_cap_enabled": false,
+        "yolo_height_m": 0.16809047746722988,
+        "yolo_height_mm": 168.09047746722987,
+        "selected_height_before_scale_m": 0.16809047746722988,
+        "selected_height_before_scale_mm": 168.09047746722987,
+        "selected_height_m": 0.11017300693281401,
+        "selected_height_mm": 110.173006932814,
+        "shape_ratio_h_over_x_plus_z": 0.7119652150200657,
+        "shape_height_weight": 0.6554387172485295,
+        "applied_height_multiplier": 0.6554387172485295,
+        "height_scale": 1.0,
+        "height_source": "geometry",
+        "center_world_unity": [
+          2.3389999866485596,
+          0.40700000524520874,
+          8.107999801635742
+        ],
+        "center_world_cv": [
+          2.3389999866485596,
+          0.40700000524520874,
+          -8.107999801635742
+        ],
+        "reference_center_world_m": [
+          2.3389999866485596,
+          0.40700000524520874,
+          8.107999801635742
+        ],
+        "multicam_center_world_m": [
+          2.3389999866485596,
+          0.40700000524520874,
+          8.107999801635742
+        ],
+        "size_xyz_m": [
+          0.12647368013858795,
+          0.11017300933599472,
+          0.10961998254060745
+        ],
+        "size_xyz_mm": [
+          126.47367858886719,
+          110.17301177978516,
+          109.61997985839844
+        ],
+        "yaw_rad": 3.2724923474893677,
+        "yaw_deg": 187.5,
+        "reprojection_error_px": 0.3572860426498835,
+        "mean_confidence": 0.5320469215512276,
+        "selected_cameras": [
+          "Camera_Room1_12",
+          "Camera_Room1_13",
+          "Camera_Room1_14",
+          "Camera_Room1_15"
+        ],
+        "sam_mask_width_by_camera_m": {
+          "Camera_Room1_12": 0.16580532468080564,
+          "Camera_Room1_13": 0.1678050315661775,
+          "Camera_Room1_14": 0.16386484209691263,
+          "Camera_Room1_15": 0.1633316214512899
+        },
+        "predicted_width_by_camera_m": {
+          "Camera_Room1_12": 0.16655630602833035,
+          "Camera_Room1_13": 0.16736588221385215,
+          "Camera_Room1_14": 0.16353907881829935,
+          "Camera_Room1_15": 0.16334198600099575
+        },
+        "footprint_max_aspect_ratio": 1.8,
+        "camera_azimuth_rad_by_camera": {
+          "Camera_Room1_12": 0.824304701379263,
+          "Camera_Room1_13": -0.9928889755030962,
+          "Camera_Room1_14": -2.20150938867307,
+          "Camera_Room1_15": 2.373818222322452
+        },
+        "footprint_fit_rmse_m": 0.0004645035725269709,
+        "bbox_height_estimates_m": {
+          "Camera_Room1_12": 0.16775578657114149,
+          "Camera_Room1_13": 0.14953203232319384,
+          "Camera_Room1_14": 0.17421503667855434,
+          "Camera_Room1_15": 0.16809047746722988
+        },
+        "vertical_line_height_median_m": 0.19658113079089623,
+        "vertical_line_height_min_m": 0.16852498699799945,
+        "vertical_line_height_selected_m": 0.16852498699799945,
+        "reference_height_details": {
+          "reference_camera_id": "Camera_Room1_12",
+          "height_estimation_mode": "geometry",
+          "center_world_m": [
+            2.3389999866485596,
+            0.40700000524520874,
+            8.107999801635742
+          ],
+          "center_world_unity": [
+            2.3389999866485596,
+            0.40700000524520874,
+            8.107999801635742
+          ],
+          "center_world_cv": [
+            2.3389999866485596,
+            0.40700000524520874,
+            -8.107999801635742
+          ],
+          "bbox_height_estimates_m": {
+            "Camera_Room1_12": 0.16775578657114149,
+            "Camera_Room1_13": 0.14953203232319384,
+            "Camera_Room1_14": 0.17421503667855434,
+            "Camera_Room1_15": 0.16809047746722988
+          },
+          "vertical_line_height_median_m": 0.19658113079089623,
+          "vertical_line_height_min_m": 0.16852498699799945,
+          "vertical_line_height_selected_m": 0.16852498699799945,
+          "selected_geometry_height_before_scale_m": 0.16809047746722988,
+          "selected_geometry_height_before_scale_mm": 168.09047746722987,
+          "selected_geometry_height_m": 0.11017300693281401,
+          "selected_geometry_height_mm": 110.173006932814,
+          "shape_ratio_h_over_x_plus_z": 0.7119652150200657,
+          "shape_height_weight": 0.6554387172485295,
+          "applied_height_multiplier": 0.6554387172485295,
+          "height_scale": 1.0,
+          "crop_box_xyxy": [
+            846,
+            347,
+            871,
+            373
+          ]
+        },
+        "reference_height_details_by_camera": {},
+        "per_camera_measurements": {
+          "Camera_Room1_12": {
+            "mask_height_px": 17.483741283416748,
+            "mask_width_px": 17.24605369567871,
+            "width_m_from_height_ratio": 0.16580532468080564,
+            "center_uv": [
+              857.942138671875,
+              361.2071533203125
+            ],
+            "axis_x_img": [
+              0.9762105345726013,
+              0.2168246954679489
+            ],
+            "axis_y_img": [
+              0.23778028786182404,
+              -0.9713189601898193
+            ],
+            "bbox_xyxy": [
+              845.676025390625,
+              345.88555908203125,
+              872.1814575195312,
+              374.76983642578125
+            ],
+            "confidence": 0.37637418508529663
+          },
+          "Camera_Room1_13": {
+            "mask_height_px": 14.029810523986816,
+            "mask_width_px": 14.005985546112061,
+            "width_m_from_height_ratio": 0.1678050315661775,
+            "center_uv": [
+              641.7098388671875,
+              279.63232421875
+            ],
+            "axis_x_img": [
+              0.9999336004257202,
+              0.01152574922889471
+            ],
+            "axis_y_img": [
+              0.011843319982290268,
+              -0.9999298453330994
+            ],
+            "bbox_xyxy": [
+              629.618408203125,
+              269.17724609375,
+              651.4436645507812,
+              290.21820068359375
+            ],
+            "confidence": 0.6721665263175964
+          },
+          "Camera_Room1_14": {
+            "mask_height_px": 15.502839946746825,
+            "mask_width_px": 15.113113236427306,
+            "width_m_from_height_ratio": 0.16386484209691263,
+            "center_uv": [
+              735.9509887695312,
+              259.4198303222656
+            ],
+            "axis_x_img": [
+              0.9953826069831848,
+              0.09598654508590698
+            ],
+            "axis_y_img": [
+              0.1161404699087143,
+              -0.993232786655426
+            ],
+            "bbox_xyxy": [
+              723.0202026367188,
+              245.9325714111328,
+              748.07666015625,
+              272.6230773925781
+            ],
+            "confidence": 0.7011746168136597
+          },
+          "Camera_Room1_15": {
+            "mask_height_px": 16.812275791168215,
+            "mask_width_px": 16.336298799514772,
+            "width_m_from_height_ratio": 0.1633316214512899,
+            "center_uv": [
+              730.36376953125,
+              334.5802307128906
+            ],
+            "axis_x_img": [
+              0.9962958097457886,
+              0.0859924703836441
+            ],
+            "axis_y_img": [
+              0.09237653762102127,
+              -0.9957241415977478
+            ],
+            "bbox_xyxy": [
+              718.2100830078125,
+              321.1139831542969,
+              745.7440795898438,
+              347.7768859863281
+            ],
+            "confidence": 0.37847235798835754
+          }
+        }
+      },
+      "wine": {
+        "reference_camera_id": "Camera_Room1_12",
+        "reference_height_m": 0.26878037076212935,
+        "reference_height_mm": 268.78037076212934,
+        "reference_height_m_by_camera": {},
+        "reference_height_mm_by_camera": {},
+        "reference_world_y_height_m_by_camera": {},
+        "reference_world_y_height_mm_by_camera": {},
+        "yolo_height_cap_enabled": false,
+        "yolo_height_m": 0.26878037076212935,
+        "yolo_height_mm": 268.78037076212934,
+        "selected_height_before_scale_m": 0.26878037076212935,
+        "selected_height_before_scale_mm": 268.78037076212934,
+        "selected_height_m": 0.241902327277693,
+        "selected_height_mm": 241.90232727769302,
+        "shape_ratio_h_over_x_plus_z": 2.2808795892471068,
+        "shape_height_weight": 0.8999999761581421,
+        "applied_height_multiplier": 0.8999999761581421,
+        "height_scale": 1.0,
+        "height_source": "geometry",
+        "center_world_unity": [
+          2.312000036239624,
+          0.4959999918937683,
+          8.789999961853027
+        ],
+        "center_world_cv": [
+          2.312000036239624,
+          0.4959999918937683,
+          -8.789999961853027
+        ],
+        "reference_center_world_m": [
+          2.312000036239624,
+          0.4959999918937683,
+          8.789999961853027
+        ],
+        "multicam_center_world_m": [
+          2.312000036239624,
+          0.4959999918937683,
+          8.789999961853027
+        ],
+        "size_xyz_m": [
+          0.05118469148874283,
+          0.24190232157707214,
+          0.0666559711098671
+        ],
+        "size_xyz_mm": [
+          51.1846923828125,
+          241.90232849121094,
+          66.65596771240234
+        ],
+        "yaw_rad": 6.2264621064897705,
+        "yaw_deg": 356.75,
+        "reprojection_error_px": 1.8283836734211563,
+        "mean_confidence": 0.7470842897891998,
+        "selected_cameras": [
+          "Camera_Room1_12",
+          "Camera_Room1_13",
+          "Camera_Room1_14",
+          "Camera_Room1_15"
+        ],
+        "sam_mask_width_by_camera_m": {
+          "Camera_Room1_12": 0.08833545154801228,
+          "Camera_Room1_13": 0.07532865216785271,
+          "Camera_Room1_14": 0.08031891007395456,
+          "Camera_Room1_15": 0.07877703702495577
+        },
+        "predicted_width_by_camera_m": {
+          "Camera_Room1_12": 0.08393868591874444,
+          "Camera_Room1_13": 0.07505151478686772,
+          "Camera_Room1_14": 0.0796806233233561,
+          "Camera_Room1_15": 0.08402228136320525
+        },
+        "footprint_max_aspect_ratio": 1.8,
+        "camera_azimuth_rad_by_camera": {
+          "Camera_Room1_12": 0.6622260628141164,
+          "Camera_Room1_13": -1.0648840988669668,
+          "Camera_Room1_14": -2.1064746194031674,
+          "Camera_Room1_15": 2.5223479680486705
+        },
+        "footprint_fit_rmse_m": 0.0034397801990308204,
+        "bbox_height_estimates_m": {
+          "Camera_Room1_12": 0.24292754449496995,
+          "Camera_Room1_13": 0.25465164958748976,
+          "Camera_Room1_14": 0.29979673789858413,
+          "Camera_Room1_15": 0.26878037076212935
+        },
+        "vertical_line_height_median_m": 0.3044407070369277,
+        "vertical_line_height_min_m": 0.27458589847403925,
+        "vertical_line_height_selected_m": 0.27458589847403925,
+        "reference_height_details": {
+          "reference_camera_id": "Camera_Room1_12",
+          "height_estimation_mode": "geometry",
+          "center_world_m": [
+            2.312000036239624,
+            0.4959999918937683,
+            8.789999961853027
+          ],
+          "center_world_unity": [
+            2.312000036239624,
+            0.4959999918937683,
+            8.789999961853027
+          ],
+          "center_world_cv": [
+            2.312000036239624,
+            0.4959999918937683,
+            -8.789999961853027
+          ],
+          "bbox_height_estimates_m": {
+            "Camera_Room1_12": 0.24292754449496995,
+            "Camera_Room1_13": 0.25465164958748976,
+            "Camera_Room1_14": 0.29979673789858413,
+            "Camera_Room1_15": 0.26878037076212935
+          },
+          "vertical_line_height_median_m": 0.3044407070369277,
+          "vertical_line_height_min_m": 0.27458589847403925,
+          "vertical_line_height_selected_m": 0.27458589847403925,
+          "selected_geometry_height_before_scale_m": 0.26878037076212935,
+          "selected_geometry_height_before_scale_mm": 268.78037076212934,
+          "selected_geometry_height_m": 0.241902327277693,
+          "selected_geometry_height_mm": 241.90232727769302,
+          "shape_ratio_h_over_x_plus_z": 2.2808795892471068,
+          "shape_height_weight": 0.8999999761581421,
+          "applied_height_multiplier": 0.8999999761581421,
+          "height_scale": 1.0,
+          "crop_box_xyxy": [
+            937,
+            400,
+            964,
+            447
+          ]
+        },
+        "reference_height_details_by_camera": {},
+        "per_camera_measurements": {
+          "Camera_Room1_12": {
+            "mask_height_px": 37.52339057922363,
+            "mask_width_px": 12.33217158317566,
+            "width_m_from_height_ratio": 0.08833545154801228,
+            "center_uv": [
+              948.1972045898438,
+              420.97296142578125
+            ],
+            "axis_x_img": [
+              0.9487117528915405,
+              0.31614238023757935
+            ],
+            "axis_y_img": [
+              0.3417436480522156,
+              -0.9397931694984436
+            ],
+            "bbox_xyxy": [
+              935.1618041992188,
+              397.20758056640625,
+              966.8351440429688,
+              446.02630615234375
+            ],
+            "confidence": 0.8008491396903992
+          },
+          "Camera_Room1_13": {
+            "mask_height_px": 24.97006244659424,
+            "mask_width_px": 6.9981343626976,
+            "width_m_from_height_ratio": 0.07532865216785271,
+            "center_uv": [
+              687.4576416015625,
+              233.99041748046875
+            ],
+            "axis_x_img": [
+              0.9991417527198792,
+              0.04142157360911369
+            ],
+            "axis_y_img": [
+              0.05308332294225693,
+              -0.9985901117324829
+            ],
+            "bbox_xyxy": [
+              680.6783447265625,
+              218.65301513671875,
+              695.9339599609375,
+              251.4766082763672
+            ],
+            "confidence": 0.7018571496009827
+          },
+          "Camera_Room1_14": {
+            "mask_height_px": 27.816137695312484,
+            "mask_width_px": 8.312221074104308,
+            "width_m_from_height_ratio": 0.08031891007395456,
+            "center_uv": [
+              682.0407104492188,
+              205.2747039794922
+            ],
+            "axis_x_img": [
+              0.9990023374557495,
+              0.044657908380031586
+            ],
+            "axis_y_img": [
+              0.05638832598924637,
+              -0.9984089136123657
+            ],
+            "bbox_xyxy": [
+              674.0994873046875,
+              187.3186798095703,
+              692.2837524414062,
+              229.19017028808594
+            ],
+            "confidence": 0.6942251324653625
+          },
+          "Camera_Room1_15": {
+            "mask_height_px": 32.01199402809143,
+            "mask_width_px": 9.382418930530546,
+            "width_m_from_height_ratio": 0.07877703702495577,
+            "center_uv": [
+              644.6251220703125,
+              359.9571533203125
+            ],
+            "axis_x_img": [
+              0.9999711513519287,
+              0.007601935416460037
+            ],
+            "axis_y_img": [
+              0.007599719800055027,
+              -0.9999710917472839
+            ],
+            "bbox_xyxy": [
+              633.6187133789062,
+              339.14312744140625,
+              652.370849609375,
+              385.9594421386719
+            ],
+            "confidence": 0.7914057374000549
+          }
+        }
+      }
+    }
+  },
+  "grasp_stage": {
+    "summary_json": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_summary.json",
+    "target_label": "doll",
+    "target_mode": "multicam_geometry_sam_size_box",
+    "used_outlier_filter": false,
+    "object_geometry": {
+      "center_world_unity": [
+        2.361999988555908,
+        0.4329998195171356,
+        8.465999603271484
+      ],
+      "center_world_m": [
+        2.361999988555908,
+        0.4329998195171356,
+        8.465999603271484
+      ],
+      "size_xyz_m": [
+        0.08675861358642578,
+        0.1812852919101715,
+        0.15616551041603088
+      ],
+      "size_xyz_mm": [
+        86.75861358642578,
+        181.28529357910156,
+        156.16551208496094
+      ],
+      "yaw_rad": 4.132067004096575,
+      "yaw_deg": 236.74999999999997,
+      "num_points": 1792
+    },
+    "obstacle_geometry": {
+      "apple": {
+        "center_world_unity": [
+          2.3389999866485596,
+          0.40700000524520874,
+          8.107999801635742
+        ],
+        "center_world_m": [
+          2.3389999866485596,
+          0.40700000524520874,
+          8.107999801635742
+        ],
+        "size_xyz_m": [
+          0.12647368013858795,
+          0.11017300933599472,
+          0.10961998254060745
+        ],
+        "size_xyz_mm": [
+          126.47367858886719,
+          110.17301177978516,
+          109.61997985839844
+        ],
+        "yaw_rad": 3.2724923474893677,
+        "yaw_deg": 187.5,
+        "num_points": 1872
+      },
+      "wine": {
+        "center_world_unity": [
+          2.312000036239624,
+          0.4959999918937683,
+          8.789999961853027
+        ],
+        "center_world_m": [
+          2.312000036239624,
+          0.4959999918937683,
+          8.789999961853027
+        ],
+        "size_xyz_m": [
+          0.05118469148874283,
+          0.24190232157707214,
+          0.0666559711098671
+        ],
+        "size_xyz_mm": [
+          51.1846923828125,
+          241.90232849121094,
+          66.65596771240234
+        ],
+        "yaw_rad": 6.2264621064897705,
+        "yaw_deg": 356.75,
+        "num_points": 1953
+      }
+    },
+    "num_object_points_raw": 1792,
+    "num_scene_points": 3825,
+    "num_total_grasps": 100,
+    "num_collision_free_grasps": 100,
+    "collision_threshold": 0.02,
+    "result_npz": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/doll_single_depth_multicam_sam_size_grasp_result.npz",
+    "timings_s": {
+      "grasp_inference": 1.6431755730882287,
+      "collision_filter": 0.7835330935195088,
+      "result_npz_write": 0.004391750320792198,
+      "report_write": 0.00024251360446214676,
+      "total": 2.4321713438257575
+    }
+  },
+  "timings_s": {
+    "size_stage_total": 5.01633823569864,
+    "grasp_stage_total": 2.4321713438257575,
+    "total": 7.773838488385081
+  }
+}

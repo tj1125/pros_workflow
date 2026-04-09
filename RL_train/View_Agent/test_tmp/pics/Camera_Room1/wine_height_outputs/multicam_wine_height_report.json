@@ -1,0 +1,405 @@
+{
+  "camera_ids": [
+    "Camera_Room1_2",
+    "Camera_Room1_7",
+    "Camera_Room1_10"
+  ],
+  "selected_cameras": [
+    "Camera_Room1_2",
+    "Camera_Room1_7",
+    "Camera_Room1_10"
+  ],
+  "target_label_aliases": [
+    "wine"
+  ],
+  "selected_label": "wine",
+  "weights": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/checkpoints/pure720.pt",
+  "image_dir": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1",
+  "camera_parameter_dir": "/home/tjchen/workspace/VLM_RL/3090server/VLM_RL/get_item_info_agent/data/camera_parameter",
+  "reprojection_error_px": 4.730712588021521,
+  "mean_confidence": 0.7605447769165039,
+  "center_world_cv": [
+    2.313092005126357,
+    0.4643228451355972,
+    -8.616724079758963
+  ],
+  "center_world_unity": [
+    2.313092005126357,
+    0.4643228451355972,
+    8.616724079758963
+  ],
+  "top_world_cv": [
+    2.3113505201742535,
+    0.5945641550804974,
+    -8.604266039050305
+  ],
+  "bottom_world_cv": [
+    2.314895710096668,
+    0.32927596983686386,
+    -8.62980506042283
+  ],
+  "top_world_unity": [
+    2.3113505201742535,
+    0.5945641550804974,
+    8.604266039050305
+  ],
+  "bottom_world_unity": [
+    2.314895710096668,
+    0.32927596983686386,
+    8.62980506042283
+  ],
+  "height_estimates_m": {
+    "from_bbox_per_camera": {
+      "Camera_Room1_2": 0.24364634524378606,
+      "Camera_Room1_7": 0.23562450906954482,
+      "Camera_Room1_10": 0.22733815734180507
+    },
+    "from_top_bottom_triangulation": 0.26653823593269454,
+    "vertical_component_from_triangulation": 0.26528818524363357,
+    "final_median": 0.23963542715666544,
+    "height_offset_mm": -1.0,
+    "final_with_offset": 0.23863542715666544
+  },
+  "estimated_height_m": 0.23863542715666544,
+  "estimated_height_mm": 238.63542715666543,
+  "target_detections": {
+    "Camera_Room1_2": {
+      "camera_id": "Camera_Room1_2",
+      "label": "wine",
+      "confidence": 0.6774296760559082,
+      "bbox_xyxy": [
+        722.3346557617188,
+        316.0501403808594,
+        740.4953002929688,
+        363.4596862792969
+      ],
+      "center_uv": [
+        731.4149780273438,
+        339.7549133300781
+      ],
+      "top_center_uv": [
+        731.4149780273438,
+        316.0501403808594
+      ],
+      "bottom_center_uv": [
+        731.4149780273438,
+        363.4596862792969
+      ],
+      "bbox_width_px": 18.16064453125,
+      "bbox_height_px": 47.4095458984375
+    },
+    "Camera_Room1_7": {
+      "camera_id": "Camera_Room1_7",
+      "label": "wine",
+      "confidence": 0.8775577545166016,
+      "bbox_xyxy": [
+        456.9130554199219,
+        326.2169189453125,
+        479.1778564453125,
+        369.80712890625
+      ],
+      "center_uv": [
+        468.0454559326172,
+        348.01202392578125
+      ],
+      "top_center_uv": [
+        468.0454559326172,
+        326.2169189453125
+      ],
+      "bottom_center_uv": [
+        468.0454559326172,
+        369.80712890625
+      ],
+      "bbox_width_px": 22.264801025390625,
+      "bbox_height_px": 43.5902099609375
+    },
+    "Camera_Room1_10": {
+      "camera_id": "Camera_Room1_10",
+      "label": "wine",
+      "confidence": 0.726646900177002,
+      "bbox_xyxy": [
+        509.0697937011719,
+        404.2059631347656,
+        534.52099609375,
+        461.47882080078125
+      ],
+      "center_uv": [
+        521.7953948974609,
+        432.84239196777344
+      ],
+      "top_center_uv": [
+        521.7953948974609,
+        404.2059631347656
+      ],
+      "bottom_center_uv": [
+        521.7953948974609,
+        461.47882080078125
+      ],
+      "bbox_width_px": 25.451202392578125,
+      "bbox_height_px": 57.272857666015625
+    }
+  },
+  "all_detections": {
+    "Camera_Room1_2": [
+      {
+        "camera_id": "Camera_Room1_2",
+        "label": "doll",
+        "confidence": 0.8880274891853333,
+        "bbox_xyxy": [
+          675.9608764648438,
+          328.27166748046875,
+          706.788818359375,
+          364.76373291015625
+        ],
+        "center_uv": [
+          691.3748474121094,
+          346.5177001953125
+        ],
+        "top_center_uv": [
+          691.3748474121094,
+          328.27166748046875
+        ],
+        "bottom_center_uv": [
+          691.3748474121094,
+          364.76373291015625
+        ],
+        "bbox_width_px": 30.82794189453125,
+        "bbox_height_px": 36.4920654296875
+      },
+      {
+        "camera_id": "Camera_Room1_2",
+        "label": "apple",
+        "confidence": 0.8124401569366455,
+        "bbox_xyxy": [
+          633.6918334960938,
+          341.727294921875,
+          661.6166381835938,
+          368.0243225097656
+        ],
+        "center_uv": [
+          647.6542358398438,
+          354.8758087158203
+        ],
+        "top_center_uv": [
+          647.6542358398438,
+          341.727294921875
+        ],
+        "bottom_center_uv": [
+          647.6542358398438,
+          368.0243225097656
+        ],
+        "bbox_width_px": 27.9248046875,
+        "bbox_height_px": 26.297027587890625
+      },
+      {
+        "camera_id": "Camera_Room1_2",
+        "label": "wine",
+        "confidence": 0.6774296760559082,
+        "bbox_xyxy": [
+          722.3346557617188,
+          316.0501403808594,
+          740.4953002929688,
+          363.4596862792969
+        ],
+        "center_uv": [
+          731.4149780273438,
+          339.7549133300781
+        ],
+        "top_center_uv": [
+          731.4149780273438,
+          316.0501403808594
+        ],
+        "bottom_center_uv": [
+          731.4149780273438,
+          363.4596862792969
+        ],
+        "bbox_width_px": 18.16064453125,
+        "bbox_height_px": 47.4095458984375
+      }
+    ],
+    "Camera_Room1_7": [
+      {
+        "camera_id": "Camera_Room1_7",
+        "label": "wine",
+        "confidence": 0.8775577545166016,
+        "bbox_xyxy": [
+          456.9130554199219,
+          326.2169189453125,
+          479.1778564453125,
+          369.80712890625
+        ],
+        "center_uv": [
+          468.0454559326172,
+          348.01202392578125
+        ],
+        "top_center_uv": [
+          468.0454559326172,
+          326.2169189453125
+        ],
+        "bottom_center_uv": [
+          468.0454559326172,
+          369.80712890625
+        ],
+        "bbox_width_px": 22.264801025390625,
+        "bbox_height_px": 43.5902099609375
+      },
+      {
+        "camera_id": "Camera_Room1_7",
+        "label": "doll",
+        "confidence": 0.8012268543243408,
+        "bbox_xyxy": [
+          488.71392822265625,
+          335.9787902832031,
+          521.8240966796875,
+          373.4371032714844
+        ],
+        "center_uv": [
+          505.2690124511719,
+          354.70794677734375
+        ],
+        "top_center_uv": [
+          505.2690124511719,
+          335.9787902832031
+        ],
+        "bottom_center_uv": [
+          505.2690124511719,
+          373.4371032714844
+        ],
+        "bbox_width_px": 33.11016845703125,
+        "bbox_height_px": 37.45831298828125
+      },
+      {
+        "camera_id": "Camera_Room1_7",
+        "label": "apple",
+        "confidence": 0.7076541781425476,
+        "bbox_xyxy": [
+          532.0780029296875,
+          352.9286193847656,
+          560.5509033203125,
+          380.9147033691406
+        ],
+        "center_uv": [
+          546.314453125,
+          366.9216613769531
+        ],
+        "top_center_uv": [
+          546.314453125,
+          352.9286193847656
+        ],
+        "bottom_center_uv": [
+          546.314453125,
+          380.9147033691406
+        ],
+        "bbox_width_px": 28.472900390625,
+        "bbox_height_px": 27.986083984375
+      }
+    ],
+    "Camera_Room1_10": [
+      {
+        "camera_id": "Camera_Room1_10",
+        "label": "doll",
+        "confidence": 0.7551376223564148,
+        "bbox_xyxy": [
+          534.4459228515625,
+          386.9412536621094,
+          565.9935913085938,
+          434.0535888671875
+        ],
+        "center_uv": [
+          550.2197570800781,
+          410.49742126464844
+        ],
+        "top_center_uv": [
+          550.2197570800781,
+          386.9412536621094
+        ],
+        "bottom_center_uv": [
+          550.2197570800781,
+          434.0535888671875
+        ],
+        "bbox_width_px": 31.54766845703125,
+        "bbox_height_px": 47.112335205078125
+      },
+      {
+        "camera_id": "Camera_Room1_10",
+        "label": "wine",
+        "confidence": 0.726646900177002,
+        "bbox_xyxy": [
+          509.0697937011719,
+          404.2059631347656,
+          534.52099609375,
+          461.47882080078125
+        ],
+        "center_uv": [
+          521.7953948974609,
+          432.84239196777344
+        ],
+        "top_center_uv": [
+          521.7953948974609,
+          404.2059631347656
+        ],
+        "bottom_center_uv": [
+          521.7953948974609,
+          461.47882080078125
+        ],
+        "bbox_width_px": 25.451202392578125,
+        "bbox_height_px": 57.272857666015625
+      },
+      {
+        "camera_id": "Camera_Room1_10",
+        "label": "apple",
+        "confidence": 0.4706793427467346,
+        "bbox_xyxy": [
+          568.8460693359375,
+          375.7904052734375,
+          598.4097900390625,
+          407.7724609375
+        ],
+        "center_uv": [
+          583.6279296875,
+          391.78143310546875
+        ],
+        "top_center_uv": [
+          583.6279296875,
+          375.7904052734375
+        ],
+        "bottom_center_uv": [
+          583.6279296875,
+          407.7724609375
+        ],
+        "bbox_width_px": 29.563720703125,
+        "bbox_height_px": 31.9820556640625
+      },
+      {
+        "camera_id": "Camera_Room1_10",
+        "label": "wine",
+        "confidence": 0.21489593386650085,
+        "bbox_xyxy": [
+          1082.3314208984375,
+          177.3760528564453,
+          1102.713134765625,
+          208.5552978515625
+        ],
+        "center_uv": [
+          1092.5222778320312,
+          192.9656753540039
+        ],
+        "top_center_uv": [
+          1092.5222778320312,
+          177.3760528564453
+        ],
+        "bottom_center_uv": [
+          1092.5222778320312,
+          208.5552978515625
+        ],
+        "bbox_width_px": 20.3817138671875,
+        "bbox_height_px": 31.179244995117188
+      }
+    ]
+  },
+  "annotated_images": {
+    "Camera_Room1_2": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1/wine_height_outputs/Camera_Room1_2_annotated.png",
+    "Camera_Room1_7": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1/wine_height_outputs/Camera_Room1_7_annotated.png",
+    "Camera_Room1_10": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1/wine_height_outputs/Camera_Room1_10_annotated.png"
+  }
+}

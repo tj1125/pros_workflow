@@ -48,6 +48,50 @@ def filter_by_approach_direction(
     return grasps[keep], scores[keep]
 
 
+def grasp_pitch_degrees(grasps: np.ndarray) -> np.ndarray:
+    """Return grasp pitch angles in degrees for R = Rz(yaw) * Ry(pitch) * Rx(roll)."""
+    grasps = np.asarray(grasps, dtype=float)
+    if grasps.size == 0:
+        return np.zeros((0,), dtype=float)
+    if grasps.ndim == 2:
+        grasps = grasps[None, ...]
+
+    rotation = grasps[:, :3, :3]
+    sy = np.sqrt(rotation[:, 0, 0] ** 2 + rotation[:, 1, 0] ** 2)
+    return np.degrees(np.arctan2(-rotation[:, 2, 0], sy))
+
+
+def filter_by_pitch(
+    grasps: np.ndarray,
+    scores: np.ndarray,
+    max_abs_pitch_deg: float = 30.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Keep only grasps whose pitch stays within +/-threshold."""
+    if max_abs_pitch_deg < 0:
+        raise ValueError("max_abs_pitch_deg must be non-negative.")
+
+    pitch_deg = grasp_pitch_degrees(grasps)
+    keep = np.abs(pitch_deg) <= float(max_abs_pitch_deg)
+    return grasps[keep], scores[keep], keep, pitch_deg
+
+
+def filter_to_object_front_side(
+    grasps: np.ndarray,
+    scores: np.ndarray,
+    max_local_z: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Keep only grasps whose origin stays on the object's front half in object-local Z.
+
+    In grasp_agent, object_local is centered at the target point-cloud centroid and keeps
+    camera-axis orientation. `local_z <= 0` therefore means the grasp origin is no farther
+    away from the camera than the object center, which is the same front/back split used in
+    the MeshCat debugging view.
+    """
+    local_z = np.asarray(grasps, dtype=float)[:, 2, 3]
+    keep = local_z <= float(max_local_z)
+    return grasps[keep], scores[keep], keep, local_z
+
+
 def infer_grasps_from_point_cloud_with_collision(
     object_pc_local: np.ndarray,
     gripper_config: Path,
@@ -56,6 +100,8 @@ def infer_grasps_from_point_cloud_with_collision(
     topk_num_grasps: int,
     scene_pc_local: np.ndarray | None,
     collision_threshold: float,
+    max_local_z: float = 0.0,
+    max_pitch_deg: float = 30.0,
     max_scene_points: int = 8192,
     num_collision_samples: int = 2000,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, int], dict[str, np.ndarray]]:
@@ -86,10 +132,30 @@ def infer_grasps_from_point_cloud_with_collision(
     grasps, confidences = filter_by_approach_direction(grasps, confidences)
     if len(grasps) == 0:
         raise RuntimeError("No grasps remain after approach filtering.")
+    total_after_approach = int(len(grasps))
+
+    grasps, confidences, front_keep_mask, local_z_all = filter_to_object_front_side(
+        grasps,
+        confidences,
+        max_local_z=max_local_z,
+    )
+    if len(grasps) == 0:
+        raise RuntimeError("No grasps remain after front-side filtering.")
+    total_after_front = int(len(grasps))
+
+    grasps, confidences, pitch_keep_mask, pitch_deg_all = filter_by_pitch(
+        grasps,
+        confidences,
+        max_abs_pitch_deg=max_pitch_deg,
+    )
+    if len(grasps) == 0:
+        raise RuntimeError("No grasps remain after pitch filtering.")
 
     all_grasps_local = np.array(grasps, copy=True)
     all_scores = np.array(confidences, copy=True)
-    total_after_approach = int(len(grasps))
+    all_local_z = np.array(local_z_all[front_keep_mask][pitch_keep_mask], copy=True)
+    all_pitch_deg = np.array(pitch_deg_all[pitch_keep_mask], copy=True)
+    total_after_pitch = int(len(grasps))
     scene_points_used = 0
     collision_free_mask = np.ones(len(grasps), dtype=bool)
     scene_pc_used = np.zeros((0, 3), dtype=float)
@@ -116,17 +182,27 @@ def infer_grasps_from_point_cloud_with_collision(
 
     stats = {
         "num_grasps_after_approach_filter": total_after_approach,
+        "num_grasps_after_front_filter": total_after_front,
+        "num_grasps_after_pitch_filter": total_after_pitch,
         "num_grasps_after_collision_filter": int(len(grasps)),
         "num_scene_points_used_for_collision": scene_points_used,
     }
     debug_data = {
         "all_grasps_local": all_grasps_local,
         "all_scores": all_scores,
+        "all_local_z": all_local_z,
+        "all_pitch_deg": all_pitch_deg,
         "collision_free_mask": collision_free_mask,
         "collision_free_grasps_local": all_grasps_local[collision_free_mask],
         "collision_free_scores": all_scores[collision_free_mask],
+        "collision_free_local_z": all_local_z[collision_free_mask],
+        "collision_free_pitch_deg": all_pitch_deg[collision_free_mask],
         "object_pc_local": np.asarray(object_pc_local, dtype=float),
         "scene_pc_local": scene_pc_used,
         "grasp_inference_coordinate_frame": np.array("object_local"),
+        "front_grasp_split_axis": np.array("object_local_z"),
+        "max_grasp_local_z": np.array(float(max_local_z)),
+        "grasp_pitch_convention": np.array("Rz(yaw)*Ry(pitch)*Rx(roll)"),
+        "max_grasp_pitch_deg": np.array(float(max_pitch_deg)),
     }
     return grasps, confidences, stats, debug_data

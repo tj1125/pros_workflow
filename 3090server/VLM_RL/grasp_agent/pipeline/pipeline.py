@@ -43,6 +43,11 @@ def _save_debug_npz(
     scene_pc_camera: np.ndarray,
     scene_pc_local: np.ndarray | None,
     object_reference_center_camera: np.ndarray,
+    gripper_midpoint_camera_xyz: np.ndarray,
+    valid_grasps_local: np.ndarray,
+    valid_grasps_camera: np.ndarray,
+    valid_grasp_confidences: np.ndarray,
+    valid_grasp_distance_to_gripper_midpoint_m: np.ndarray,
     best_grasp_local: np.ndarray,
     best_grasp_camera: np.ndarray,
     grasp_debug_npz: dict[str, np.ndarray],
@@ -50,6 +55,9 @@ def _save_debug_npz(
     output_dir = AGENT_ROOT / "data" / "debug_outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "latest_grasp_debug.npz"
+    gripper_midpoint_camera_xyz = np.asarray(gripper_midpoint_camera_xyz, dtype=float)
+    object_reference_center_camera = np.asarray(object_reference_center_camera, dtype=float)
+    gripper_midpoint_local_xyz = gripper_midpoint_camera_xyz - object_reference_center_camera
     save_data = dict(grasp_debug_npz)
     save_data.update(
         {
@@ -68,9 +76,22 @@ def _save_debug_npz(
                 if scene_pc_local is not None
                 else np.zeros((0, 3), dtype=float)
             ),
-            "object_reference_center_camera": np.asarray(object_reference_center_camera, dtype=float),
+            "object_reference_center_camera": object_reference_center_camera,
+            "gripper_midpoint_camera_xyz": gripper_midpoint_camera_xyz,
+            "gripper_midpoint_local_xyz": gripper_midpoint_local_xyz,
+            "gripper_midpoint_coordinate_frame_camera": np.array("camera"),
+            "gripper_midpoint_coordinate_frame_local": np.array("object_local"),
+            "valid_grasps_local": np.asarray(valid_grasps_local, dtype=float),
+            "valid_grasps_camera": np.asarray(valid_grasps_camera, dtype=float),
+            "valid_grasp_confidences": np.asarray(valid_grasp_confidences, dtype=float),
+            "valid_grasp_distance_to_gripper_midpoint_m": np.asarray(
+                valid_grasp_distance_to_gripper_midpoint_m,
+                dtype=float,
+            ),
             "best_grasp_local": np.asarray(best_grasp_local, dtype=float),
             "best_grasp_camera": np.asarray(best_grasp_camera, dtype=float),
+            "valid_grasp_coordinate_frame_local": np.array("object_local"),
+            "valid_grasp_coordinate_frame_camera": np.array("camera"),
             "best_grasp_coordinate_frame_local": np.array("object_local"),
             "best_grasp_coordinate_frame_camera": np.array("camera"),
         }
@@ -106,6 +127,30 @@ def _decode_depth_m(depth_bytes: bytes, depth_scale: float) -> np.ndarray:
     if depth.dtype in (np.float32, np.float64):
         return depth.astype(np.float32)
     raise RuntimeError(f"Unsupported depth dtype: {depth.dtype}")
+
+
+def _rank_grasps_by_reference_point(
+    grasps_local: np.ndarray,
+    grasps_camera: np.ndarray,
+    confidences: np.ndarray,
+    reference_point_camera: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Prioritize grasps closest to a camera-frame reference point, then by confidence."""
+    reference_point_camera = np.asarray(reference_point_camera, dtype=float)
+    if reference_point_camera.shape != (3,):
+        raise ValueError("Reference point must contain exactly three camera-frame coordinates.")
+
+    reference_distances = np.linalg.norm(
+        np.asarray(grasps_camera, dtype=float)[:, :3, 3] - reference_point_camera[None, :],
+        axis=1,
+    )
+    sort_idx = np.lexsort((-np.asarray(confidences, dtype=float), reference_distances))
+    return (
+        np.asarray(grasps_local, dtype=float)[sort_idx],
+        np.asarray(grasps_camera, dtype=float)[sort_idx],
+        np.asarray(confidences, dtype=float)[sort_idx],
+        reference_distances[sort_idx],
+    )
 
 
 def _depth_to_point_cloud(
@@ -269,14 +314,39 @@ def run_pipeline(
         topk_num_grasps=int(runtime["topk_num_grasps"]),
         scene_pc_local=scene_pc_local,
         collision_threshold=float(runtime["collision_threshold"]),
+        max_local_z=float(runtime.get("max_grasp_local_z", 0.0)),
+        max_pitch_deg=float(runtime.get("max_grasp_pitch_deg", runtime.get("max_grasp_y_rotation_deg", 30.0))),
         max_scene_points=int(runtime["max_collision_scene_points"]),
         num_collision_samples=int(runtime["num_collision_samples"]),
     )
 
-    best_idx = int(np.argmax(confidences))
-    best_grasp_local = np.array(grasps_local[best_idx], dtype=float)
-    best_grasp_camera = np.array(best_grasp_local, copy=True)
-    best_grasp_camera[:3, 3] = best_grasp_camera[:3, 3] + object_reference_center_camera
+    valid_grasps_local = np.asarray(grasps_local, dtype=float)
+    valid_grasp_confidences = np.asarray(confidences, dtype=float)
+    valid_grasps_camera = np.array(valid_grasps_local, copy=True)
+    valid_grasps_camera[:, :3, 3] = (
+        valid_grasps_camera[:, :3, 3] + object_reference_center_camera[None, :]
+    )
+    gripper_midpoint_camera_xyz = np.asarray(
+        runtime.get("gripper_midpoint_camera_xyz", [0.0, -0.04, 0.11]),
+        dtype=float,
+    )
+    if gripper_midpoint_camera_xyz.shape != (3,):
+        raise ValueError("runtime.gripper_midpoint_camera_xyz must contain exactly three values.")
+    (
+        valid_grasps_local,
+        valid_grasps_camera,
+        valid_grasp_confidences,
+        valid_grasp_distance_to_gripper_midpoint_m,
+    ) = _rank_grasps_by_reference_point(
+        valid_grasps_local,
+        valid_grasps_camera,
+        valid_grasp_confidences,
+        gripper_midpoint_camera_xyz,
+    )
+
+    best_idx = 0
+    best_grasp_local = np.array(valid_grasps_local[best_idx], dtype=float)
+    best_grasp_camera = np.array(valid_grasps_camera[best_idx], dtype=float)
     debug_npz_path = _save_debug_npz(
         object_id=object_id,
         camera_name=camera_name or str(cfg["camera"]["camera_name"]),
@@ -290,6 +360,11 @@ def run_pipeline(
         scene_pc_camera=scene_pc_camera,
         scene_pc_local=scene_pc_local,
         object_reference_center_camera=object_reference_center_camera,
+        gripper_midpoint_camera_xyz=gripper_midpoint_camera_xyz,
+        valid_grasps_local=valid_grasps_local,
+        valid_grasps_camera=valid_grasps_camera,
+        valid_grasp_confidences=valid_grasp_confidences,
+        valid_grasp_distance_to_gripper_midpoint_m=valid_grasp_distance_to_gripper_midpoint_m,
         best_grasp_local=best_grasp_local,
         best_grasp_camera=best_grasp_camera,
         grasp_debug_npz=grasp_debug_npz,
@@ -302,7 +377,12 @@ def run_pipeline(
         "bbox_xyxy": [bbox.x1, bbox.y1, bbox.x2, bbox.y2],
         "mask_area_px": int(seg_mask_bool.sum()),
         "detection_confidence": float(detection_confidence),
-        "grasp_confidence": float(confidences[best_idx]),
+        "grasp_confidence": float(valid_grasp_confidences[best_idx]),
+        "gripper_midpoint_camera_xyz": gripper_midpoint_camera_xyz.astype(float).tolist(),
+        "grasp_distance_to_gripper_midpoint_m": float(
+            valid_grasp_distance_to_gripper_midpoint_m[best_idx]
+        ),
+        "grasp_distance_to_camera_m": float(np.linalg.norm(best_grasp_camera[:3, 3])),
         "num_candidate_grasps": int(len(confidences)),
         "object_reference_center_camera": object_reference_center_camera.astype(float).tolist(),
         "depth_stats_m": {

@@ -1,0 +1,96 @@
+{
+  "summary_json": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/single_depth_multicam_sam_size_summary.json",
+  "target_label": "doll",
+  "target_mode": "multicam_geometry_sam_size_box",
+  "used_outlier_filter": false,
+  "object_geometry": {
+    "center_world_unity": [
+      2.361999988555908,
+      0.4329998195171356,
+      8.465999603271484
+    ],
+    "center_world_m": [
+      2.361999988555908,
+      0.4329998195171356,
+      8.465999603271484
+    ],
+    "size_xyz_m": [
+      0.08675861358642578,
+      0.1812852919101715,
+      0.15616551041603088
+    ],
+    "size_xyz_mm": [
+      86.75861358642578,
+      181.28529357910156,
+      156.16551208496094
+    ],
+    "yaw_rad": 4.132067004096575,
+    "yaw_deg": 236.74999999999997,
+    "num_points": 1792
+  },
+  "obstacle_geometry": {
+    "apple": {
+      "center_world_unity": [
+        2.3389999866485596,
+        0.40700000524520874,
+        8.107999801635742
+      ],
+      "center_world_m": [
+        2.3389999866485596,
+        0.40700000524520874,
+        8.107999801635742
+      ],
+      "size_xyz_m": [
+        0.12647368013858795,
+        0.11017300933599472,
+        0.10961998254060745
+      ],
+      "size_xyz_mm": [
+        126.47367858886719,
+        110.17301177978516,
+        109.61997985839844
+      ],
+      "yaw_rad": 3.2724923474893677,
+      "yaw_deg": 187.5,
+      "num_points": 1872
+    },
+    "wine": {
+      "center_world_unity": [
+        2.312000036239624,
+        0.4959999918937683,
+        8.789999961853027
+      ],
+      "center_world_m": [
+        2.312000036239624,
+        0.4959999918937683,
+        8.789999961853027
+      ],
+      "size_xyz_m": [
+        0.05118469148874283,
+        0.24190232157707214,
+        0.0666559711098671
+      ],
+      "size_xyz_mm": [
+        51.1846923828125,
+        241.90232849121094,
+        66.65596771240234
+      ],
+      "yaw_rad": 6.2264621064897705,
+      "yaw_deg": 356.75,
+      "num_points": 1953
+    }
+  },
+  "num_object_points_raw": 1792,
+  "num_scene_points": 3825,
+  "num_total_grasps": 100,
+  "num_collision_free_grasps": 100,
+  "collision_threshold": 0.02,
+  "result_npz": "/home/tjchen/workspace/VLM_RL/RL_train/View_Agent/test_tmp/pics/Camera_Room1_test/final_outputs/doll_single_depth_multicam_sam_size_grasp_result.npz",
+  "timings_s": {
+    "grasp_inference": 1.6431755730882287,
+    "collision_filter": 0.7835330935195088,
+    "result_npz_write": 0.004391750320792198,
+    "report_write": 0.00024251360446214676,
+    "total": 2.4321713438257575
+  }
+}
