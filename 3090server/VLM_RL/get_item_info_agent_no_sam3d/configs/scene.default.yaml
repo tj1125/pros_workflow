@@ -43,6 +43,6 @@ runtime:
   axis_step_m: 0.05
   obstacle_point_budget: 1600
   obstacle_mode: "box"
-  collision_threshold: 0.04
+  collision_threshold: 0.025
   max_collision_scene_points: 8192
   num_collision_samples: 2000

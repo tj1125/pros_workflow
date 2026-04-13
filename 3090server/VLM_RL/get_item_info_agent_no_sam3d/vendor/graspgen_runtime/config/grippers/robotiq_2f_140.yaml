@@ -8,7 +8,7 @@ open_configurations:
   - [0.]
 close_configurations:
   - [0.7]
-width: 0.13603458
+width: 0.12603458
 # Longer forward reach for the local VLM_RL setup.
 depth: 0.2500
 closing_regions:
