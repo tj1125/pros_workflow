@@ -4,7 +4,7 @@ camera:
 models:
   sam_seg_checkpoint: "../../models/segmentation/sam_vit_b_01ec64.pth"
   sam3d_root: "../vendor/sam3d_runtime"
-  graspgen_root: "../vendor/graspgen_runtime"
+  graspgen_root: "../../get_item_info_agent/vendor/graspgen_runtime"
   gripper_config: "../../models/graspgen_checkpoints/graspgen_robotiq_2f_140.yml"
 
 alignment:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -8,7 +7,7 @@ from typing import Any
 import torch
 import yaml
 
-from get_item_info_agent.pipeline.constants import AGENT_ROOT
+from tool.grasp.graspgen import prepare_graspgen_runtime_imports, resolve_graspgen_runtime_root
 
 
 REQUIRED_SECTIONS = ("camera", "models", "alignment", "map", "runtime")
@@ -115,6 +114,7 @@ def load_scene_config(path: Path) -> tuple[dict[str, Any], Path]:
     for section, key in path_fields:
         resolved = resolve_path(cfg[section][key], base_dir)
         cfg[section][key] = resolved
+    cfg["models"]["graspgen_root"] = resolve_graspgen_runtime_root(cfg["models"]["graspgen_root"])
 
     return cfg, cfg_path
 
@@ -149,25 +149,14 @@ def validate_required_paths(cfg: dict[str, Any]) -> None:
 def prepare_runtime_imports(cfg: dict[str, Any]) -> None:
     """Add the vendor/third-party roots from the original get_item_info project to sys.path."""
     sam_root = Path(cfg["models"]["sam3d_root"]).resolve()
-    graspgen_root = Path(cfg["models"]["graspgen_root"]).resolve()
-    pointnet2_root = graspgen_root / "pointnet2_ops"
     camera_root = sam_root / "Camera_3D_Localization"
     camera_src = camera_root / "src"
 
-    if "CONDA_PREFIX" not in os.environ:
-        os.environ["CONDA_PREFIX"] = str(Path(sys.executable).resolve().parents[1])
-    os.environ.setdefault("GRASPGEN_NO_VIS", "1")
-    os.environ.setdefault("LIDRA_SKIP_INIT", "true")
-    os.environ.setdefault(
-        "TORCH_EXTENSIONS_DIR",
-        str(AGENT_ROOT / ".cache" / "torch_extensions"),
-    )
-    Path(os.environ["TORCH_EXTENSIONS_DIR"]).mkdir(parents=True, exist_ok=True)
-
-    for path in (sam_root, camera_root, camera_src, graspgen_root, pointnet2_root):
+    for path in (sam_root, camera_root, camera_src):
         text = str(path)
         if text not in sys.path:
             sys.path.insert(0, text)
+    prepare_graspgen_runtime_imports(Path(cfg["models"]["graspgen_root"]))
 
 
 def resolve_input_images(cfg: dict[str, Any], image_a: Path | None, image_b: Path | None) -> tuple[Path, Path]:

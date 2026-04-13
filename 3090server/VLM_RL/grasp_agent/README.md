@@ -41,7 +41,7 @@ server 會回傳 JSON，重點欄位包含：
 - `tool/vision/sam.py`: get_item_info / grasp 共用 SAM helper
 - `tool/grasp/graspgen.py`: get_item_info / grasp 共用 GraspGen helper
 
-大型 vendor 目錄目前仍沿用現有 `get_item_info_agent/vendor/` 內容；`grasp_agent` 會優先讀 config / env 指定路徑，若 `graspgen_root` 不存在，會 fallback 到 `get_item_info_agent/vendor/graspgen_runtime`。
+GraspGen runtime 目前以 `get_item_info_agent/vendor/graspgen_runtime` 為 canonical source；多個 agents 共用同一套 helper 與 root resolver，只有顯式設定有效外部路徑時才會覆蓋。
 
 ## Config
 

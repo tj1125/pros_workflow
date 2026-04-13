@@ -23,6 +23,12 @@ from get_item_info_agent_no_sam3d.pipeline.steps.topic_input import (
     parse_world_position_data,
 )
 from get_item_info_agent_no_sam3d.pipeline.types import BoundingBox, TopicObservation, WorldPositionObject
+from tool.grasp.graspgen import (
+    filter_by_approach_direction,
+    filter_grasps_by_collision,
+    run_graspgen_point_cloud_inference,
+    transform_points,
+)
 from tool.runtime.memory import release_cuda_memory
 
 LABEL_COLORS = {
@@ -32,24 +38,6 @@ LABEL_COLORS = {
 }
 HEIGHT_WEIGHT_RATIO_ANCHORS = np.array([0.70, 1.03, 2.28], dtype=np.float32)
 HEIGHT_WEIGHT_VALUE_ANCHORS = np.array([0.65, 0.80, 0.90], dtype=np.float32)
-
-
-def _filter_grasps_by_approach_direction(
-    grasps: np.ndarray,
-    scores: np.ndarray,
-    max_angle_to_y: float = 60.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Drop grasps whose approach axis is too aligned with world +/-Y."""
-    target_pos_y = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-    target_neg_y = np.array([0.0, -1.0, 0.0], dtype=np.float32)
-    approach = np.asarray(grasps[:, :3, 2], dtype=np.float32)
-    norms = np.linalg.norm(approach, axis=1, keepdims=True)
-    norms = np.where(norms <= 1e-8, 1.0, norms)
-    approach = approach / norms
-    cos_threshold = float(np.cos(np.deg2rad(max_angle_to_y)))
-    keep_mask = (approach @ target_pos_y < cos_threshold) & (approach @ target_neg_y < cos_threshold)
-    return grasps[keep_mask], scores[keep_mask]
-
 
 def _save_visualization_npz(
     center_world: np.ndarray,
@@ -796,161 +784,6 @@ def _point_colors(label: str, count: int) -> np.ndarray:
     return np.repeat(color.reshape(1, 3), count, axis=0)
 
 
-def _run_grasp_inference(
-    object_pc: np.ndarray,
-    object_colors: np.ndarray | None,
-    gripper_config: Path,
-    num_grasps: int,
-    topk: int,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Any]:
-    import torch
-    import trimesh.transformations as tra  # type: ignore
-
-    from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg  # type: ignore
-    from grasp_gen.utils.meshcat_utils import get_color_from_score  # type: ignore
-    from grasp_gen.utils.point_cloud_utils import (  # type: ignore
-        point_cloud_outlier_removal,
-        point_cloud_outlier_removal_with_color,
-    )
-
-    sampler = None
-    grasps_t = None
-    conf_t = None
-    try:
-        filtered_colors = None
-        if object_colors is not None:
-            pc_t, _removed_t, color_t, _ = point_cloud_outlier_removal_with_color(
-                torch.from_numpy(np.asarray(object_pc, dtype=np.float32)),
-                torch.from_numpy(np.asarray(object_colors, dtype=np.uint8)),
-            )
-            filtered_colors = color_t.numpy()
-        else:
-            pc_t, _removed_t = point_cloud_outlier_removal(torch.from_numpy(np.asarray(object_pc, dtype=np.float32)))
-        pc_filtered = pc_t.numpy()
-        if len(pc_filtered) == 0:
-            raise RuntimeError("Object PC empty after outlier removal.")
-
-        cfg = load_grasp_cfg(str(gripper_config))
-        sampler = GraspGenSampler(cfg)
-        grasps_t, conf_t = GraspGenSampler.run_inference(
-            pc_filtered,
-            sampler,
-            grasp_threshold=-1.0,
-            num_grasps=num_grasps,
-            topk_num_grasps=topk,
-        )
-        if len(grasps_t) == 0:
-            raise RuntimeError("GraspGen returned no grasps.")
-
-        grasps = grasps_t.cpu().numpy()
-        conf = conf_t.cpu().numpy()
-        grasps[:, 3, 3] = 1.0
-        t_sub = tra.translation_matrix(-pc_filtered.mean(axis=0))
-        pc_c = tra.transform_points(pc_filtered, t_sub)
-        grasps_c = np.array([t_sub @ g for g in grasps])
-        scores = get_color_from_score(conf, use_255_scale=True)
-        return pc_c, filtered_colors, grasps_c, conf, scores, t_sub, cfg
-    finally:
-        if grasps_t is not None:
-            del grasps_t
-        if conf_t is not None:
-            del conf_t
-        if sampler is not None:
-            model = getattr(sampler, "model", None)
-            if model is not None:
-                try:
-                    model.cpu()
-                except Exception:
-                    pass
-                del model
-            del sampler
-        release_cuda_memory()
-
-
-def _run_grasp_inference_no_filter(
-    object_pc: np.ndarray,
-    object_colors: np.ndarray | None,
-    gripper_config: Path,
-    num_grasps: int,
-    topk: int,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Any]:
-    import trimesh.transformations as tra  # type: ignore
-
-    from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg  # type: ignore
-    from grasp_gen.utils.meshcat_utils import get_color_from_score  # type: ignore
-
-    sampler = None
-    grasps_t = None
-    conf_t = None
-    try:
-        pc_filtered = np.asarray(object_pc, dtype=np.float32)
-        filtered_colors = None if object_colors is None else np.asarray(object_colors, dtype=np.uint8)
-        cfg = load_grasp_cfg(str(gripper_config))
-        sampler = GraspGenSampler(cfg)
-        grasps_t, conf_t = GraspGenSampler.run_inference(
-            pc_filtered,
-            sampler,
-            grasp_threshold=-1.0,
-            num_grasps=num_grasps,
-            topk_num_grasps=topk,
-            remove_outliers=False,
-        )
-        if len(grasps_t) == 0:
-            raise RuntimeError("GraspGen returned no grasps.")
-        grasps = grasps_t.cpu().numpy()
-        conf = conf_t.cpu().numpy()
-        grasps[:, 3, 3] = 1.0
-        t_sub = tra.translation_matrix(-pc_filtered.mean(axis=0))
-        pc_c = tra.transform_points(pc_filtered, t_sub)
-        grasps_c = np.array([t_sub @ g for g in grasps])
-        scores = get_color_from_score(conf, use_255_scale=True)
-        return pc_c, filtered_colors, grasps_c, conf, scores, t_sub, cfg
-    finally:
-        if grasps_t is not None:
-            del grasps_t
-        if conf_t is not None:
-            del conf_t
-        if sampler is not None:
-            model = getattr(sampler, "model", None)
-            if model is not None:
-                try:
-                    model.cpu()
-                except Exception:
-                    pass
-                del model
-            del sampler
-        release_cuda_memory()
-
-
-def _filter_collisions(
-    scene_pc: np.ndarray,
-    grasps_c: np.ndarray,
-    t_center: np.ndarray,
-    cfg: Any,
-    collision_threshold: float = 0.02,
-    max_scene_pts: int = 8192,
-) -> tuple[np.ndarray, np.ndarray]:
-    import trimesh.transformations as tra  # type: ignore
-
-    from grasp_gen.robot import get_gripper_info  # type: ignore
-    from grasp_gen.utils.point_cloud_utils import filter_colliding_grasps  # type: ignore
-
-    scene_c = tra.transform_points(np.asarray(scene_pc, dtype=np.float32), t_center)
-    if len(scene_c) > max_scene_pts:
-        idx = np.random.choice(len(scene_c), max_scene_pts, replace=False)
-        scene_ds = scene_c[idx]
-    else:
-        scene_ds = scene_c
-    gripper_info = get_gripper_info(cfg.data.gripper_name)
-    mask = filter_colliding_grasps(
-        scene_pc=scene_ds,
-        grasp_poses=grasps_c,
-        gripper_collision_mesh=gripper_info.collision_mesh,
-        collision_threshold=collision_threshold,
-    )
-    return mask, scene_c
-
-
 def _object_key(obj: WorldPositionObject) -> str:
     return f"{obj.topic_key}:{obj.label}:{obj.item_id}"
 
@@ -1111,52 +944,67 @@ def run_pipeline(
     )
 
     grasp_stage_start = time.perf_counter()
+    gripper_config = Path(cfg["models"]["gripper_config"])
     used_outlier_filter = True
     try:
-        pc_c, obj_colors_c, grasps_c, confidences, _scores, t_center, grasp_cfg = _run_grasp_inference(
+        raw_inference = run_graspgen_point_cloud_inference(
             object_points,
-            object_colors,
-            Path(cfg["models"]["gripper_config"]),
+            gripper_config,
+            grasp_threshold=-1.0,
             num_grasps=int(cfg["runtime"]["num_grasps"]),
-            topk=int(cfg["runtime"]["topk_num_grasps"]),
+            topk_num_grasps=int(cfg["runtime"]["topk_num_grasps"]),
+            point_colors=object_colors,
+            remove_outliers=True,
+            center_object=True,
         )
     except RuntimeError as exc:
         if "empty after outlier removal" not in str(exc).lower():
             raise
         used_outlier_filter = False
-        pc_c, obj_colors_c, grasps_c, confidences, _scores, t_center, grasp_cfg = _run_grasp_inference_no_filter(
+        raw_inference = run_graspgen_point_cloud_inference(
             object_points,
-            object_colors,
-            Path(cfg["models"]["gripper_config"]),
+            gripper_config,
+            grasp_threshold=-1.0,
             num_grasps=int(cfg["runtime"]["num_grasps"]),
-            topk=int(cfg["runtime"]["topk_num_grasps"]),
+            topk_num_grasps=int(cfg["runtime"]["topk_num_grasps"]),
+            point_colors=object_colors,
+            remove_outliers=False,
+            center_object=True,
         )
     graspgen_inference_s = float(time.perf_counter() - grasp_stage_start)
 
+    pc_c = raw_inference.object_points_local
+    obj_colors_c = raw_inference.object_colors_local
+    grasps_c = raw_inference.grasps_local
+    confidences = raw_inference.confidences
+    t_center = raw_inference.object_to_local_transform
+    grasp_cfg = raw_inference.cfg
     num_total_grasps = int(len(grasps_c))
     approach_filter_start = time.perf_counter()
-    grasps_c, confidences = _filter_grasps_by_approach_direction(grasps_c, confidences)
+    grasps_c, confidences = filter_by_approach_direction(grasps_c, confidences)
     approach_filter_s = float(time.perf_counter() - approach_filter_start)
     if len(grasps_c) == 0:
         raise RuntimeError("No grasps remain after approach filtering.")
 
-    object_pc_raw_c = tra.transform_points(object_points, t_center)
+    object_pc_raw_c = transform_points(object_points, t_center)
     if len(scene_pc_world) > 0:
+        scene_raw_c = transform_points(scene_pc_world, t_center)
         collision_start = time.perf_counter()
-        collision_free_mask, scene_c = _filter_collisions(
-            scene_pc_world,
+        collision_result = filter_grasps_by_collision(
             grasps_c,
-            t_center,
+            scene_raw_c,
             grasp_cfg,
             collision_threshold=float(cfg["runtime"].get("collision_threshold", 0.02)),
-            max_scene_pts=int(cfg["runtime"].get("max_collision_scene_points", 8192)),
+            max_scene_points=int(cfg["runtime"].get("max_collision_scene_points", 8192)),
         )
         collision_filter_s = float(time.perf_counter() - collision_start)
-        scene_raw_c = tra.transform_points(scene_pc_world, t_center)
+        collision_free_mask = collision_result.collision_free_mask
+        scene_c = collision_result.scene_points_local
     else:
         collision_free_mask = np.ones(len(grasps_c), dtype=bool)
         scene_c = np.zeros((0, 3), dtype=np.float32)
         scene_raw_c = np.zeros((0, 3), dtype=np.float32)
+        collision_result = None
         collision_filter_s = 0.0
 
     all_grasps = np.asarray(grasps_c, dtype=np.float32).copy()
@@ -1172,7 +1020,11 @@ def run_pipeline(
         "num_collision_free_grasps": int(len(grasps)),
         "num_grasps_after_approach_filter": int(len(grasps_c)),
         "num_grasps_after_collision_filter": int(len(grasps)),
-        "num_scene_points_used_for_collision": int(min(len(scene_pc_world), int(cfg["runtime"].get("max_collision_scene_points", 8192)))),
+        "num_scene_points_used_for_collision": (
+            int(collision_result.scene_points_used)
+            if collision_result is not None
+            else 0
+        ),
         "surface_sample_s": 0.0,
         "graspgen_model_init_s": 0.0,
         "graspgen_inference_s": graspgen_inference_s,

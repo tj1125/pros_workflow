@@ -7,7 +7,7 @@ from typing import Any
 import torch
 import yaml
 
-from grasp_agent.pipeline.constants import SERVER_ROOT
+from tool.grasp.graspgen import resolve_graspgen_runtime_root
 
 
 REQUIRED_SECTIONS = ("camera", "models", "runtime")
@@ -85,10 +85,7 @@ def load_runtime_config(path: Path) -> tuple[dict[str, Any], Path]:
     ):
         cfg[section][key] = resolve_path(cfg[section][key], base_dir)
 
-    graspgen_root = Path(cfg["models"]["graspgen_root"])
-    if not graspgen_root.exists():
-        fallback = (SERVER_ROOT / "get_item_info_agent" / "vendor" / "graspgen_runtime").resolve()
-        cfg["models"]["graspgen_root"] = fallback
+    cfg["models"]["graspgen_root"] = resolve_graspgen_runtime_root(cfg["models"]["graspgen_root"])
 
     return cfg, cfg_path
 
