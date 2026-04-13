@@ -1,0 +1,348 @@
+可以，那就直接把 OMPL 放進規劃鏈。
+如果你已經決定不要先做簡化版，那實作計劃就要改成：
+
+PyBullet 不只做單點 IK 驗證，而是對 candidate grasp 直接做「IK + OMPL 路徑規劃 + 碰撞檢查」的完整可行性評估。
+
+這樣比較重，但邏輯很完整。
+
+下面我幫你整理成 直接接 OMPL 的精簡實作版。
+
+⸻
+
+實作計劃：5 cm Voxel + PyBullet + OMPL 手臂避障評估
+
+一、目標
+
+建立一套流程，在固定底盤位置下，利用深度圖重建局部障礙環境，並在 PyBullet 中結合 OMPL，評估：
+	•	candidate grasp pose 是否有 IK 解
+	•	手臂是否能規劃出 collision-free 路徑
+	•	當前 base pose 是否適合抓取
+
+⸻
+
+二、系統架構
+
+1. Unity
+
+提供：
+	•	depth image
+	•	camera intrinsics
+	•	/amcl_pose
+	•	target pose
+	•	必要時提供 candidate grasp pose 或目標物重心
+
+2. 重建模組
+
+負責：
+	•	depth → point cloud
+	•	用 /amcl_pose 推算 camera pose
+	•	點雲轉到 base/world frame
+	•	裁切手臂操作區
+	•	voxelization（5 cm）
+	•	輸出 occupied voxel centers
+
+3. PyBullet + OMPL
+
+負責：
+	•	載入手臂模型
+	•	建立 voxel 障礙物
+	•	對 candidate grasp 做 IK
+	•	以 IK 解作為 goal state
+	•	用 OMPL 規劃 collision-free arm path
+	•	回傳 grasp feasibility
+
+4. Decision / RL
+
+使用 PyBullet+OMPL 回傳的可行性結果，決定底盤下一步站位調整。
+
+⸻
+
+三、核心實作流程
+
+Step 1：Depth → Point Cloud
+
+由深度圖與內參回推 3D 點雲，得到 camera frame 下的點。
+
+Step 2：座標轉換
+
+你現在的做法是用 /amcl_pose 推算 camera pose，所以這裡要先明確定義：
+	•	camera 相對 robot base 的固定外參
+	•	/amcl_pose 對應 base 在 world 的 pose
+
+轉換流程：
+
+camera frame → base frame → world frame
+
+Step 3：裁切局部操作區域
+
+只保留手臂可能碰到的區域，例如：
+	•	前方 0.2 ~ 1.2 m
+	•	左右 ±0.8 m
+	•	高度 0 ~ 1.2 m
+
+Step 4：5 cm Voxelization
+
+將點雲離散化成 5 cm voxel，保留 occupied cells，並轉成 voxel centers。
+
+Step 5：在 PyBullet 建立障礙物
+
+每個 occupied voxel 建立一個 5 cm box collision object。
+後續若數量太多，再做 merge 或 box fitting。
+
+⸻
+
+四、手臂評估流程
+
+Step 6：載入手臂模型
+
+在 PyBullet 中載入 URDF，並確認手臂 base 與實際底盤位置對齊。
+
+Step 7：Candidate Grasp 輸入
+
+每個 grasp pose 至少包含：
+	•	position
+	•	orientation
+
+來源可為：
+	•	既有 grasp generator
+	•	手動建立測試 pose
+
+Step 8：IK 求解
+
+對每個 candidate grasp：
+	1.	求 IK
+	2.	檢查 joint limit
+	3.	檢查末端誤差
+
+若 IK 失敗，該 grasp 直接淘汰。
+
+⸻
+
+五、OMPL 路徑規劃
+
+Step 9：定義規劃問題
+
+對每個 IK 成功的 candidate grasp，建立 OMPL 規劃問題：
+
+Start state
+
+目前手臂關節角
+
+Goal state
+
+IK 求出的 grasp joint configuration
+
+State space
+
+手臂各關節角空間
+
+State validity checker
+
+每個 state 都要檢查：
+	•	是否超過 joint limits
+	•	手臂是否和 voxel 障礙物碰撞
+	•	必要時檢查 self-collision
+
+⸻
+
+Step 10：規劃器選擇
+
+第一版建議直接用 OMPL 裡常見規劃器：
+	•	RRTConnect：通常最實用，適合先做
+	•	RRTstar：太慢，先不用
+	•	PRM：除非你之後要重複查很多次，不然先不用
+
+所以第一版就先：
+
+OMPL + RRTConnect
+
+⸻
+
+Step 11：碰撞檢查方式
+
+OMPL 在擴展樹時，每個 sampled state 都要丟進 PyBullet 驗證：
+
+流程概念：
+	1.	將關節 state 設到手臂
+	2.	p.performCollisionDetection()
+	3.	檢查：
+	•	arm vs voxel obstacles
+	•	optional: self-collision
+	4.	若碰撞則該 state 無效
+
+⸻
+
+Step 12：規劃結果
+
+對每個 candidate grasp，輸出：
+	•	ik_success
+	•	path_found
+	•	path_length
+	•	min_clearance
+	•	planning_time
+	•	goal_error
+
+⸻
+
+六、Feasibility Score 設計
+
+每個 base pose 可彙整成下列特徵：
+	•	ik_success_count
+	•	path_found_count
+	•	path_found_ratio
+	•	best_path_length
+	•	best_clearance
+	•	best_grasp_score
+	•	avg_planning_time
+
+可定義總分，例如：
+
+Score = w_1 \cdot PathFoundRatio + w_2 \cdot BestGraspScore + w_3 \cdot Clearance - w_4 \cdot PathLength
+
+重點是：
+這裡要以「有沒有可行路徑」為主，而不只是 IK 有沒有解。
+
+⸻
+
+七、模組拆分
+
+1. depth_to_pointcloud.py
+	•	depth image 轉 3D points
+
+2. transform_points.py
+	•	用 /amcl_pose 與 camera 相對 base 關係，將點雲轉到 base/world frame
+
+3. voxelize_points.py
+	•	局部裁切
+	•	5 cm voxelization
+	•	輸出 voxel centers
+
+4. pybullet_obstacles.py
+	•	建立 / 清除 / 更新 voxel collision objects
+
+5. ik_solver.py
+	•	對 grasp pose 求 IK
+	•	檢查 joint limits 與末端誤差
+
+6. ompl_planner.py
+	•	建立 state space
+	•	設定 start / goal
+	•	呼叫 RRTConnect
+	•	與 PyBullet collision checker 串接
+
+7. arm_feasibility_evaluator.py
+	•	整合 IK + OMPL
+	•	對多個 candidate grasps 回傳可行性結果
+
+8. base_pose_scorer.py
+	•	將多個 grasp 的結果整合成 base pose score
+
+⸻
+
+八、開發順序
+
+Step 1
+
+先手動建立 box 障礙物
+目標：驗證手臂 IK + OMPL 是否能規劃避障路徑
+
+Step 2
+
+接入 depth → point cloud
+目標：確認點雲與座標轉換正確
+
+Step 3
+
+加入 5 cm voxelization
+目標：讓真實重建障礙物進 PyBullet
+
+Step 4
+
+對固定 base pose 測多個 candidate grasps
+目標：輸出 path-found / path-not-found 結果
+
+Step 5
+
+將多 grasp 結果彙整成 base pose feasibility score
+目標：可比較不同 base pose 優劣
+
+Step 6
+
+最後再接 RL / 決策模組
+目標：讓底盤學會停到最利於手臂規劃路徑的位置
+
+⸻
+
+九、關鍵實作注意事項
+
+1. OMPL 前還是要先做 IK
+
+OMPL 不直接規劃 task-space grasp pose，
+你通常還是要先把 grasp pose 轉成一組 joint goal，再交給 OMPL。
+
+所以流程不是：
+
+grasp pose → 直接 OMPL
+
+而是：
+
+grasp pose → IK goal joint state → OMPL path planning
+
+
+⸻
+
+2. voxel 太多會拖慢 OMPL
+
+因為 OMPL 會頻繁做 state validity check，
+而每次 validity check 都要進 PyBullet 做碰撞檢查。
+
+所以你一定要控制：
+	•	局部操作區大小
+	•	voxel 數量
+	•	是否合併鄰近 voxel
+
+⸻
+
+3. 5 cm voxel 的角色是 coarse obstacle model
+
+它適合：
+	•	桌子
+	•	箱子
+	•	大型遮擋物
+	•	手臂路徑的大方向避障
+
+但對 very fine clearance 不夠準。
+所以第一版先把它當粗碰撞模型即可。
+
+⸻
+
+4. 規劃失敗不一定代表真的不可行
+
+可能原因有：
+	•	IK 解不好
+	•	規劃時間太短
+	•	voxel 太粗導致空間被膨脹
+	•	planner 參數不合適
+
+所以你之後可把 planning timeout 與 num_attempts 納入設計。
+
+⸻
+
+十、MVP 成功條件
+
+系統能在固定底盤位置下：
+	1.	從 depth image 建立 5 cm voxel 障礙物
+	2.	將 voxel 障礙物載入 PyBullet
+	3.	對 5~10 個 candidate grasp pose 做 IK
+	4.	對 IK 成功的 grasp 用 OMPL 規劃手臂路徑
+	5.	判斷哪些 grasp 有 collision-free path
+	6.	輸出一個 base pose feasibility score
+
+⸻
+
+十一、給老師的精簡說法
+
+本方法將 PyBullet 結合 OMPL 作為手臂操作可行性評估器。
+系統先由深度圖重建手臂操作區域內的 5 cm voxel 障礙環境，並匯入 PyBullet。
+接著在固定底盤位置下，對候選 grasp pose 先做 IK，再以 OMPL 規劃關節空間路徑並進行碰撞檢查。
+最後根據可行 grasp 數量與規劃結果，評估當前 base pose 是否有利於安全抓取，作為底盤站位調整的依據。

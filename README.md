@@ -87,6 +87,26 @@ uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 ./enter_docker.sh --rebuild
 ```
 
+如果你要在 Linux 桌面主機上開 PyBullet GUI 或其他 X11 視窗，請用獨立入口：
+
+```bash
+./enter_docker_x11.sh
+
+# Dockerfile 有改時強制重建 image
+./enter_docker_x11.sh --rebuild
+```
+
+`enter_docker_x11.sh` 會做這些事：
+
+- 檢查主機是 Linux 且有 `DISPLAY`
+- 檢查 `/tmp/.X11-unix` 是否存在
+- 以本地 `vlm-rl-env:latest` 為底，建立一個含 `OMPL Python bindings` 的專用 X11 image
+- 額外補齊 `Pillow` / `PyYAML`，讓 Camera_Car 深度 PNG 與 YAML 內參可直接在容器內解析
+- 透過 `xhost +SI:localuser:root` 暫時授權本機 root container 使用 X11
+- 把 `DISPLAY` 和 X11 socket 傳進容器
+
+離開容器後，它會自動收回剛剛加的 X11 權限。
+
 離開 `enter_docker.sh` 後，dev container 的 `/workspaces/build`、`/workspaces/install`、`/workspaces/log` 會自動清空；下次重新進容器時請重新執行 `r`。
 
 容器內的 ROS 工作流：

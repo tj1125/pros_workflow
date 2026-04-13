@@ -1,0 +1,11 @@
+# Recommended Python: 3.10.x
+
+numpy>=1.23
+torch>=2.2,<3.0
+gymnasium>=0.29
+stable-baselines3>=2.3
+
+transformers>=4.40
+ollama>=0.2.0
+
+tensorboard

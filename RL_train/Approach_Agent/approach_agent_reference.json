@@ -1,0 +1,147 @@
+{
+  "name": "Approach_Agent",
+  "root": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent",
+  "run": {
+    "main": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.run_camera_car_voxel_ompl --config configs/camera_car_voxel_ompl.yaml",
+    "main_gui": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.run_camera_car_voxel_ompl --config configs/camera_car_voxel_ompl.yaml --gui --hold-seconds 120",
+    "view_snapshot_pybullet": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.visualize_voxel_snapshot outputs/camera_car_voxel_ompl/<timestamp>/voxel_snapshot.npz --report-json outputs/camera_car_voxel_ompl/<timestamp>/camera_car_voxel_ompl_report.json --play-path",
+    "view_snapshot_meshcat": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.visualize_voxel_snapshot_meshcat outputs/camera_car_voxel_ompl/<timestamp>/voxel_snapshot.npz",
+    "ompl_test": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.test_pybullet_ompl --config configs/pybullet_ompl.yaml",
+    "smoke_test": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.test_pybullet_smoke --config configs/pybullet_smoke.yaml"
+  },
+  "configs": {
+    "main": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/configs/camera_car_voxel_ompl.yaml",
+    "ompl": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/configs/pybullet_ompl.yaml",
+    "smoke": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/configs/pybullet_smoke.yaml"
+  },
+  "current_pipeline": [
+    "讀 ROS depth 或 debug NPZ",
+    "深度過濾: min_depth_m 到 max_depth_m",
+    "深度圖可選上下翻轉",
+    "depth -> camera point cloud",
+    "camera [x,y,z] -> pybullet [z,x,-y]",
+    "以 gripper_midpoint_camera_xyz 對齊到 ee_anchor_pybullet_xyz",
+    "voxelize 成 0.05 m occupied cells",
+    "建立 PyBullet voxel obstacles",
+    "讀 target grasp pose",
+    "IK",
+    "OMPL RRTConnect",
+    "輸出 report + voxel snapshot"
+  ],
+  "coordinate_rule": {
+    "camera_frame": {
+      "axes": "[x, y, z]",
+      "meaning": {
+        "x": "right",
+        "y": "down",
+        "z": "forward"
+      }
+    },
+    "camera_to_pybullet": "[x, y, z] -> [z, x, -y]",
+    "target_approach_axis": "target local +X"
+  },
+  "active_settings": {
+    "min_depth_m": 0.2,
+    "max_depth_m": 1.5,
+    "pixel_stride": 1,
+    "crop_to_workspace_camera": false,
+    "voxel_size_m": 0.05,
+    "max_voxel_obstacles": 0,
+    "gripper_midpoint_camera_xyz": [
+      0.0,
+      0.04,
+      0.11
+    ]
+  },
+  "target_pose": {
+    "debug_npz_grasp_key": "best_grasp_camera",
+    "supports": [
+      "4x4 pose",
+      "3D position"
+    ],
+    "used_by": [
+      "IK target position",
+      "IK target orientation",
+      "target pose visualization",
+      "pose error metrics"
+    ]
+  },
+  "metrics": [
+    "ee_position_error_m",
+    "ee_orientation_error_deg",
+    "approach_axis_offset_m",
+    "lateral_offset_m",
+    "closest_goal_distance_m",
+    "min_distance_along_path_m",
+    "path_length_joint_space",
+    "planning_time_sec",
+    "path_compute_time_sec",
+    "path_compute_time_ms"
+  ],
+  "main_files": {
+    "pipeline": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/camera_car_voxel_ompl.py",
+    "planner": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/pybullet_ompl.py",
+    "depth": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/geometry/depth_backprojection.py",
+    "voxel": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/geometry/voxelization.py",
+    "viewer_pybullet": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/scripts/visualize_voxel_snapshot.py",
+    "viewer_meshcat": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/scripts/visualize_voxel_snapshot_meshcat.py"
+  },
+  "outputs": {
+    "root": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/outputs/camera_car_voxel_ompl",
+    "per_run": [
+      "capture_rgb.jpg",
+      "capture_depth.png",
+      "voxel_snapshot.npz",
+      "camera_car_voxel_ompl_report.json",
+      "planner_debug.ppm",
+      "planner_debug_topdown.ppm",
+      "planner_debug_side.ppm",
+      "planner_frames/frame_*.ppm"
+    ],
+    "voxel_snapshot_keys": [
+      "points_camera",
+      "points_camera_selected",
+      "points_camera_selected_pybullet_basis",
+      "points_pybullet",
+      "voxel_centers_pybullet",
+      "gripper_midpoint_camera_xyz",
+      "gripper_midpoint_pybullet_xyz",
+      "ee_anchor_pybullet_xyz",
+      "scene_translation_xyz",
+      "camera_to_pybullet_rotation_matrix",
+      "target_position_camera_xyz",
+      "target_position_pybullet_xyz",
+      "target_rotation_camera_matrix",
+      "target_rotation_pybullet_matrix"
+    ]
+  },
+  "visualization": {
+    "pybullet": [
+      "robot",
+      "voxel boxes",
+      "debug points",
+      "target pose frame",
+      "ee anchor frame",
+      "optional path replay"
+    ],
+    "meshcat": [
+      "scene/voxels",
+      "optional scene/points",
+      "frames/world",
+      "frames/camera",
+      "frames/ee_anchor",
+      "frames/target_pose"
+    ]
+  },
+  "next_goal": {
+    "name": "base pose sampling evaluator",
+    "plan": [
+      "sample base on Unity x-z plane",
+      "fix y = 0.51",
+      "heading toward target ±10 deg",
+      "IK ranking first",
+      "OMPL on top candidates",
+      "output best base pose"
+    ]
+  }
+}
