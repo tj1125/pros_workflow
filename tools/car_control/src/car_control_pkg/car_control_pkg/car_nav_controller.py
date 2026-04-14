@@ -21,6 +21,9 @@ class NavigationController:
         self.align_stop_yaw_tolerance_rad = float(
             self.car_control_node.get_parameter("align_stop_yaw_tolerance_rad").value
         )
+        self.slow_approach_distance_m = float(
+            self.car_control_node.get_parameter("slow_approach_distance_m").value
+        )
         self.reset_index()
 
     def _get_context(self):
@@ -47,6 +50,7 @@ class NavigationController:
 
     def reset_index(self):
         self.index = 0
+        self.final_alignment_active = False
 
     def manual_nav(self):
         result = self._get_context()
@@ -55,7 +59,15 @@ class NavigationController:
 
         car_position, car_orientation, goal_position, goal_orientation = result
         target_distance = cal_distance(car_position, goal_position)
+        if self.final_alignment_active:
+            return self._run_final_heading_alignment(
+                car_orientation=car_orientation,
+                goal_orientation=goal_orientation,
+                target_distance=target_distance,
+            )
+
         if target_distance <= self.approach_stop_xy_tolerance_m:
+            self.final_alignment_active = True
             return self._run_final_heading_alignment(
                 car_orientation=car_orientation,
                 goal_orientation=goal_orientation,
@@ -79,7 +91,10 @@ class NavigationController:
             )
 
         diff_angle = calculate_diff_angle(car_position, car_orientation, target_point)
-        action_key = self.choose_path_action(diff_angle)
+        action_key = self.choose_path_action(
+            diff_angle,
+            force_slow=target_distance <= self.slow_approach_distance_m,
+        )
         self.car_control_node.publish_control(action_key)
         return None
 
@@ -92,6 +107,7 @@ class NavigationController:
     ):
         heading_error = calculate_goal_heading_error(car_orientation, goal_orientation)
         if abs(heading_error) <= self.align_stop_yaw_tolerance_rad:
+            self.final_alignment_active = False
             self.car_control_node.publish_control("STOP")
             return NavGoal.Result(
                 success=True,
@@ -107,12 +123,29 @@ class NavigationController:
         return None
 
     @staticmethod
-    def choose_path_action(diff_angle):
-        if -10 < diff_angle < 10:
+    def choose_path_action(diff_angle, force_slow=False):
+        abs_diff = abs(diff_angle)
+
+        if force_slow:
+            if abs_diff < 10:
+                return "FORWARD_SLOW"
+            if -180 < diff_angle < 0:
+                return "CLOCKWISE_ROTATION_SLOW"
+            if 0 < diff_angle < 180:
+                return "COUNTERCLOCKWISE_ROTATION_SLOW"
+            return "STOP"
+
+        if abs_diff < 4:
             return "FORWARD"
-        if -180 < diff_angle <= -10:
+        if abs_diff < 10:
+            return "FORWARD_SLOW"
+        if -25 < diff_angle <= -10:
+            return "CLOCKWISE_ROTATION_MEDIAN"
+        if 10 <= diff_angle < 25:
+            return "COUNTERCLOCKWISE_ROTATION_MEDIAN"
+        if -180 < diff_angle <= -25:
             return "CLOCKWISE_ROTATION"
-        if 10 <= diff_angle < 180:
+        if 25 <= diff_angle < 180:
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
 

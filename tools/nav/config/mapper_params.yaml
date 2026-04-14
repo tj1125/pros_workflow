@@ -1,8 +1,9 @@
 car_control_node:
   ros__parameters:
     # Shared final-goal tolerances used by car_control and commander/nav_move_runner.
-    approach_stop_xy_tolerance_m: 0.15
-    align_stop_yaw_tolerance_rad: 0.2
+    slow_approach_distance_m: 1.0
+    approach_stop_xy_tolerance_m: 0.1
+    align_stop_yaw_tolerance_rad: 0.1
 
 amcl:
   ros__parameters:
@@ -147,8 +148,8 @@ controller_server:
       # Keep Nav2's own goal checker aligned with the shared final-goal tolerances.
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.2
+      xy_goal_tolerance: 0.1
+      yaw_goal_tolerance: 0.1
 
     # DWB parameters
     FollowPath:
@@ -187,7 +188,7 @@ controller_server:
       angular_granularity: 0.025
       transform_tolerance: 0.5
       # Keep the rotate-to-goal handoff window aligned with the shared xy tolerance.
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.1
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True

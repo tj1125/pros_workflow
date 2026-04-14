@@ -1,13 +1,17 @@
+import json
+
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from nav_msgs.msg import Path
 from action_interface.action import NavGoal, ArmGoal
+from std_msgs.msg import String
 from car_control_pkg.car_action_server import NavigationActionServer
 from car_control_pkg.car_control_common import BaseCarControlNode
 from car_control_pkg.car_manual import ManualControlNode
 from car_control_pkg.nav2_utils import cal_distance, calculate_goal_heading_error
+
 
 class AutoNavStarter(Node):
     def __init__(self, car_control_node):
@@ -15,6 +19,7 @@ class AutoNavStarter(Node):
         self.car_control_node = car_control_node
         self.nav_action_client = ActionClient(self, NavGoal, 'nav_action_server')
         self.arm_action_client = ActionClient(self, ArmGoal, 'arm_action_server')
+        self.nav_result_pub = self.create_publisher(String, "/auto_nav/result", 10)
         self.approach_stop_xy_tolerance_m = float(
             self.car_control_node.get_parameter("approach_stop_xy_tolerance_m").value
         )
@@ -52,6 +57,16 @@ class AutoNavStarter(Node):
             self.get_logger().info('收到新路徑，啟動全自動導航 (Auto Navigation)')
             self.start_auto_nav()
 
+    def _publish_nav_result(self, success: bool, message: str):
+        payload = {
+            "success": bool(success),
+            "message": str(message),
+            "source": "auto_nav_starter",
+        }
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.nav_result_pub.publish(msg)
+
     def start_auto_nav(self):
         self.navigating = True
         
@@ -63,6 +78,7 @@ class AutoNavStarter(Node):
             self.nav_send_goal_future.add_done_callback(self.nav_goal_response_callback)
         else:
             self.get_logger().warn('nav_action_server 不可用')
+            self._publish_nav_result(False, "nav_action_server unavailable")
             self.navigating = False
 
         # 確認並發送手臂目標
@@ -77,6 +93,7 @@ class AutoNavStarter(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().info('自動導航請求被拒絕')
+            self._publish_nav_result(False, "navigation goal rejected")
             self.navigating = False
             return
             
@@ -87,6 +104,7 @@ class AutoNavStarter(Node):
     def nav_get_result_callback(self, future):
         result = future.result().result
         self.get_logger().info(f'自動導航結束: {result.message}')
+        self._publish_nav_result(getattr(result, "success", False), result.message)
         self.navigating = False
 
 

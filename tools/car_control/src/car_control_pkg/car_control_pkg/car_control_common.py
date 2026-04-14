@@ -14,6 +14,7 @@ from car_control_pkg.utils import get_action_mapping, parse_control_signal
 
 _DEFAULT_APPROACH_STOP_XY_TOLERANCE_M = 0.10
 _DEFAULT_ALIGN_STOP_YAW_TOLERANCE_RAD = 0.017453292519943295
+_DEFAULT_SLOW_APPROACH_DISTANCE_M = 1.0
 
 
 def _nested_get(payload: dict, *keys, default=None):
@@ -79,6 +80,18 @@ def _shared_goal_tolerances() -> tuple[float, float]:
     return xy_tolerance, float(yaw_tolerance)
 
 
+def _shared_slow_approach_distance_m() -> float:
+    payload = _load_shared_mapper_params()
+    distance_m = _nested_get(
+        payload,
+        "car_control_node",
+        "ros__parameters",
+        "slow_approach_distance_m",
+        default=_DEFAULT_SLOW_APPROACH_DISTANCE_M,
+    )
+    return float(distance_m)
+
+
 class CarControlPublishers:
     """Class to manage common car control publishers and methods"""
 
@@ -136,8 +149,10 @@ class BaseCarControlNode(Node):
     def __init__(self, node_name, enable_nav_subscribers=False):
         super().__init__(node_name)
         xy_tolerance, yaw_tolerance = _shared_goal_tolerances()
+        slow_approach_distance_m = _shared_slow_approach_distance_m()
         self.declare_parameter("approach_stop_xy_tolerance_m", xy_tolerance)
         self.declare_parameter("align_stop_yaw_tolerance_rad", yaw_tolerance)
+        self.declare_parameter("slow_approach_distance_m", slow_approach_distance_m)
 
         # Create common publishers
         self.rear_wheel_pub, self.front_wheel_pub = (

@@ -180,9 +180,9 @@ def _load_grasp_debug_data(
     # npz -> pb: x->-y, y->-z, z->x
     # Meaning: pb_x = npz_z, pb_y = -npz_x, pb_z = -npz_y
     align_grasp_to_pb_ee = np.asarray([
-        [0.0, -1.0,  0.0],
-        [0.0,  0.0, -1.0],
-        [1.0,  0.0,  0.0]
+        [0.0, 1.0,  0.0],
+        [0.0, 0.0,  1.0],
+        [1.0, 0.0,  0.0]
     ], dtype=np.float64)
     target_rot_pb = (R_full @ best_grasp_camera[:3, :3]) @ align_grasp_to_pb_ee
 

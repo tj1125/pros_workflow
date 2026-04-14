@@ -72,10 +72,17 @@ class NavMoveRunner(Node):
             self._plan_callback,
             10,
         )
+        self.create_subscription(
+            String,
+            str(payload.get("nav_result_topic", "/auto_nav/result")),
+            self._auto_nav_result_callback,
+            10,
+        )
 
         self._last_amcl_pose_received_at: Optional[Time] = None
         self._last_amcl_pose_msg: Optional[PoseWithCovarianceStamped] = None
         self._last_plan_msg: Optional[Path] = None
+        self._last_auto_nav_result: Optional[Dict[str, Any]] = None
         self._plan_ready = False
 
     def _emit_event(self, event: str, detail: str = "") -> None:
@@ -100,6 +107,15 @@ class NavMoveRunner(Node):
         if msg.poses:
             self._last_plan_msg = msg
             self._plan_ready = True
+
+    def _auto_nav_result_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+        self._last_auto_nav_result = payload
 
     def _stamp_with_now(self, msg: PoseStamped | PoseWithCovarianceStamped) -> None:
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -164,6 +180,18 @@ class NavMoveRunner(Node):
 
         while time.monotonic() <= deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
+
+            if self._last_auto_nav_result is not None:
+                success = bool(self._last_auto_nav_result.get("success", False))
+                message = str(
+                    self._last_auto_nav_result.get("message")
+                    or ("navigation completed" if success else "navigation failed")
+                )
+                return {
+                    "success": success,
+                    "message": message,
+                }
+
             if self._last_amcl_pose_msg is None:
                 continue
 
@@ -240,6 +268,7 @@ class NavMoveRunner(Node):
         initial_pose_msg = self._make_initial_pose()
         self._plan_ready = False
         self._last_plan_msg = None
+        self._last_auto_nav_result = None
 
         self._emit_event(
             "plan_wait",
