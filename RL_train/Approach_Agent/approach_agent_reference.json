@@ -4,6 +4,7 @@
   "run": {
     "main": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.run_camera_car_voxel_ompl --config configs/camera_car_voxel_ompl.yaml",
     "main_gui": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.run_camera_car_voxel_ompl --config configs/camera_car_voxel_ompl.yaml --gui --hold-seconds 120",
+    "base_pose_sampling": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.run_base_pose_sampling --config configs/base_pose_sampling.yaml",
     "view_snapshot_pybullet": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.visualize_voxel_snapshot outputs/camera_car_voxel_ompl/<timestamp>/voxel_snapshot.npz --report-json outputs/camera_car_voxel_ompl/<timestamp>/camera_car_voxel_ompl_report.json --play-path",
     "view_snapshot_meshcat": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.visualize_voxel_snapshot_meshcat outputs/camera_car_voxel_ompl/<timestamp>/voxel_snapshot.npz",
     "ompl_test": "cd /home/scream/TJ/VLM_RL/RL_train/Approach_Agent && python -m scripts.test_pybullet_ompl --config configs/pybullet_ompl.yaml",
@@ -11,6 +12,7 @@
   },
   "configs": {
     "main": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/configs/camera_car_voxel_ompl.yaml",
+    "base_pose_sampling": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/configs/base_pose_sampling.yaml",
     "ompl": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/configs/pybullet_ompl.yaml",
     "smoke": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/configs/pybullet_smoke.yaml"
   },
@@ -81,6 +83,9 @@
   "main_files": {
     "pipeline": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/camera_car_voxel_ompl.py",
     "planner": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/pybullet_ompl.py",
+    "base_pose_sampler": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/base_pose_sampler.py",
+    "base_pose_evaluator": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/base_pose_evaluator.py",
+    "map_loader": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/geometry/map_loader.py",
     "depth": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/geometry/depth_backprojection.py",
     "voxel": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/src/geometry/voxelization.py",
     "viewer_pybullet": "/home/scream/TJ/VLM_RL/RL_train/Approach_Agent/scripts/visualize_voxel_snapshot.py",
@@ -133,15 +138,32 @@
       "frames/target_pose"
     ]
   },
-  "next_goal": {
-    "name": "base pose sampling evaluator",
-    "plan": [
-      "sample base on Unity x-z plane",
-      "fix y = 0.51",
-      "heading toward target ±10 deg",
-      "IK ranking first",
-      "OMPL on top candidates",
-      "output best base pose"
-    ]
+  "base_pose_sampling_pipeline": {
+    "status": "implemented",
+    "coordinate_conventions": {
+      "unity_world": "X=right Y=up Z=forward  floor=XZ  EE_height_y=0.51",
+      "pybullet": "X=cam_z Y=cam_x Z=up  gravity=-Z",
+      "unity_to_pybullet": "pb_x=uni_z  pb_y=uni_x  pb_z=uni_y",
+      "map_to_unity": "uni_x=map_x  uni_z=map_y"
+    },
+    "pipeline_stages": [
+      "load PGM map → free cells in Unity (x,z)",
+      "sample candidate bases: distance filter + approach-axis ±10° filter",
+      "IK ranking: one PyBullet DIRECT session, sort by ee_error_m ↑",
+      "OMPL evaluation (top-N IK-best): RRTConnect + collision check",
+      "render best base: 3 PPM views (default, top-down, side)",
+      "save JSON report + PPM renders to outputs/base_pose_sampling/<timestamp>/"
+    ],
+    "key_params": {
+      "target_unity_xyz": "grasp EE position in Unity world",
+      "target_approach_dir_unity_xz": "approach axis for heading filter (null = skip)",
+      "heading_tolerance_deg": 10,
+      "min_distance_m": 0.5,
+      "max_distance_m": 2.0,
+      "num_samples": 200,
+      "max_ik_candidates": 20,
+      "voxel_snapshot_npz_path": "optional: path to existing voxel_snapshot.npz",
+      "robot_*_at_snapshot": "robot Unity pose when snapshot was taken (for obstacle transform)"
+    }
   }
 }

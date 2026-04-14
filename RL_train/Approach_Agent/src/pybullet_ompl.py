@@ -251,12 +251,21 @@ def _load_obstacles(payload: dict[str, Any]) -> tuple[BoxObstacleSpec, ...]:
     return tuple(obstacles)
 
 
-def load_planning_config(config_path: Path) -> OmplPlanningConfig:
+def load_planning_config(config_path: Path, *, require_obstacles: bool = True) -> OmplPlanningConfig:
+    """Load an OMPL planning config from *config_path*.
+
+    Parameters
+    ----------
+    require_obstacles:
+        When *True* (default) raise if no obstacles are defined in the YAML.
+        Set to *False* when the caller supplies ``obstacle_specs_override`` at
+        runtime (e.g. the base-pose sampling evaluator).
+    """
     payload = _load_yaml(config_path)
     debug_render_output = payload.get("debug_render_output_path")
     animation_output_dir = payload.get("animation_output_dir")
     obstacles = _load_obstacles(payload)
-    if not obstacles:
+    if require_obstacles and not obstacles:
         raise ValueError("At least one manual box obstacle is required for OMPL planning.")
 
     return OmplPlanningConfig(
@@ -370,23 +379,38 @@ def _add_debug_axes(
     p: Any,
     origin_xyz: Sequence[float],
     *,
+    orientation_xyzw: Sequence[float] | None = None,
     axis_length: float = 0.12,
     axis_width: float = 2.0,
     life_time_sec: float = 0.0,
     label: str | None = None,
 ) -> None:
     origin = [float(v) for v in origin_xyz]
+    
+    rot_matrix = None
+    if orientation_xyzw is not None:
+        import math
+        rot_matrix = p.getMatrixFromQuaternion(orientation_xyzw)
+
     axis_vectors = (
         ([axis_length, 0.0, 0.0], [1.0, 0.15, 0.15]),
         ([0.0, axis_length, 0.0], [0.15, 1.0, 0.15]),
         ([0.0, 0.0, axis_length], [0.15, 0.35, 1.0]),
     )
     for delta_xyz, color_rgb in axis_vectors:
-        end_point = [
-            origin[0] + float(delta_xyz[0]),
-            origin[1] + float(delta_xyz[1]),
-            origin[2] + float(delta_xyz[2]),
-        ]
+        if rot_matrix:
+            # Apply 3x3 rotation
+            M = rot_matrix
+            dx = delta_xyz[0]*M[0] + delta_xyz[1]*M[1] + delta_xyz[2]*M[2]
+            dy = delta_xyz[0]*M[3] + delta_xyz[1]*M[4] + delta_xyz[2]*M[5]
+            dz = delta_xyz[0]*M[6] + delta_xyz[1]*M[7] + delta_xyz[2]*M[8]
+            end_point = [origin[0] + dx, origin[1] + dy, origin[2] + dz]
+        else:
+            end_point = [
+                origin[0] + float(delta_xyz[0]),
+                origin[1] + float(delta_xyz[1]),
+                origin[2] + float(delta_xyz[2]),
+            ]
         p.addUserDebugLine(
             origin,
             end_point,
@@ -406,6 +430,59 @@ def _add_debug_axes(
             textSize=1.2,
             lifeTime=float(life_time_sec),
         )
+
+
+def get_reset_camera_transform(config_path: Path) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+    """Return the absolute world position and orientation (quaternion) of camera_1 link."""
+    planning_config = load_planning_config(config_path)
+    arm_config = _load_arm_config()
+    _, p, pybullet_data = _load_python_dependencies()
+    expected_joint_count = int(arm_config["pybullet"]["controllable_joints"])
+    client_id: int | None = None
+
+    try:
+        client_id = p.connect(p.DIRECT)
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p.resetSimulation()
+        p.setGravity(0.0, 0.0, -9.8)
+        p.loadURDF("plane.urdf")
+
+        base_orientation_rad = [math.radians(v) for v in planning_config.base_orientation_euler_deg]
+        base_orientation_xyzw = p.getQuaternionFromEuler(base_orientation_rad)
+        robot_id = p.loadURDF(
+            planning_config.urdf_path,
+            useFixedBase=True,
+            basePosition=[0.0, 0.0, planning_config.initial_height],
+            baseOrientation=base_orientation_xyzw,
+        )
+        controllable_joint_ids, _ = _find_controllable_joints(p, robot_id, expected_joint_count)
+        joint_reset_rad = _degrees_to_radians(planning_config.joint_reset_deg)
+        _set_joint_positions_direct(p, robot_id, controllable_joint_ids, joint_reset_rad)
+        p.performCollisionDetection()
+
+        # Find camera_1 link index
+        cam_idx = -1
+        for i in range(p.getNumJoints(robot_id)):
+            if p.getJointInfo(robot_id, i)[12].decode('utf-8') == 'camera_1':
+                cam_idx = i
+                break
+        if cam_idx == -1:
+            raise ValueError("Could not find 'camera_1' link in URDF.")
+
+        state = p.getLinkState(robot_id, cam_idx, computeForwardKinematics=True)
+        # state[0] = worldLinkFramePosition, state[1] = worldLinkFrameOrientation (URDF visual frame is actually state[4]/state[5], but they are collinear if rpy=0. Pybullet standard is state[0]/state[1] for COM, we want the URDF frame so usually state[0], state[1] if COM matches URDF or state[4], state[5] for URDF frame.)
+        # state[4]: worldLinkFramePosition (URDF frame)
+        # state[5]: worldLinkFrameOrientation (URDF frame)
+        return (
+            (float(state[4][0]), float(state[4][1]), float(state[4][2])),
+            (float(state[5][0]), float(state[5][1]), float(state[5][2]), float(state[5][3]))
+        )
+    finally:
+        if client_id is not None:
+            try:
+                p.disconnect(client_id)
+            except Exception:
+                pass
 
 
 def get_reset_end_effector_position(config_path: Path) -> tuple[float, float, float]:
@@ -679,7 +756,12 @@ def run_ompl_planning_test(
     total_runtime_start_time = time.perf_counter()
 
     try:
-        planning_config = load_planning_config(config_path)
+        # When the caller supplies obstacle_specs_override the YAML need not
+        # define static obstacles (the base-pose evaluator builds them at runtime).
+        planning_config = load_planning_config(
+            config_path,
+            require_obstacles=(obstacle_specs_override is None),
+        )
         if gui_override:
             planning_config.gui = True
         if hold_seconds_override is not None:
@@ -784,6 +866,16 @@ def run_ompl_planning_test(
                 axis_width=2.4,
                 label="world",
             )
+            # Draw target coordinate axes so user can see orientation
+            if requested_target_position is not None and requested_target_orientation_xyzw is not None:
+                _add_debug_axes(
+                    p,
+                    requested_target_position,
+                    orientation_xyzw=requested_target_orientation_xyzw,
+                    axis_length=0.20,
+                    axis_width=3.0,
+                    label="target_pose",
+                )
             _add_debug_axes(
                 p,
                 [0.0, 0.0, planning_config.initial_height],
@@ -791,6 +883,15 @@ def run_ompl_planning_test(
                 axis_width=2.2,
                 label="base",
             )
+            print("\n" + "="*50)
+            print("👀 已經在 PyBullet 中顯示座標軸了！")
+            print("👉 請查看目標的 紅(X=前)、綠(Y=左)、藍(Z=上) 軸是否有對齊正確！")
+            print("👉 確認完畢後，切回「終端機」按下 Enter 鍵繼續讓 AI 尋找路徑。")
+            print("="*50 + "\n")
+            try:
+                input()
+            except Exception:
+                __import__("time").sleep(5)
         result.urdf_load_ok = True
 
         controllable_joint_ids, controllable_joint_names = _find_controllable_joints(
