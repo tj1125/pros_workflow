@@ -41,6 +41,7 @@ BEST_GRASP_COLOR = [255, 210, 40]
 COLLIDING_COLOR = [220, 60, 60]
 GRIPPER_MIDPOINT_COLOR = [40, 170, 255]
 MAX_VIS_PITCH_DEG = 15.0
+DISABLE_VISIBILITY_FILTERS_FOR = {"latest_grasp_visualization.npz"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,12 +98,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--display-frame",
         choices=("image_aligned", "camera_raw", "camera_y_up"),
-        default="image_aligned",
+        default="camera_raw",
         help=(
             "How to display Camera_Car coordinates in MeshCat. "
             "'camera_raw' keeps the OpenCV camera frame (x right, y down, z forward). "
             "'camera_y_up' flips only y for a conventional up-axis display. "
-            "'image_aligned' flips x and y so the default MeshCat front view matches the RGB image more intuitively."
+            "'image_aligned' flips x and y so the MeshCat front view matches the RGB image more intuitively."
         ),
     )
     parser.add_argument(
@@ -182,6 +183,10 @@ def load_npz(path: Path) -> np.lib.npyio.NpzFile:
     if not path.exists():
         raise FileNotFoundError(path)
     return np.load(str(path), allow_pickle=True)
+
+
+def is_centered_visualization_npz(data: np.lib.npyio.NpzFile) -> bool:
+    return "pc_object" in data.files and "all_grasps" in data.files
 
 
 def scalar_value(data: np.lib.npyio.NpzFile, key: str, default: str = "") -> str:
@@ -343,6 +348,11 @@ def build_free_grasps_camera(
     data: np.lib.npyio.NpzFile,
     object_center_camera: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if "collision_free_grasps" in data.files:
+        grasps = get_array(data, "collision_free_grasps", fallback=np.zeros((0, 4, 4)))
+        scores = get_array(data, "collision_free_scores", fallback=np.zeros((0,)))
+        return np.asarray(grasps, dtype=float), np.asarray(scores, dtype=float)
+
     if "collision_free_grasps_local" in data.files:
         grasps_local = get_array(
             data,
@@ -367,6 +377,16 @@ def build_colliding_grasps_camera(
     data: np.lib.npyio.NpzFile,
     object_center_camera: np.ndarray,
 ) -> np.ndarray:
+    if "all_grasps" in data.files:
+        all_grasps = get_array(data, "all_grasps", fallback=np.zeros((0, 4, 4)))
+        mask = get_array(
+            data,
+            "collision_free_mask",
+            fallback=np.ones(len(all_grasps), dtype=bool),
+            dtype=bool,
+        )
+        return np.asarray(all_grasps[~mask], dtype=float)
+
     if "all_grasps_local" not in data.files:
         return np.zeros((0, 4, 4), dtype=float)
     all_grasps_local = get_array(data, "all_grasps_local", fallback=np.zeros((0, 4, 4)))
@@ -377,6 +397,10 @@ def build_colliding_grasps_camera(
         dtype=bool,
     )
     return local_grasps_to_camera(all_grasps_local[~mask], object_center_camera)
+
+
+def should_apply_visibility_filters(debug_npz: Path) -> bool:
+    return debug_npz.name not in DISABLE_VISIBILITY_FILTERS_FOR
 
 
 def main() -> None:
@@ -395,83 +419,113 @@ def main() -> None:
     ) = import_meshcat_helpers()
 
     data = load_npz(debug_npz)
+    apply_visibility_filters = should_apply_visibility_filters(debug_npz)
+    centered_visualization_npz = is_centered_visualization_npz(data)
 
-    object_id = scalar_value(data, "object_id", default="unknown")
-    camera_name = scalar_value(data, "camera_name", default="unknown")
-    object_center_camera = get_array(data, "object_reference_center_camera", fallback=np.zeros(3))
+    object_id = scalar_value(
+        data,
+        "object_id",
+        default=scalar_value(data, "target_label", default="unknown"),
+    )
+    camera_name = scalar_value(
+        data,
+        "camera_name",
+        default=scalar_value(data, "primary_camera_id", default="unknown"),
+    )
+    object_center_camera = (
+        np.zeros(3, dtype=float)
+        if centered_visualization_npz
+        else get_array(data, "object_reference_center_camera", fallback=np.zeros(3))
+    )
     gripper_midpoint_camera = get_array(
         data,
         "gripper_midpoint_camera_xyz",
-        fallback=np.array([0.0, -0.04, 0.11], dtype=float),
+        fallback=(
+            np.zeros(3, dtype=float)
+            if centered_visualization_npz
+            else np.array([0.0, -0.04, 0.11], dtype=float)
+        ),
     )
     object_pc_camera = get_array(
         data,
-        "object_pc_camera",
-        fallback=get_array(data, "object_pc_local") + object_center_camera[None, :],
+        "object_pc_camera" if not centered_visualization_npz else "pc_object",
+        fallback=(
+            get_array(data, "object_pc_local") + object_center_camera[None, :]
+            if not centered_visualization_npz
+            else np.zeros((0, 3), dtype=float)
+        ),
     )
     scene_pc_camera = get_array(
         data,
-        "scene_pc_camera",
+        "scene_pc_camera" if not centered_visualization_npz else "pc_scene",
         fallback=np.zeros((0, 3)),
-    )
-    best_grasp_camera = get_array(
-        data,
-        "best_grasp_camera",
-        fallback=local_grasps_to_camera(
-            get_array(data, "best_grasp_local", fallback=np.eye(4)),
-            object_center_camera,
-        )[0],
     )
     all_scores = get_array(data, "all_scores", fallback=np.zeros((0,)))
     free_grasps_camera, free_scores = build_free_grasps_camera(data, object_center_camera)
     colliding_grasps_camera = build_colliding_grasps_camera(data, object_center_camera)
-
-    free_grasps_camera, free_scores = filter_grasps_to_object_front(
-        free_grasps_camera,
-        object_center_camera,
-        scores=free_scores,
-    )
-    colliding_grasps_camera, _ = filter_grasps_to_object_front(
-        colliding_grasps_camera,
-        object_center_camera,
-    )
+    if "best_grasp_camera" in data.files:
+        best_grasp_camera = get_array(data, "best_grasp_camera")
+    elif "best_grasp_local" in data.files:
+        best_grasp_camera = local_grasps_to_camera(
+            get_array(data, "best_grasp_local", fallback=np.eye(4)),
+            object_center_camera,
+        )[0]
+    elif len(free_grasps_camera) > 0:
+        best_idx = int(np.argmax(free_scores)) if len(free_scores) > 0 else 0
+        best_grasp_camera = np.asarray(free_grasps_camera[best_idx], dtype=float)
+    elif len(colliding_grasps_camera) > 0:
+        best_grasp_camera = np.asarray(colliding_grasps_camera[0], dtype=float)
+    else:
+        best_grasp_camera = np.eye(4, dtype=float)
 
     best_grasp_pitch_deg = grasp_pitch_degrees(best_grasp_camera)[0]
-    free_grasps_camera, free_scores, free_pitch_deg = filter_grasps_by_pitch(
-        free_grasps_camera,
-        scores=free_scores,
-    )
-    colliding_grasps_camera, _, colliding_pitch_deg = filter_grasps_by_pitch(
-        colliding_grasps_camera,
-    )
+    if apply_visibility_filters:
+        free_grasps_camera, free_scores = filter_grasps_to_object_front(
+            free_grasps_camera,
+            object_center_camera,
+            scores=free_scores,
+        )
+        colliding_grasps_camera, _ = filter_grasps_to_object_front(
+            colliding_grasps_camera,
+            object_center_camera,
+        )
+        free_grasps_camera, free_scores, _ = filter_grasps_by_pitch(
+            free_grasps_camera,
+            scores=free_scores,
+        )
+        colliding_grasps_camera, _, _ = filter_grasps_by_pitch(
+            colliding_grasps_camera,
+        )
 
     if args.score_threshold is not None and len(free_scores) > 0:
         keep = free_scores >= args.score_threshold
         free_grasps_camera = free_grasps_camera[keep]
         free_scores = free_scores[keep]
-        free_pitch_deg = free_pitch_deg[keep]
 
     free_grasps_camera, free_scores = select_topk_grasps(
         free_grasps_camera,
         free_scores,
         args.topk,
     )
-    free_pitch_deg = grasp_pitch_degrees(free_grasps_camera)
 
-    best_grasp_filtered_out = (
-        abs(best_grasp_pitch_deg) > MAX_VIS_PITCH_DEG
-        or float(best_grasp_camera[2, 3]) > float(object_center_camera[2])
-    )
-    best_grasp_visualized = False
-    if best_grasp_filtered_out:
-        if len(free_grasps_camera) > 0:
-            best_grasp_camera = np.asarray(free_grasps_camera[0], dtype=float)
-            best_grasp_pitch_deg = float(free_pitch_deg[0])
-            best_grasp_visualized = True
+    if apply_visibility_filters:
+        free_pitch_deg = grasp_pitch_degrees(free_grasps_camera)
+        best_grasp_filtered_out = (
+            abs(best_grasp_pitch_deg) > MAX_VIS_PITCH_DEG
+            or float(best_grasp_camera[2, 3]) > float(object_center_camera[2])
+        )
+        best_grasp_visualized = False
+        if best_grasp_filtered_out:
+            if len(free_grasps_camera) > 0:
+                best_grasp_camera = np.asarray(free_grasps_camera[0], dtype=float)
+                best_grasp_pitch_deg = float(free_pitch_deg[0])
+                best_grasp_visualized = True
+            else:
+                best_grasp_camera = None
         else:
-            best_grasp_camera = None
+            best_grasp_visualized = True
     else:
-        best_grasp_visualized = True
+        best_grasp_visualized = best_grasp_camera is not None
 
     display_T = display_transform(args.display_frame)
     object_pc_display = transform_points(object_pc_camera, display_T)
@@ -501,16 +555,21 @@ def main() -> None:
     print(f"  object points: {len(object_pc_camera)}")
     print(f"  scene points: {len(scene_pc_camera)}")
     print(f"  all grasps: {len(all_scores)}")
+    print(f"  centered visualization npz: {centered_visualization_npz}")
     print(f"  gripper midpoint (camera): {gripper_midpoint_camera.round(4).tolist()}")
-    print(f"  pitch filter: +/-{MAX_VIS_PITCH_DEG:.1f} deg")
-    print("  position filter: grasp origin must satisfy grasp_z <= object_center_z")
+    if apply_visibility_filters:
+        print(f"  pitch filter: +/-{MAX_VIS_PITCH_DEG:.1f} deg")
+        print("  position filter: grasp origin must satisfy grasp_z <= object_center_z")
+    else:
+        print("  pitch filter: disabled")
+        print("  position filter: disabled")
     print(f"  visualized top-k collision-free grasps: {len(free_scores)} (topk={args.topk})")
     print(f"  visualized colliding grasps: {len(colliding_grasps_display)}")
     print(f"  best grasp pitch (camera): {best_grasp_pitch_deg:.4f}")
     if best_grasp_camera is not None:
         print(f"  best grasp position (camera): {best_grasp_camera[:3, 3].round(4).tolist()}")
     else:
-        print("  best grasp position (camera): filtered out by pitch limit")
+        print("  best grasp position (camera): hidden by visibility filters")
     print(f"  display_frame: {args.display_frame}")
     print(f"  gripper: {gripper_name}")
     print("Expect a running MeshCat server on tcp://127.0.0.1:6000")
@@ -609,12 +668,18 @@ def main() -> None:
     print("  object_pc         : green object cloud")
     print("  frames/*          : camera/object/gripper midpoint/best grasp frames")
     print("  markers/gripper_midpoint : blue point for the gripper midpoint")
-    print(f"  note              : only grasps with |pitch| <= {MAX_VIS_PITCH_DEG:.1f} deg are visualized")
-    print("  note              : grasps behind the object center in camera Z are hidden")
+    if apply_visibility_filters:
+        print(f"  note              : only grasps with |pitch| <= {MAX_VIS_PITCH_DEG:.1f} deg are visualized")
+        print("  note              : grasps behind the object center in camera Z are hidden")
+    else:
+        print("  note              : pitch filtering disabled for this NPZ")
+        print("  note              : front/back grasp hiding disabled for this NPZ")
+    if centered_visualization_npz:
+        print("  note              : pc_object / pc_scene / grasps are visualized in the centered frame stored in the NPZ")
     if best_grasp_visualized:
         print("  grasps/best       : highlighted best grasp")
     else:
-        print("  grasps/best       : hidden because no grasp passed the pitch filter")
+        print("  grasps/best       : hidden because no grasp remained after visibility filters")
     print("  note              : image_aligned mode is for easier visual comparison with the RGB image, not raw OpenCV camera coordinates")
     if not args.best_only:
         print("  grasps/collision_free/* : top-k score-colored collision-free grasps")
