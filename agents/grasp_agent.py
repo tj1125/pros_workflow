@@ -5,7 +5,7 @@ Role in the system:
   - LangGraph Node: called by the Orchestrator via Conditional Edge
   - A2A Client: sends inference request to the Inference GraspGen server on RTX 3090
 
-Returns 6-DoF grasp pose data via the A2A artifact response.
+Returns feasible 6-DoF grasp pose data via the A2A artifact response.
 """
 
 import asyncio
@@ -32,7 +32,7 @@ class GraspAgent:
         1. Receive module_params (object_id, Camera_Car RGBD image, scene context)
            from CommanderState
         2. Send A2A HTTPS request to Inference GraspGen server (RTX 3090)
-        3. Parse returned grasp pose and update CommanderState
+        3. Parse returned feasible grasp poses and update CommanderState
     """
 
     AGENT_NAME = "GraspGen Agent"
@@ -62,11 +62,23 @@ class GraspAgent:
             "detection_confidence": 0.95,
             "grasp_confidence": 0.91,
             "num_candidate_grasps": 1,
+            "num_valid_grasps": 1,
             "best_grasp_pose_camera": {
                 "frame": "camera",
                 "position": [0.30, 0.10, 0.50],
                 "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
             },
+            "valid_grasp_poses_camera": [
+                {
+                    "rank": 1,
+                    "frame": "camera",
+                    "position": [0.30, 0.10, 0.50],
+                    "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                    "grasp_confidence": 0.91,
+                    "grasp_distance_to_gripper_midpoint_m": 0.08,
+                    "grasp_distance_to_camera_m": 0.59,
+                }
+            ],
         }
         return {
             "result": mock_result,

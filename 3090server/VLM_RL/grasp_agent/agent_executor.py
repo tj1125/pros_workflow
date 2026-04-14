@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class GraspAgentExecutor(AgentExecutor):
-    """A2A executor: Camera_Car RGBD + object_id -> best grasp pose JSON."""
+    """A2A executor: Camera_Car RGBD + object_id -> feasible grasp pose JSON."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         try:
@@ -49,9 +49,10 @@ class GraspAgentExecutor(AgentExecutor):
                 depth_bytes=base64.b64decode(depth_base64),
             )
             logger.info(
-                "GraspAgent complete. object_id=%s, grasp_confidence=%.4f",
+                "GraspAgent complete. object_id=%s, grasp_confidence=%.4f, num_valid_grasps=%d",
                 object_id,
                 float(result["grasp_confidence"]),
+                int(result.get("num_valid_grasps", 0)),
             )
             await event_queue.enqueue_event(build_success(result))
 
