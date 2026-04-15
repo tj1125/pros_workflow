@@ -108,7 +108,8 @@ class NavigationController:
         heading_error = calculate_goal_heading_error(car_orientation, goal_orientation)
         if abs(heading_error) <= self.align_stop_yaw_tolerance_rad:
             self.final_alignment_active = False
-            self.car_control_node.publish_control("STOP")
+            self.car_control_node.publish_stop_burst()
+            self.car_control_node.clear_plan()
             return NavGoal.Result(
                 success=True,
                 message=(

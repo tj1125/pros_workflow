@@ -1,3 +1,4 @@
+import time
 from functools import lru_cache
 from pathlib import Path as FilePath
 
@@ -326,6 +327,15 @@ class BaseCarControlNode(Node):
         CarControlPublishers.publish_control(
             self, action, self.rear_wheel_pub, self.front_wheel_pub
         )
+
+    def publish_stop_burst(self, repeat: int = 5, interval_sec: float = 0.05):
+        """Publish STOP multiple times to make sure the base receives the halt command."""
+        repeat = max(1, int(repeat))
+        interval_sec = max(0.0, float(interval_sec))
+        for idx in range(repeat):
+            self.publish_control("STOP")
+            if idx < repeat - 1 and interval_sec > 0.0:
+                time.sleep(interval_sec)
 
     # If you inherit from this class, you must implement this method
     def handle_command(self, mode, command):

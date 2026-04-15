@@ -30,7 +30,7 @@ class NavigationActionServer(Node):
 
     def cancel_callback(self, goal_handle):
         self.get_logger().info("Enter the cancel callback")
-        self.car_control_node.publish_control("STOP")
+        self.car_control_node.publish_stop_burst()
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
@@ -46,7 +46,6 @@ class NavigationActionServer(Node):
             car_auto_method = self._select_car_auto_method(mode)
             if goal_handle.is_cancel_requested:
                 self.get_logger().info("Navigation canceled by user")
-                self.car_control_node.publish_control("STOP")
                 result = NavGoal.Result(success=False, message="Navigation canceled")
                 goal_handle.canceled()
                 break

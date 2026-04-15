@@ -29,33 +29,57 @@ class AutoNavStarter(Node):
         
         self.plan_sub = self.create_subscription(Path, '/received_global_plan', self.plan_callback, 10)
         self.navigating = False
+        self._active_goal_key = None
+        self._completed_goal_key = None
+
+    @staticmethod
+    def _goal_key(goal_pose, goal_orientation):
+        if goal_pose is None or goal_orientation is None:
+            return None
+        return (
+            round(float(goal_pose.x), 3),
+            round(float(goal_pose.y), 3),
+            round(float(goal_orientation.z), 3),
+            round(float(goal_orientation.w), 3),
+        )
 
     def plan_callback(self, msg):
         if not msg.poses:
             return
-            
-        if not self.navigating:
-            # 檢查是否已經到達終點
-            car_position, car_orientation = self.car_control_node.get_car_position_and_orientation()
-            goal_pose = self.car_control_node.get_goal_pose()
-            goal_orientation = self.car_control_node.get_goal_orientation()
-            if car_position and car_orientation and goal_pose and goal_orientation:
-                target_distance = cal_distance(
-                    [car_position.x, car_position.y],
-                    [goal_pose.x, goal_pose.y],
-                )
-                heading_error = calculate_goal_heading_error(
-                    [car_orientation.z, car_orientation.w],
-                    [goal_orientation.z, goal_orientation.w],
-                )
-                if (
-                    target_distance <= self.approach_stop_xy_tolerance_m
-                    and abs(heading_error) <= self.align_stop_yaw_tolerance_rad
-                ):
-                    return
-                    
-            self.get_logger().info('收到新路徑，啟動全自動導航 (Auto Navigation)')
-            self.start_auto_nav()
+
+        if self.navigating:
+            return
+
+        car_position, car_orientation = self.car_control_node.get_car_position_and_orientation()
+        goal_pose = self.car_control_node.get_goal_pose()
+        goal_orientation = self.car_control_node.get_goal_orientation()
+        goal_key = self._goal_key(goal_pose, goal_orientation)
+        if goal_key is None:
+            return
+
+        if goal_key == self._completed_goal_key:
+            self.get_logger().debug('Skipping already completed auto-nav goal')
+            return
+
+        # 檢查是否已經到達終點
+        if car_position and car_orientation:
+            target_distance = cal_distance(
+                [car_position.x, car_position.y],
+                [goal_pose.x, goal_pose.y],
+            )
+            heading_error = calculate_goal_heading_error(
+                [car_orientation.z, car_orientation.w],
+                [goal_orientation.z, goal_orientation.w],
+            )
+            if (
+                target_distance <= self.approach_stop_xy_tolerance_m
+                and abs(heading_error) <= self.align_stop_yaw_tolerance_rad
+            ):
+                self._completed_goal_key = goal_key
+                return
+
+        self.get_logger().info('收到新路徑，啟動全自動導航 (Auto Navigation)')
+        self.start_auto_nav(goal_key=goal_key)
 
     def _publish_nav_result(self, success: bool, message: str):
         payload = {
@@ -67,8 +91,9 @@ class AutoNavStarter(Node):
         msg.data = json.dumps(payload, ensure_ascii=False)
         self.nav_result_pub.publish(msg)
 
-    def start_auto_nav(self):
+    def start_auto_nav(self, goal_key=None):
         self.navigating = True
+        self._active_goal_key = goal_key
         
         # 確認並發送導航目標
         if self.nav_action_client.wait_for_server(timeout_sec=1.0):
@@ -80,6 +105,7 @@ class AutoNavStarter(Node):
             self.get_logger().warn('nav_action_server 不可用')
             self._publish_nav_result(False, "nav_action_server unavailable")
             self.navigating = False
+            self._active_goal_key = None
 
         # 確認並發送手臂目標
         if self.arm_action_client.wait_for_server(timeout_sec=1.0):
@@ -95,6 +121,7 @@ class AutoNavStarter(Node):
             self.get_logger().info('自動導航請求被拒絕')
             self._publish_nav_result(False, "navigation goal rejected")
             self.navigating = False
+            self._active_goal_key = None
             return
             
         self.get_logger().info('自動導航請求已接受，開始導航...')
@@ -105,7 +132,10 @@ class AutoNavStarter(Node):
         result = future.result().result
         self.get_logger().info(f'自動導航結束: {result.message}')
         self._publish_nav_result(getattr(result, "success", False), result.message)
+        if getattr(result, "success", False):
+            self._completed_goal_key = self._active_goal_key
         self.navigating = False
+        self._active_goal_key = None
 
 
 def main(args=None):
