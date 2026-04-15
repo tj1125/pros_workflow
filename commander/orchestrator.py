@@ -1098,7 +1098,9 @@ class Orchestrator:
                 "camera_name": payload.get("camera_name", "Camera_Car"),
                 "grasp_confidence": payload.get("grasp_confidence"),
                 "num_candidate_grasps": payload.get("num_candidate_grasps"),
+                "num_valid_grasps": payload.get("num_valid_grasps"),
                 "best_grasp_pose_camera": payload.get("best_grasp_pose_camera", {}),
+                "valid_grasp_poses_camera": payload.get("valid_grasp_poses_camera", []),
                 "object_reference_center_camera": payload.get(
                     "object_reference_center_camera",
                     [],

@@ -234,6 +234,36 @@ def _rotation_matrix_to_quaternion_xyzw(rotation: np.ndarray) -> list[float]:
     return (quat / norm).tolist()
 
 
+def _serialize_grasp_pose_camera(grasp_camera: np.ndarray) -> dict[str, object]:
+    grasp_camera = np.asarray(grasp_camera, dtype=float)
+    return {
+        "frame": "camera",
+        "position": grasp_camera[:3, 3].astype(float).tolist(),
+        "rotation_matrix": grasp_camera[:3, :3].astype(float).tolist(),
+        "quaternion_xyzw": _rotation_matrix_to_quaternion_xyzw(grasp_camera[:3, :3]),
+        "matrix_4x4": grasp_camera.astype(float).tolist(),
+    }
+
+
+def _serialize_valid_grasp_pose_camera(
+    grasp_camera: np.ndarray,
+    *,
+    grasp_confidence: float,
+    grasp_distance_to_gripper_midpoint_m: float,
+    rank: int,
+) -> dict[str, object]:
+    payload = _serialize_grasp_pose_camera(grasp_camera)
+    payload.update(
+        {
+            "rank": int(rank),
+            "grasp_confidence": float(grasp_confidence),
+            "grasp_distance_to_gripper_midpoint_m": float(grasp_distance_to_gripper_midpoint_m),
+            "grasp_distance_to_camera_m": float(np.linalg.norm(np.asarray(grasp_camera, dtype=float)[:3, 3])),
+        }
+    )
+    return payload
+
+
 def run_pipeline(
     config_path: Path,
     object_id: str,
@@ -347,6 +377,26 @@ def run_pipeline(
     best_idx = 0
     best_grasp_local = np.array(valid_grasps_local[best_idx], dtype=float)
     best_grasp_camera = np.array(valid_grasps_camera[best_idx], dtype=float)
+    valid_grasp_poses_camera = [
+        _serialize_valid_grasp_pose_camera(
+            grasp_camera,
+            grasp_confidence=grasp_confidence,
+            grasp_distance_to_gripper_midpoint_m=grasp_distance_to_gripper_midpoint_m,
+            rank=rank,
+        )
+        for rank, (
+            grasp_camera,
+            grasp_confidence,
+            grasp_distance_to_gripper_midpoint_m,
+        ) in enumerate(
+            zip(
+                valid_grasps_camera,
+                valid_grasp_confidences,
+                valid_grasp_distance_to_gripper_midpoint_m,
+            ),
+            start=1,
+        )
+    ]
     debug_npz_path = _save_debug_npz(
         object_id=object_id,
         camera_name=camera_name or str(cfg["camera"]["camera_name"]),
@@ -378,6 +428,7 @@ def run_pipeline(
         "mask_area_px": int(seg_mask_bool.sum()),
         "detection_confidence": float(detection_confidence),
         "grasp_confidence": float(valid_grasp_confidences[best_idx]),
+        "num_valid_grasps": int(len(valid_grasps_camera)),
         "gripper_midpoint_camera_xyz": gripper_midpoint_camera_xyz.astype(float).tolist(),
         "grasp_distance_to_gripper_midpoint_m": float(
             valid_grasp_distance_to_gripper_midpoint_m[best_idx]
@@ -393,12 +444,7 @@ def run_pipeline(
         "num_object_points": int(len(object_pc_camera)),
         "num_scene_points": int(len(scene_pc_camera)),
         "grasp_debug_npz_path": str(debug_npz_path),
-        "best_grasp_pose_camera": {
-            "frame": "camera",
-            "position": best_grasp_camera[:3, 3].astype(float).tolist(),
-            "rotation_matrix": best_grasp_camera[:3, :3].astype(float).tolist(),
-            "quaternion_xyzw": _rotation_matrix_to_quaternion_xyzw(best_grasp_camera[:3, :3]),
-            "matrix_4x4": best_grasp_camera.astype(float).tolist(),
-        },
+        "best_grasp_pose_camera": _serialize_grasp_pose_camera(best_grasp_camera),
+        "valid_grasp_poses_camera": valid_grasp_poses_camera,
         **grasp_stats,
     }
