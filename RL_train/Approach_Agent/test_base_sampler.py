@@ -12,6 +12,7 @@ import scipy.spatial.transform as st
 from scripts.run_base_pose_sampling import load_config
 from src.camera_car_voxel_ompl import load_camera_car_voxel_ompl_config
 from src.geometry.depth_backprojection import decode_depth_png_bytes
+from src.geometry.map_loader import load_free_cells_unity_xz, load_map_meta
 from src.geometry.voxelization import voxelize_points
 from src.io.camera_capture import AmclPoseSnapshot, capture_rgbd_snapshot
 from src.io.intrinsics import load_camera_intrinsics
@@ -68,11 +69,28 @@ class RosMapPose2D:
     yaw_rad: float
 
 
+@dataclass(frozen=True)
+class BaseFootprintMap:
+    free_cell_keys: frozenset[tuple[int, int]]
+    free_cell_centers_xy: np.ndarray
+    footprint_points_pb_xy: np.ndarray
+    origin_xy: tuple[float, float]
+    resolution_m: float
+    length_x_m: float
+    length_y_m: float
+
+
 LIVE_VOXEL_MIN_DEPTH_M = 0.19
-LIVE_VOXEL_MAX_DEPTH_M = 1.0
+LIVE_VOXEL_MAX_DEPTH_M = 0.8
 LIVE_VOXEL_SCENE_POINT_STRIDE = 4
 LIVE_VOXEL_SCENE_DOWNSAMPLE_M = 0.01
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 15.0
+BASE_FOOTPRINT_LENGTH_X_M = 0.33
+BASE_FOOTPRINT_LENGTH_Y_M = 0.42
+BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
+BASE_SAMPLE_MIN_DISTANCE_M = 0.20
+BASE_SAMPLE_MAX_DISTANCE_M = 0.35
+BASE_SAMPLE_APPROACH_HALF_ANGLE_DEG = 20.0
 
 
 PLANNING_CAMERA_TO_PB_LOCAL = np.asarray(
@@ -139,6 +157,66 @@ def _wrap_angle_rad(angle_rad: float) -> float:
 
 def _abs_angle_delta_rad(angle_a_rad: float, angle_b_rad: float) -> float:
     return abs(_wrap_angle_rad(float(angle_a_rad) - float(angle_b_rad)))
+
+
+def _rectangular_footprint_points_pb_xy(
+    *,
+    length_x_m: float,
+    length_y_m: float,
+    resolution_m: float,
+) -> np.ndarray:
+    step = max(float(resolution_m) * 0.5, 0.01)
+    half_x = float(length_x_m) * 0.5
+    half_y = float(length_y_m) * 0.5
+    x_values = np.arange(-half_x, half_x + step * 0.5, step, dtype=np.float64)
+    y_values = np.arange(-half_y, half_y + step * 0.5, step, dtype=np.float64)
+    corners = np.asarray(
+        [
+            [-half_x, -half_y],
+            [-half_x, half_y],
+            [half_x, -half_y],
+            [half_x, half_y],
+        ],
+        dtype=np.float64,
+    )
+    grid_x, grid_y = np.meshgrid(x_values, y_values, indexing="xy")
+    grid_points = np.column_stack([grid_x.reshape(-1), grid_y.reshape(-1)])
+    return np.unique(np.vstack([grid_points, corners]), axis=0)
+
+
+def _build_base_footprint_map(map_yaml_path: Path) -> BaseFootprintMap:
+    map_meta = load_map_meta(map_yaml_path)
+    free_cells_map_xy = np.asarray(load_free_cells_unity_xz(map_meta), dtype=np.float64).reshape(-1, 2)
+    if len(free_cells_map_xy) == 0:
+        raise RuntimeError(f"Map has no free cells: {map_yaml_path}")
+
+    resolution = float(map_meta.resolution_m)
+    if resolution <= 0.0:
+        raise ValueError(f"Map resolution must be positive, got {resolution}.")
+
+    origin_x, origin_y = (float(v) for v in map_meta.origin_xy)
+    free_cell_keys = frozenset(
+        (
+            int(round((float(cell[0]) - origin_x) / resolution)),
+            int(round((float(cell[1]) - origin_y) / resolution)),
+        )
+        for cell in free_cells_map_xy
+    )
+    footprint_points = _rectangular_footprint_points_pb_xy(
+        length_x_m=BASE_FOOTPRINT_LENGTH_X_M,
+        length_y_m=BASE_FOOTPRINT_LENGTH_Y_M,
+        resolution_m=resolution,
+    )
+
+    return BaseFootprintMap(
+        free_cell_keys=free_cell_keys,
+        free_cell_centers_xy=free_cells_map_xy,
+        footprint_points_pb_xy=footprint_points,
+        origin_xy=(origin_x, origin_y),
+        resolution_m=resolution,
+        length_x_m=float(BASE_FOOTPRINT_LENGTH_X_M),
+        length_y_m=float(BASE_FOOTPRINT_LENGTH_Y_M),
+    )
 
 
 def _yaw_from_quaternion_xyzw(quaternion_xyzw: tuple[float, float, float, float]) -> float:
@@ -294,6 +372,31 @@ def _base_link_pose_to_pb_world_pose(
     )
 
 
+def _amcl_pose_to_pb_world_pose(
+    amcl_pose: RosMapPose2D | None,
+    *,
+    z_pb: float = 0.0,
+) -> tuple[np.ndarray, float] | None:
+    return _base_link_pose_to_pb_world_pose(amcl_pose, base_link_z_pb=z_pb)
+
+
+def _base_link_world_from_amcl_pb_pose(
+    amcl_pb_xyz: np.ndarray,
+    amcl_pb_yaw: float,
+    *,
+    z_pb: float,
+) -> np.ndarray:
+    offset_xy = _yaw_rotation_matrix(amcl_pb_yaw)[:2, :2] @ BASE_LINK_FROM_AMCL_PB_XY
+    return np.asarray(
+        [
+            float(amcl_pb_xyz[0] + offset_xy[0]),
+            float(amcl_pb_xyz[1] + offset_xy[1]),
+            float(z_pb),
+        ],
+        dtype=np.float64,
+    )
+
+
 def _camera_local_transform_from_base_link(
     *,
     camera_in_base_link_rotation: np.ndarray,
@@ -368,43 +471,91 @@ def _print_ros_map_pose(label: str, pose: RosMapPose2D | dict[str, object] | Non
     )
 
 
-def _print_selected_base_link_ros_map_banner(
-    *,
-    rank: int,
-    pose: RosMapPose2D | dict[str, object] | None,
-) -> None:
+def _format_ros_map_pose_lines(pose: RosMapPose2D | dict[str, object] | None) -> str:
     if pose is None:
-        print(
-            "\n"
-            "============================================================\n"
-            " SELECTED SAMPLED BASE_LINK -> ROS MAP POSE\n"
-            "------------------------------------------------------------\n"
-            f" grasp_rank : {int(rank):02d}\n"
-            " ros_map    : unavailable\n"
-            "============================================================\n",
-            flush=True,
-        )
-        return
-
+        return " ros_map    : unavailable\n"
     if isinstance(pose, RosMapPose2D):
         x = float(pose.x)
         y = float(pose.y)
         yaw_rad = float(pose.yaw_rad)
+        yaw_deg = math.degrees(yaw_rad)
     else:
         x = float(pose["x"])
         y = float(pose["y"])
         yaw_rad = float(pose["yaw_rad"])
+        yaw_deg = float(pose.get("yaw_deg", math.degrees(yaw_rad)))
+    return (
+        f" ros_map_x  : {x:.4f} m\n"
+        f" ros_map_y  : {y:.4f} m\n"
+        f" ros_yaw    : {yaw_rad:.6f} rad  ({yaw_deg:.2f} deg)\n"
+    )
 
+
+def _print_selected_base_link_ros_map_banner(
+    *,
+    rank: int,
+    base_link_pose: RosMapPose2D | dict[str, object] | None,
+    amcl_pose: RosMapPose2D | dict[str, object] | None,
+) -> None:
     print(
         "\n"
         "============================================================\n"
-        " SELECTED SAMPLED BASE_LINK -> ROS MAP POSE\n"
+        " SELECTED SAMPLED ROS MAP POSES\n"
         "------------------------------------------------------------\n"
         f" grasp_rank : {int(rank):02d}\n"
-        f" ros_map_x  : {x:.4f} m\n"
-        f" ros_map_y  : {y:.4f} m\n"
-        f" yaw        : {yaw_rad:.6f} rad  ({math.degrees(yaw_rad):.2f} deg)\n"
+        " AMCL / VEHICLE CENTER ROS MAP\n"
+        f"{_format_ros_map_pose_lines(amcl_pose)}"
+        "------------------------------------------------------------\n"
+        " BASE_LINK ROS MAP\n"
+        f"{_format_ros_map_pose_lines(base_link_pose)}"
         "============================================================\n",
+        flush=True,
+    )
+
+
+def _print_closest_ik_distance_banner(
+    *,
+    rank: int,
+    target_pb: np.ndarray,
+    solution: dict[str, object] | None,
+) -> None:
+    if solution is None:
+        print(
+            "\n"
+            "############################################################\n"
+            " CLOSEST IK DISTANCE DETAILS\n"
+            "------------------------------------------------------------\n"
+            f" grasp_rank : {int(rank):02d}\n"
+            " status     : unavailable\n"
+            "############################################################\n",
+            flush=True,
+        )
+        return
+
+    target_xyz = np.asarray(target_pb, dtype=np.float64).reshape(3)
+    ee_xyz = np.asarray(solution["final_ee_position_xyz"], dtype=np.float64).reshape(3)
+    ik_error_xyz = np.asarray(solution["ik_error_xyz_m"], dtype=np.float64).reshape(3)
+    orientation_error = solution.get("ee_orientation_error_deg")
+    approach_axis_offset = solution.get("approach_axis_offset_m")
+    lateral_offset = solution.get("lateral_offset_m")
+
+    print(
+        "\n"
+        "############################################################\n"
+        " CLOSEST IK DISTANCE DETAILS\n"
+        "------------------------------------------------------------\n"
+        f" grasp_rank : {int(rank):02d}\n"
+        f" ik_feasible: {int(bool(solution.get('ik_feasible', False)))}\n"
+        "------------------------------------------------------------\n"
+        " EE vs TARGET LOCAL PB AFTER IK MOVE\n"
+        f" target_xyz : [{target_xyz[0]:.4f}, {target_xyz[1]:.4f}, {target_xyz[2]:.4f}] m\n"
+        f" ee_xyz     : [{ee_xyz[0]:.4f}, {ee_xyz[1]:.4f}, {ee_xyz[2]:.4f}] m\n"
+        f" error_xyz  : [{ik_error_xyz[0]:+.4f}, {ik_error_xyz[1]:+.4f}, {ik_error_xyz[2]:+.4f}] m\n"
+        f" ee_target_dist : {float(solution['ee_position_error_m']):.4f} m\n"
+        f" ee_target_ori  : {'nan' if orientation_error is None else f'{float(orientation_error):.2f}'} deg\n"
+        f" approach_x : {'nan' if approach_axis_offset is None else f'{float(approach_axis_offset):.4f}'} m\n"
+        f" lateral    : {'nan' if lateral_offset is None else f'{float(lateral_offset):.4f}'} m\n"
+        "############################################################\n",
         flush=True,
     )
 
@@ -514,7 +665,7 @@ def _voxel_downsample_points(points_xyz: np.ndarray, voxel_size_m: float) -> np.
     return np.asarray(points_xyz[np.sort(keep_indices)], dtype=np.float32)
 
 
-def _backproject_depth_to_camera_points_like_grasp_npz(
+def _backproject_live_depth_to_camera_points(
     depth_m: np.ndarray,
     intrinsic_matrix: np.ndarray,
     *,
@@ -575,7 +726,7 @@ def _capture_live_scene_voxels(
     )
     intrinsics = load_camera_intrinsics(Path(camera_cfg.intrinsics_path))
     depth_metric_m = decode_depth_png_bytes(snapshot.depth_bytes)
-    points_camera = _backproject_depth_to_camera_points_like_grasp_npz(
+    points_camera = _backproject_live_depth_to_camera_points(
         depth_metric_m,
         intrinsics.k,
         min_depth_m=LIVE_VOXEL_MIN_DEPTH_M,
@@ -664,25 +815,126 @@ def _pb_world_pose_to_ros_map_pose(
 def _local_pb_base_pose_to_ros_map_pose(
     local_pb_xy: tuple[float, float],
     local_pb_yaw_rad: float,
-    current_base_link_pose: RosMapPose2D | None,
+    current_amcl_pose: RosMapPose2D | None,
 ) -> RosMapPose2D:
-    if current_base_link_pose is None:
+    if current_amcl_pose is None:
         return _pb_world_pose_to_ros_map_pose(local_pb_xy, local_pb_yaw_rad)
 
-    current_pb_pose = _base_link_pose_to_pb_world_pose(
-        current_base_link_pose,
-        base_link_z_pb=0.0,
+    current_amcl_pb_pose = _amcl_pose_to_pb_world_pose(current_amcl_pose, z_pb=0.0)
+    assert current_amcl_pb_pose is not None
+    current_amcl_pb_xyz, current_pb_yaw = current_amcl_pb_pose
+    current_base_link_pb_xyz = _base_link_world_from_amcl_pb_pose(
+        current_amcl_pb_xyz,
+        current_pb_yaw,
+        z_pb=0.0,
     )
-    assert current_pb_pose is not None
-    current_pb_xyz, current_pb_yaw = current_pb_pose
     current_rot = _yaw_rotation_matrix(current_pb_yaw)
     local_delta = np.asarray([float(local_pb_xy[0]), float(local_pb_xy[1]), 0.0], dtype=np.float64)
-    candidate_pb_xy = current_pb_xyz[:2] + (current_rot @ local_delta)[:2]
+    candidate_pb_xy = current_base_link_pb_xyz[:2] + (current_rot @ local_delta)[:2]
     candidate_pb_yaw = _wrap_angle_rad(float(current_pb_yaw) + float(local_pb_yaw_rad))
     return _pb_world_pose_to_ros_map_pose(
         (float(candidate_pb_xy[0]), float(candidate_pb_xy[1])),
         candidate_pb_yaw,
     )
+
+
+def _local_pb_xy_to_ros_map_xy(
+    local_pb_xy: tuple[float, float],
+    current_amcl_pose: RosMapPose2D | None,
+) -> tuple[float, float]:
+    if current_amcl_pose is None:
+        return _pb_world_xy_to_ros_map_xy(local_pb_xy)
+
+    current_amcl_pb_pose = _amcl_pose_to_pb_world_pose(current_amcl_pose, z_pb=0.0)
+    assert current_amcl_pb_pose is not None
+    current_amcl_pb_xyz, current_pb_yaw = current_amcl_pb_pose
+    current_base_link_pb_xyz = _base_link_world_from_amcl_pb_pose(
+        current_amcl_pb_xyz,
+        current_pb_yaw,
+        z_pb=0.0,
+    )
+    current_rot_xy = _yaw_rotation_matrix(current_pb_yaw)[:2, :2]
+    local_delta = np.asarray(local_pb_xy, dtype=np.float64).reshape(2)
+    candidate_pb_xy = current_base_link_pb_xyz[:2] + current_rot_xy @ local_delta
+    return _pb_world_xy_to_ros_map_xy((float(candidate_pb_xy[0]), float(candidate_pb_xy[1])))
+
+
+def _ros_map_amcl_pose_to_local_pb_base_pose(
+    amcl_pose: RosMapPose2D,
+    current_amcl_pose: RosMapPose2D | None,
+) -> tuple[tuple[float, float], float]:
+    candidate_amcl_pb_pose = _amcl_pose_to_pb_world_pose(amcl_pose, z_pb=0.0)
+    assert candidate_amcl_pb_pose is not None
+    candidate_amcl_pb_xyz, candidate_pb_yaw = candidate_amcl_pb_pose
+    candidate_base_link_pb_xyz = _base_link_world_from_amcl_pb_pose(
+        candidate_amcl_pb_xyz,
+        candidate_pb_yaw,
+        z_pb=0.0,
+    )
+
+    if current_amcl_pose is None:
+        return (
+            (float(candidate_base_link_pb_xyz[0]), float(candidate_base_link_pb_xyz[1])),
+            float(candidate_pb_yaw),
+        )
+
+    current_amcl_pb_pose = _amcl_pose_to_pb_world_pose(current_amcl_pose, z_pb=0.0)
+    assert current_amcl_pb_pose is not None
+    current_amcl_pb_xyz, current_pb_yaw = current_amcl_pb_pose
+    current_base_link_pb_xyz = _base_link_world_from_amcl_pb_pose(
+        current_amcl_pb_xyz,
+        current_pb_yaw,
+        z_pb=0.0,
+    )
+    current_rot_xy = _yaw_rotation_matrix(current_pb_yaw)[:2, :2]
+    local_pb_xy = (candidate_base_link_pb_xyz[:2] - current_base_link_pb_xyz[:2]) @ current_rot_xy
+    local_pb_yaw = _wrap_angle_rad(candidate_pb_yaw - current_pb_yaw)
+    return ((float(local_pb_xy[0]), float(local_pb_xy[1])), float(local_pb_yaw))
+
+
+def _local_pb_direction_to_ros_map_xy(
+    direction_local_pb_xyz: np.ndarray,
+    current_amcl_pose: RosMapPose2D | None,
+) -> np.ndarray:
+    direction_local_xy = _unit_xy_or_default(direction_local_pb_xyz)
+    if current_amcl_pose is None:
+        direction_pb_world_xy = direction_local_xy
+    else:
+        current_pb_pose = _amcl_pose_to_pb_world_pose(current_amcl_pose, z_pb=0.0)
+        assert current_pb_pose is not None
+        _, current_pb_yaw = current_pb_pose
+        direction_pb_world_xy = _yaw_rotation_matrix(current_pb_yaw)[:2, :2] @ direction_local_xy
+
+    direction_ros_xy = np.asarray(
+        [direction_pb_world_xy[1], -direction_pb_world_xy[0]],
+        dtype=np.float64,
+    )
+    direction_norm = float(np.linalg.norm(direction_ros_xy))
+    if direction_norm <= 1e-6:
+        return np.asarray([1.0, 0.0], dtype=np.float64)
+    return direction_ros_xy / direction_norm
+
+
+def _rectangular_footprint_is_clear_on_map(
+    footprint_map: BaseFootprintMap,
+    amcl_pose: RosMapPose2D,
+) -> bool:
+    amcl_pb_pose = _amcl_pose_to_pb_world_pose(amcl_pose, z_pb=0.0)
+    assert amcl_pb_pose is not None
+    amcl_pb_xyz, amcl_pb_yaw = amcl_pb_pose
+    footprint_points_pb = np.asarray(footprint_map.footprint_points_pb_xy, dtype=np.float64).reshape(-1, 2)
+    rot_xy = _yaw_rotation_matrix(amcl_pb_yaw)[:2, :2]
+    world_pb_xy = amcl_pb_xyz[:2].reshape(1, 2) + footprint_points_pb @ rot_xy.T
+
+    ros_x = world_pb_xy[:, 1]
+    ros_y = -world_pb_xy[:, 0]
+    origin_x, origin_y = footprint_map.origin_xy
+    resolution = float(footprint_map.resolution_m)
+    keys = zip(
+        np.rint((ros_x - origin_x) / resolution).astype(np.int32),
+        np.rint((ros_y - origin_y) / resolution).astype(np.int32),
+    )
+    return all((int(key_x), int(key_y)) in footprint_map.free_cell_keys for key_x, key_y in keys)
 
 
 def _ros_map_pose_to_dict(pose: RosMapPose2D) -> dict[str, float]:
@@ -731,6 +983,16 @@ def _feasible_ik_solution_sort_key(solution: dict[str, object]) -> tuple[float, 
         float(solution.get("joint_reset_delta_norm_l2", float("inf"))),
         float(solution.get("ee_orientation_error_deg", float("inf"))),
         float(solution.get("ee_position_error_m", float("inf"))),
+        int(solution.get("sample_index", 0)),
+    )
+
+
+def _closest_ik_solution_sort_key(solution: dict[str, object]) -> tuple[float, float, float, int]:
+    orientation_error = solution.get("ee_orientation_error_deg")
+    return (
+        float(solution.get("ee_position_error_m", float("inf"))),
+        float("inf") if orientation_error is None else float(orientation_error),
+        float(solution.get("joint_reset_delta_norm_l2", float("inf"))),
         int(solution.get("sample_index", 0)),
     )
 
@@ -880,6 +1142,207 @@ def _prepare_ranked_grasp_targets(
     return prepared_targets
 
 
+def _sample_base_link_poses_from_aligned_ros_map(
+    *,
+    footprint_map: BaseFootprintMap,
+    current_amcl_pose: RosMapPose2D | None,
+    target_pb: np.ndarray,
+    target_rot_pb: np.ndarray,
+    rng: np.random.Generator,
+    max_samples: int,
+    max_yaw_delta_rad: float,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    stats: dict[str, object] = {
+        "target_ros_map_xy": None,
+        "safe_cell_count": int(len(footprint_map.free_cell_centers_xy)),
+        "region_cell_count": 0,
+        "sampled_count": 0,
+        "footprint_rejected_count": 0,
+    }
+    if current_amcl_pose is None:
+        return [], stats
+
+    free_cells_xy = np.asarray(footprint_map.free_cell_centers_xy, dtype=np.float64).reshape(-1, 2)
+    if len(free_cells_xy) == 0:
+        return [], stats
+
+    max_samples = max(int(max_samples), 0)
+    if max_samples <= 0:
+        return [], stats
+
+    target_ros_xy = np.asarray(
+        _local_pb_xy_to_ros_map_xy(
+            (float(target_pb[0]), float(target_pb[1])),
+            current_amcl_pose,
+        ),
+        dtype=np.float64,
+    )
+    stats["target_ros_map_xy"] = (float(target_ros_xy[0]), float(target_ros_xy[1]))
+
+    yaw_delta_by_cell = rng.uniform(
+        -float(max_yaw_delta_rad),
+        float(max_yaw_delta_rad),
+        size=len(free_cells_xy),
+    ).astype(np.float64)
+    ros_map_yaw_by_cell = np.asarray(
+        [
+            _wrap_angle_rad(float(current_amcl_pose.yaw_rad) + float(yaw_delta))
+            for yaw_delta in yaw_delta_by_cell
+        ],
+        dtype=np.float64,
+    )
+    pb_yaw_by_cell = ros_map_yaw_by_cell + math.pi * 0.5
+    offset_pb_x = float(BASE_LINK_FROM_AMCL_PB_XY[0])
+    offset_pb_y = float(BASE_LINK_FROM_AMCL_PB_XY[1])
+    offset_world_pb_x = np.cos(pb_yaw_by_cell) * offset_pb_x - np.sin(pb_yaw_by_cell) * offset_pb_y
+    offset_world_pb_y = np.sin(pb_yaw_by_cell) * offset_pb_x + np.cos(pb_yaw_by_cell) * offset_pb_y
+    candidate_base_link_xy = free_cells_xy + np.column_stack([offset_world_pb_y, -offset_world_pb_x])
+
+    base_to_target_xy = target_ros_xy.reshape(1, 2) - candidate_base_link_xy
+    distances = np.linalg.norm(base_to_target_xy, axis=1)
+    distance_mask = (
+        (distances >= BASE_SAMPLE_MIN_DISTANCE_M)
+        & (distances <= BASE_SAMPLE_MAX_DISTANCE_M)
+    )
+
+    direction_mask = np.zeros(len(free_cells_xy), dtype=bool)
+    valid_distance = distances > 1e-6
+    direction_rows = distance_mask & valid_distance
+    if np.any(direction_rows):
+        base_to_target_dir = base_to_target_xy[direction_rows] / distances[direction_rows].reshape(-1, 1)
+        target_approach_dir = _local_pb_direction_to_ros_map_xy(
+            target_rot_pb[:, 0],
+            current_amcl_pose,
+        )
+        dot = np.clip(base_to_target_dir @ target_approach_dir.reshape(2), -1.0, 1.0)
+        approach_error_deg = np.full(len(free_cells_xy), np.inf, dtype=np.float64)
+        approach_error_deg[direction_rows] = np.degrees(np.arccos(dot))
+        direction_mask = approach_error_deg <= BASE_SAMPLE_APPROACH_HALF_ANGLE_DEG
+    else:
+        approach_error_deg = np.full(len(free_cells_xy), np.inf, dtype=np.float64)
+
+    region_mask = distance_mask & direction_mask
+    region_indices = np.nonzero(region_mask)[0]
+    stats["region_cell_count"] = int(len(region_indices))
+    if len(region_indices) == 0:
+        return [], stats
+
+    candidates: list[dict[str, object]] = []
+    shuffled_region_indices = np.asarray(region_indices, dtype=np.int64)
+    rng.shuffle(shuffled_region_indices)
+    footprint_rejected_count = 0
+    for cell_index in shuffled_region_indices:
+        if len(candidates) >= max_samples:
+            break
+        ros_map_yaw = float(ros_map_yaw_by_cell[cell_index])
+        ros_map_amcl_pose = RosMapPose2D(
+            x=float(free_cells_xy[cell_index, 0]),
+            y=float(free_cells_xy[cell_index, 1]),
+            yaw_rad=ros_map_yaw,
+        )
+        if not _rectangular_footprint_is_clear_on_map(footprint_map, ros_map_amcl_pose):
+            footprint_rejected_count += 1
+            continue
+
+        local_pb_xy, local_pb_yaw = _ros_map_amcl_pose_to_local_pb_base_pose(
+            ros_map_amcl_pose,
+            current_amcl_pose,
+        )
+        ros_map_base_link_pose = _local_pb_base_pose_to_ros_map_pose(
+            local_pb_xy,
+            local_pb_yaw,
+            current_amcl_pose,
+        )
+        candidates.append(
+            {
+                "sample_index": int(len(candidates)),
+                "map_cell_index": int(cell_index),
+                "local_pb_xy": (float(local_pb_xy[0]), float(local_pb_xy[1])),
+                "local_pb_yaw_rad": float(local_pb_yaw),
+                "ros_map_pose": ros_map_base_link_pose,
+                "ros_map_amcl_pose": ros_map_amcl_pose,
+                "distance_to_target_m": float(distances[cell_index]),
+                "approach_error_deg": float(approach_error_deg[cell_index]),
+            }
+        )
+
+    stats["sampled_count"] = int(len(candidates))
+    stats["footprint_rejected_count"] = int(footprint_rejected_count)
+    return candidates, stats
+
+
+def _make_sampled_ik_solution_record(
+    *,
+    ik_attempt: dict[str, object],
+    sample_candidate: dict[str, object],
+    sample_stats: dict[str, object],
+    reference_base_yaw_pb: float,
+    feasible: bool,
+) -> dict[str, object] | None:
+    joint_solution_rad = ik_attempt["ik_joint_solution_rad"]
+    if joint_solution_rad is None:
+        return None
+
+    joint_solution_rad = np.asarray(joint_solution_rad, dtype=np.float64)
+    joint_solution_deg = np.degrees(joint_solution_rad)
+    base_xyz = [float(v) for v in ik_attempt["pb_base_link_xyz"]]
+    base_yaw = float(ik_attempt["pb_base_link_yaw_rad"])
+    base_yaw_delta_from_reference = _abs_angle_delta_rad(base_yaw, reference_base_yaw_pb)
+    error_xyz = np.asarray(ik_attempt["ik_error_xyz"], dtype=np.float64)
+    orientation_error_deg = ik_attempt["ee_orientation_error_deg"]
+    ros_map_pose = sample_candidate["ros_map_pose"]
+    ros_map_amcl_pose = sample_candidate.get("ros_map_amcl_pose")
+
+    return {
+        "sample_index": int(sample_candidate["sample_index"]),
+        "sample_source": str(sample_candidate.get("sample_source", "ros_map")),
+        "ros_map_sample_region_cell_count": int(sample_stats["region_cell_count"]),
+        "ros_map_sample_cell_index": int(sample_candidate["map_cell_index"]),
+        "ros_map_sample_distance_to_target_m": float(sample_candidate["distance_to_target_m"]),
+        "ros_map_sample_approach_error_deg": float(sample_candidate["approach_error_deg"]),
+        "pb_base_link_xyz": base_xyz,
+        "pb_base_link_yaw_rad": base_yaw,
+        "pb_base_link_yaw_deg": float(math.degrees(base_yaw)),
+        "pb_base_link_reference_yaw_rad": float(reference_base_yaw_pb),
+        "pb_base_link_reference_yaw_deg": float(math.degrees(reference_base_yaw_pb)),
+        "pb_base_link_yaw_delta_from_reference_rad": float(base_yaw_delta_from_reference),
+        "pb_base_link_yaw_delta_from_reference_deg": float(math.degrees(base_yaw_delta_from_reference)),
+        "pb_base_link_yaw_max_delta_from_reference_deg": float(BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG),
+        "ros_map_base_link_pose": _ros_map_pose_to_dict(ros_map_pose),
+        "ros_map_amcl_pose": (
+            None
+            if not isinstance(ros_map_amcl_pose, RosMapPose2D)
+            else _ros_map_pose_to_dict(ros_map_amcl_pose)
+        ),
+        "final_ee_position_xyz": np.asarray(ik_attempt["final_ee_position_xyz"], dtype=np.float64).astype(float).tolist(),
+        "final_ee_orientation_xyzw": np.asarray(
+            ik_attempt["final_ee_orientation_xyzw"],
+            dtype=np.float64,
+        ).astype(float).tolist(),
+        "ee_position_error_m": float(ik_attempt["ee_position_error_m"]),
+        "ee_orientation_error_deg": None if orientation_error_deg is None else float(orientation_error_deg),
+        "approach_axis_offset_m": (
+            None
+            if ik_attempt["approach_axis_offset_m"] is None
+            else float(ik_attempt["approach_axis_offset_m"])
+        ),
+        "lateral_offset_m": (
+            None
+            if ik_attempt["lateral_offset_m"] is None
+            else float(ik_attempt["lateral_offset_m"])
+        ),
+        "collision_free": bool(ik_attempt["collision_free"]),
+        "ik_feasible": bool(feasible),
+        "ik_error_xyz_m": error_xyz.astype(float).tolist(),
+        "ik_joint_solution_rad": joint_solution_rad.astype(float).tolist(),
+        "ik_joint_solution_deg": joint_solution_deg.astype(float).tolist(),
+        "joint_limit_margin_min_ratio": float(ik_attempt["joint_limit_margin_min_ratio"]),
+        "joint_limit_margin_mean_ratio": float(ik_attempt["joint_limit_margin_mean_ratio"]),
+        "joint_reset_delta_norm_l2": float(ik_attempt["joint_reset_delta_norm_l2"]),
+        "refinement_applied": False,
+    }
+
+
 def _sample_feasible_ik_solutions(
     *,
     p_mod,
@@ -893,133 +1356,160 @@ def _sample_feasible_ik_solutions(
     rng_seed: int,
     position_tolerance_m: float,
     orientation_tolerance_deg: float,
-    current_base_link_pose: RosMapPose2D | None = None,
+    current_amcl_pose: RosMapPose2D | None = None,
+    footprint_map: BaseFootprintMap | None = None,
+    grasp_rank: int | None = None,
     num_samples: int = 10,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     rng = np.random.default_rng(int(rng_seed))
     valid_candidates: list[dict[str, object]] = []
-    target_pos = target_pb.tolist()
+    closest_candidate: dict[str, object] | None = None
     reference_base_yaw_pb = 0.0
     max_base_yaw_delta_rad = math.radians(BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG)
+    if footprint_map is None:
+        sample_candidates: list[dict[str, object]] = []
+        sample_stats: dict[str, object] = {
+            "target_ros_map_xy": None,
+            "safe_cell_count": 0,
+            "region_cell_count": 0,
+            "sampled_count": 0,
+            "footprint_rejected_count": 0,
+        }
+    else:
+        sample_candidates, sample_stats = _sample_base_link_poses_from_aligned_ros_map(
+            footprint_map=footprint_map,
+            current_amcl_pose=current_amcl_pose,
+            target_pb=target_pb,
+            target_rot_pb=target_rot_pb,
+            rng=rng,
+            max_samples=int(num_samples),
+            max_yaw_delta_rad=max_base_yaw_delta_rad,
+        )
 
-    for sample_index in range(int(num_samples)):
-        distance = float(rng.uniform(0.20, 0.48))
-        angle_offset = float(rng.uniform(math.radians(-10), math.radians(10)))
-        yaw_delta = float(rng.uniform(-max_base_yaw_delta_rad, max_base_yaw_delta_rad))
+    for sample_candidate in sample_candidates:
+        local_pb_xy = sample_candidate["local_pb_xy"]
+        local_pb_yaw = float(sample_candidate["local_pb_yaw_rad"])
+        ik_attempt = _attempt_ik_at_base_pose(
+            p_mod=p_mod,
+            robot_id=robot_id,
+            controllable_joint_ids=controllable_joint_ids,
+            planning_config=planning_config,
+            target_pb=target_pb,
+            target_quat_pb=target_quat_pb,
+            base_link_xy=local_pb_xy,
+            base_link_yaw_rad=local_pb_yaw,
+            obstacle_body_ids=obstacle_body_ids,
+        )
 
-        # target_rot_pb is the dynamic gripper/EE frame in the local PB scene, not base_link.
-        # Its local +X is the gripper forward direction; sample the arm base behind it.
-        v_x_xy = _unit_xy_or_default(target_rot_pb[:, 0])
-        ray_angle = math.atan2(float(v_x_xy[1]), float(v_x_xy[0]))
-        theta = ray_angle + angle_offset
+        dist_error = float(ik_attempt["ee_position_error_m"])
+        collision_free = bool(ik_attempt["collision_free"])
+        joint_solution_rad = ik_attempt["ik_joint_solution_rad"]
 
-        pb_bx = float(target_pos[0] - distance * math.cos(theta))
-        pb_by = float(target_pos[1] - distance * math.sin(theta))
-        pb_yaw = _wrap_angle_rad(reference_base_yaw_pb + yaw_delta)
-
-        best_attempt: dict[str, object] | None = None
-        current_pb_bx = pb_bx
-        current_pb_by = pb_by
-        current_pb_yaw = pb_yaw
-
-        # After the first IK solve, nudge the base in the XY direction of the EE error.
-        for _ in range(3):
-            ik_attempt = _attempt_ik_at_base_pose(
-                p_mod=p_mod,
-                robot_id=robot_id,
-                controllable_joint_ids=controllable_joint_ids,
-                planning_config=planning_config,
-                target_pb=target_pb,
-                target_quat_pb=target_quat_pb,
-                base_link_xy=(current_pb_bx, current_pb_by),
-                base_link_yaw_rad=current_pb_yaw,
-                obstacle_body_ids=obstacle_body_ids,
-            )
-            is_better_attempt = (
-                best_attempt is None
-                or float(ik_attempt["ee_position_error_m"]) < float(best_attempt["ee_position_error_m"])
-            )
-            if is_better_attempt:
-                best_attempt = dict(ik_attempt)
-
-            error_xyz = np.asarray(ik_attempt["ik_error_xyz"], dtype=np.float64)
-            error_xy = error_xyz[:2]
-            if np.linalg.norm(error_xy) < 1e-4:
-                break
-
-            current_pb_bx += float(error_xy[0]) * 0.75
-            current_pb_by += float(error_xy[1]) * 0.75
-
-        if best_attempt is None:
-            continue
-
-        dist_error = float(best_attempt["ee_position_error_m"])
-        collision_free = bool(best_attempt["collision_free"])
-        joint_solution_rad = best_attempt["ik_joint_solution_rad"]
-
-        orientation_error_deg = best_attempt["ee_orientation_error_deg"]
+        orientation_error_deg = ik_attempt["ee_orientation_error_deg"]
         orientation_ok = (
             orientation_error_deg is not None
             and float(orientation_error_deg) <= float(orientation_tolerance_deg)
         )
-
-        if (
+        feasible = (
             dist_error <= float(position_tolerance_m)
             and orientation_ok
             and collision_free
             and joint_solution_rad is not None
+        )
+        solution_record = _make_sampled_ik_solution_record(
+            ik_attempt=ik_attempt,
+            sample_candidate=sample_candidate,
+            sample_stats=sample_stats,
+            reference_base_yaw_pb=reference_base_yaw_pb,
+            feasible=feasible,
+        )
+        if solution_record is None:
+            continue
+
+        if (
+            closest_candidate is None
+            or _closest_ik_solution_sort_key(solution_record)
+            < _closest_ik_solution_sort_key(closest_candidate)
         ):
-            joint_solution_deg = np.degrees(joint_solution_rad)
-            best_base_xyz = [float(v) for v in best_attempt["pb_base_link_xyz"]]
-            best_base_yaw = float(best_attempt["pb_base_link_yaw_rad"])
-            best_base_yaw_delta_from_reference = _abs_angle_delta_rad(best_base_yaw, reference_base_yaw_pb)
-            best_error_xyz = np.asarray(best_attempt["ik_error_xyz"], dtype=np.float64)
-            best_ros_map_pose = _local_pb_base_pose_to_ros_map_pose(
-                (best_base_xyz[0], best_base_xyz[1]),
-                best_base_yaw,
-                current_base_link_pose,
-            )
-            solution_record: dict[str, object] = {
-                "sample_index": sample_index,
-                "pb_base_link_xyz": best_base_xyz,
-                "pb_base_link_yaw_rad": best_base_yaw,
-                "pb_base_link_yaw_deg": float(math.degrees(best_base_yaw)),
-                "pb_base_link_reference_yaw_rad": float(reference_base_yaw_pb),
-                "pb_base_link_reference_yaw_deg": float(math.degrees(reference_base_yaw_pb)),
-                "pb_base_link_yaw_delta_from_reference_rad": float(best_base_yaw_delta_from_reference),
-                "pb_base_link_yaw_delta_from_reference_deg": float(
-                    math.degrees(best_base_yaw_delta_from_reference)
-                ),
-                "pb_base_link_yaw_max_delta_from_reference_deg": float(
-                    BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG
-                ),
-                "ros_map_base_link_pose": _ros_map_pose_to_dict(best_ros_map_pose),
-                "ee_position_error_m": dist_error,
-                "ee_orientation_error_deg": float(orientation_error_deg),
-                "approach_axis_offset_m": (
-                    None
-                    if best_attempt["approach_axis_offset_m"] is None
-                    else float(best_attempt["approach_axis_offset_m"])
-                ),
-                "lateral_offset_m": (
-                    None
-                    if best_attempt["lateral_offset_m"] is None
-                    else float(best_attempt["lateral_offset_m"])
-                ),
-                "ik_error_xyz_m": best_error_xyz.astype(float).tolist(),
-                "ik_joint_solution_rad": joint_solution_rad.astype(float).tolist(),
-                "ik_joint_solution_deg": joint_solution_deg.astype(float).tolist(),
-                "joint_limit_margin_min_ratio": float(best_attempt["joint_limit_margin_min_ratio"]),
-                "joint_limit_margin_mean_ratio": float(best_attempt["joint_limit_margin_mean_ratio"]),
-                "joint_reset_delta_norm_l2": float(best_attempt["joint_reset_delta_norm_l2"]),
-                "refinement_applied": True,
-            }
+            closest_candidate = solution_record
+
+        if feasible:
             valid_candidates.append(solution_record)
+
+    if closest_candidate is None:
+        direct_ik_attempt = _attempt_ik_at_base_pose(
+            p_mod=p_mod,
+            robot_id=robot_id,
+            controllable_joint_ids=controllable_joint_ids,
+            planning_config=planning_config,
+            target_pb=target_pb,
+            target_quat_pb=target_quat_pb,
+            base_link_xy=(0.0, 0.0),
+            base_link_yaw_rad=0.0,
+            obstacle_body_ids=obstacle_body_ids,
+        )
+        direct_orientation_error = direct_ik_attempt["ee_orientation_error_deg"]
+        direct_feasible = (
+            float(direct_ik_attempt["ee_position_error_m"]) <= float(position_tolerance_m)
+            and direct_orientation_error is not None
+            and float(direct_orientation_error) <= float(orientation_tolerance_deg)
+            and bool(direct_ik_attempt["collision_free"])
+            and direct_ik_attempt["ik_joint_solution_rad"] is not None
+        )
+        direct_sample_candidate = {
+            "sample_index": -1,
+            "sample_source": "direct_current_base_fallback",
+            "map_cell_index": -1,
+            "local_pb_xy": (0.0, 0.0),
+            "local_pb_yaw_rad": 0.0,
+            "ros_map_pose": _local_pb_base_pose_to_ros_map_pose(
+                (0.0, 0.0),
+                0.0,
+                current_amcl_pose,
+            ),
+            "ros_map_amcl_pose": current_amcl_pose,
+            "distance_to_target_m": float(np.linalg.norm(np.asarray(target_pb, dtype=np.float64)[:2])),
+            "approach_error_deg": float("inf"),
+        }
+        fallback_stats = {
+            "region_cell_count": int(sample_stats["region_cell_count"]),
+        }
+        direct_solution_record = _make_sampled_ik_solution_record(
+            ik_attempt=direct_ik_attempt,
+            sample_candidate=direct_sample_candidate,
+            sample_stats=fallback_stats,
+            reference_base_yaw_pb=reference_base_yaw_pb,
+            feasible=direct_feasible,
+        )
+        if direct_solution_record is not None:
+            closest_candidate = direct_solution_record
+            if direct_feasible:
+                valid_candidates.append(direct_solution_record)
 
     valid_candidates.sort(key=_feasible_ik_solution_sort_key)
     if valid_candidates:
         valid_candidates[0]["selected_as_best"] = True
-    return valid_candidates
+    if closest_candidate is not None:
+        closest_candidate["selected_as_closest"] = True
+    return valid_candidates, closest_candidate
+
+
+def _select_closest_visualization_solution(
+    visualization_records: list[dict[str, object]],
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    closest_record: dict[str, object] | None = None
+    closest_solution: dict[str, object] | None = None
+    for record in visualization_records:
+        solution = record.get("closest_solution")
+        if not isinstance(solution, dict):
+            continue
+        if (
+            closest_solution is None
+            or _closest_ik_solution_sort_key(solution) < _closest_ik_solution_sort_key(closest_solution)
+        ):
+            closest_record = record
+            closest_solution = solution
+    return closest_record, closest_solution
 
 
 def _rank_rgba(rank: int) -> tuple[float, float, float, float]:
@@ -1051,6 +1541,40 @@ def _add_base_marker(
         baseVisualShapeIndex=visual_shape,
         basePosition=[float(position_xyz[0]), float(position_xyz[1]), float(position_xyz[2])],
     )
+
+
+def _animate_gui_ik_solution(
+    p_mod,
+    *,
+    robot_id: int,
+    controllable_joint_ids: list[int],
+    planning_config,
+    base_xyz: list[float],
+    base_yaw_rad: float,
+    joint_solution_rad: list[float],
+) -> None:
+    step_count = max(1, int(os.getenv("BASE_SAMPLER_GUI_ANIMATION_STEPS", "80")))
+    frame_sleep_sec = max(0.0, float(os.getenv("BASE_SAMPLER_GUI_FRAME_SLEEP_SEC", "0.025")))
+    joint_reset_rad = np.asarray(_degrees_to_radians(planning_config.joint_reset_deg), dtype=np.float64)
+    joint_goal_rad = np.asarray(joint_solution_rad, dtype=np.float64)
+    if len(joint_reset_rad) != len(joint_goal_rad):
+        _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, joint_goal_rad)
+        p_mod.stepSimulation()
+        return
+
+    p_mod.resetBasePositionAndOrientation(
+        robot_id,
+        base_xyz,
+        p_mod.getQuaternionFromEuler([0.0, 0.0, float(base_yaw_rad)]),
+    )
+    for frame_index in range(step_count + 1):
+        alpha = float(frame_index) / float(step_count)
+        smooth_alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+        joint_state = joint_reset_rad + (joint_goal_rad - joint_reset_rad) * smooth_alpha
+        _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, joint_state)
+        p_mod.stepSimulation()
+        if frame_sleep_sec > 0.0:
+            time.sleep(frame_sleep_sec)
 
 
 def _spin_gui(p_mod, *, hold_seconds: float, time_step: float) -> None:
@@ -1177,6 +1701,7 @@ def _visualize_feasible_ik_results_in_gui(
             target_pb = np.asarray(record["target_pb"], dtype=float)
             target_quat_pb = np.asarray(record["target_quat_pb"], dtype=float)
             feasible_solutions = list(record["feasible_solutions"])
+            closest_solution = record.get("closest_solution")
             total_feasible_count += len(feasible_solutions)
             rank_rgba = _rank_rgba(rank)
 
@@ -1220,16 +1745,21 @@ def _visualize_feasible_ik_results_in_gui(
                     radius=0.018 if marker_index == 0 else 0.012,
                 )
 
-            if feasible_solutions:
-                best_solution = sorted(feasible_solutions, key=_feasible_ik_solution_sort_key)[0]
+            if isinstance(closest_solution, dict):
+                _add_base_marker(
+                    p_mod,
+                    list(closest_solution["pb_base_link_xyz"]),
+                    (1.0, 1.0, 1.0, 0.95),
+                    radius=0.024,
+                )
                 best_solution_is_better = (
                     best_view_solution is None
-                    or _feasible_ik_solution_sort_key(best_solution)
-                    < _feasible_ik_solution_sort_key(best_view_solution)
+                    or _closest_ik_solution_sort_key(closest_solution)
+                    < _closest_ik_solution_sort_key(best_view_solution)
                 )
                 if best_solution_is_better:
                     best_view_record = record
-                    best_view_solution = best_solution
+                    best_view_solution = closest_solution
 
         if best_view_record is not None and best_view_solution is not None:
             rank = int(best_view_record["rank"])
@@ -1237,6 +1767,15 @@ def _visualize_feasible_ik_results_in_gui(
             base_xyz = [float(v) for v in best_view_solution["pb_base_link_xyz"]]
             base_yaw_rad = float(best_view_solution["pb_base_link_yaw_rad"])
             joint_solution_rad = [float(v) for v in best_view_solution["ik_joint_solution_rad"]]
+            _animate_gui_ik_solution(
+                p_mod,
+                robot_id=robot_id,
+                controllable_joint_ids=controllable_joint_ids,
+                planning_config=planning_config,
+                base_xyz=base_xyz,
+                base_yaw_rad=base_yaw_rad,
+                joint_solution_rad=joint_solution_rad,
+            )
             p_mod.resetBasePositionAndOrientation(
                 robot_id,
                 base_xyz,
@@ -1262,19 +1801,23 @@ def _visualize_feasible_ik_results_in_gui(
                 textSize=0.95,
             )
             camera_target = target_pb.astype(float).tolist()
+            closest_state = "feasible" if bool(best_view_solution.get("ik_feasible", False)) else "closest"
+            orientation_error = best_view_solution.get("ee_orientation_error_deg")
+            orientation_error_text = "nan" if orientation_error is None else f"{float(orientation_error):.2f}"
             p_mod.addUserDebugText(
                 (
-                    f"rank={rank}  feasible={len(best_view_record['feasible_solutions'])}  "
+                    f"rank={rank}  show={closest_state}  feasible={len(best_view_record['feasible_solutions'])}  "
                     f"ee_err={float(best_view_solution['ee_position_error_m']):.4f}m  "
-                    f"ori_err={float(best_view_solution['ee_orientation_error_deg']):.2f}deg"
+                    f"ori_err={orientation_error_text}deg"
                 ),
                 textPosition=[target_pb[0], target_pb[1], target_pb[2] + 0.24],
                 textColorRGB=[1.0, 1.0, 1.0],
                 textSize=1.1,
             )
             print(
-                f"[test_base_sampler] GUI open. Showing best feasible grasp rank={rank:02d} "
-                f"at base={base_xyz}, pb_gui_yaw={math.degrees(base_yaw_rad):.2f}deg.",
+                f"[test_base_sampler] GUI open. Animating closest sampled IK rank={rank:02d} "
+                f"({closest_state}) at base={base_xyz}, pb_gui_yaw={math.degrees(base_yaw_rad):.2f}deg, "
+                f"ee_err={float(best_view_solution['ee_position_error_m']):.4f}m.",
                 flush=True,
             )
         else:
@@ -1297,7 +1840,7 @@ def _visualize_feasible_ik_results_in_gui(
                 textSize=0.95,
             )
             print(
-                "[test_base_sampler] GUI open. No feasible IK solution found; "
+                "[test_base_sampler] GUI open. No sampled IK attempt was available; "
                 "showing reset robot, scene, and targets.",
                 flush=True,
             )
@@ -1392,6 +1935,7 @@ def main():
     _, p_mod, pybullet_data = _load_python_dependencies()
     position_tolerance_m = float(cfg.get("position_tolerance_m", planning_config.position_tolerance_m))
     orientation_tolerance_deg = float(cfg.get("orientation_tolerance_deg", 12.0))
+    footprint_map = _build_base_footprint_map(Path(cfg["map_yaml_path"]))
     (
         camera_in_base_link_rotation,
         camera_in_base_link_position,
@@ -1411,8 +1955,8 @@ def main():
     voxels_pb = live_scene.voxel_centers_pb
     camera_to_pb_rotation = live_scene.camera_to_pb_rotation
     camera_position_pb = live_scene.camera_position_pb
-    current_base_link_pose = _amcl_snapshot_to_ros_map_pose(live_scene.amcl_pose)
-    if current_base_link_pose is None and not args.allow_missing_amcl:
+    current_amcl_pose = _amcl_snapshot_to_ros_map_pose(live_scene.amcl_pose)
+    if current_amcl_pose is None and not args.allow_missing_amcl:
         raise RuntimeError(
             "No /amcl_pose was received during Camera_Car capture. "
             "Use --allow-missing-amcl only if you want a PB-local GUI replay."
@@ -1421,36 +1965,66 @@ def main():
         f"[test_base_sampler] grasp_json={grasp_result_json_path} | "
         f"grasps={len(grasp_candidates)} | live RGBD voxels={len(voxels_pb)} | "
         f"depth_points={live_scene.valid_depth_point_count} | "
-        f"amcl={'yes' if current_base_link_pose is not None else 'no'}",
+        f"amcl={'yes' if current_amcl_pose is not None else 'no'}",
         flush=True,
     )
-    _print_ros_map_pose("current /amcl_pose base_link", current_base_link_pose)
-    current_base_link_pb_pose = _base_link_pose_to_pb_world_pose(
-        current_base_link_pose,
-        base_link_z_pb=base_link_z_pb,
+    print(
+        "[test_base_sampler] aligned ROS map sampling: "
+        f"rect_footprint_pb_x={footprint_map.length_x_m:.3f}m "
+        f"rect_footprint_pb_y={footprint_map.length_y_m:.3f}m "
+        f"base_link_from_amcl_pb_xy=[{BASE_LINK_FROM_AMCL_PB_XY[0]:.4f}, "
+        f"{BASE_LINK_FROM_AMCL_PB_XY[1]:.4f}]m "
+        f"map_resolution={footprint_map.resolution_m:.3f}m "
+        f"free_cells={len(footprint_map.free_cell_keys)} "
+        f"footprint_check_points={len(footprint_map.footprint_points_pb_xy)} "
+        f"distance=[{BASE_SAMPLE_MIN_DISTANCE_M:.2f},{BASE_SAMPLE_MAX_DISTANCE_M:.2f}]m "
+        f"approach_half_angle={BASE_SAMPLE_APPROACH_HALF_ANGLE_DEG:.1f}deg "
+        f"amcl_align={'yes' if current_amcl_pose is not None else 'no'}",
+        flush=True,
     )
-    if current_base_link_pb_pose is None:
-        _print_pb_pose("current /amcl_pose converted to PB map frame", [])
+    _print_ros_map_pose("current /amcl_pose vehicle center", current_amcl_pose)
+    current_base_link_ros_pose = (
+        None
+        if current_amcl_pose is None
+        else _local_pb_base_pose_to_ros_map_pose((0.0, 0.0), 0.0, current_amcl_pose)
+    )
+    _print_ros_map_pose("current ROS map base_link derived from /amcl_pose + offset", current_base_link_ros_pose)
+    current_amcl_pb_pose = _amcl_pose_to_pb_world_pose(
+        current_amcl_pose,
+        z_pb=0.0,
+    )
+    if current_amcl_pb_pose is None:
+        _print_pb_pose("current /amcl_pose vehicle center converted to PB map frame", [])
+        _print_pb_pose("current PB base_link derived from /amcl_pose + offset", [])
     else:
-        current_base_link_pb_xyz, current_base_link_pb_yaw = current_base_link_pb_pose
+        current_amcl_pb_xyz, current_amcl_pb_yaw = current_amcl_pb_pose
         _print_pb_pose(
-            "current /amcl_pose converted to PB map frame",
+            "current /amcl_pose vehicle center converted to PB map frame",
+            current_amcl_pb_xyz,
+            current_amcl_pb_yaw,
+        )
+        current_base_link_pb_xyz = _base_link_world_from_amcl_pb_pose(
+            current_amcl_pb_xyz,
+            current_amcl_pb_yaw,
+            z_pb=base_link_z_pb,
+        )
+        _print_pb_pose(
+            "current PB base_link derived from /amcl_pose + offset",
             current_base_link_pb_xyz,
-            current_base_link_pb_yaw,
+            current_amcl_pb_yaw,
         )
     _print_camera_to_pb_axis_mapping()
     _print_pb_pose("reset depth camera local PB pose from default arm posture", camera_position_pb)
 
     client_id = p_mod.connect(p_mod.DIRECT)
     visualization_records: list[dict[str, object]] = []
-    first_feasible_result: dict[str, object] | None = None
     try:
         p_mod.setAdditionalSearchPath(pybullet_data.getDataPath())
         p_mod.resetSimulation()
         p_mod.setGravity(0.0, 0.0, -9.8)
         p_mod.loadURDF("plane.urdf")
 
-        voxel_size = 0.05
+        voxel_size = float(cfg.get("voxel_size_m", 0.05))
         half_extents = [voxel_size / 2.0] * 3
         col_shape = p_mod.createCollisionShape(p_mod.GEOM_BOX, halfExtents=half_extents)
         vis_shape = p_mod.createVisualShape(
@@ -1492,7 +2066,7 @@ def main():
             target_pb = prepared_target.target_pb
             target_rot_pb = prepared_target.target_rot_pb
             target_quat_pb = prepared_target.target_quat_pb
-            feasible_solutions = _sample_feasible_ik_solutions(
+            feasible_solutions, closest_solution = _sample_feasible_ik_solutions(
                 p_mod=p_mod,
                 robot_id=robot_id,
                 controllable_joint_ids=controllable_joint_ids,
@@ -1504,24 +2078,10 @@ def main():
                 rng_seed=42 + grasp_candidate.rank,
                 position_tolerance_m=position_tolerance_m,
                 orientation_tolerance_deg=orientation_tolerance_deg,
-                current_base_link_pose=current_base_link_pose,
+                current_amcl_pose=current_amcl_pose,
+                footprint_map=footprint_map,
+                grasp_rank=grasp_candidate.rank,
                 num_samples=int(args.num_samples),
-            )
-
-            direct_orientation_error_deg = prepared_target.direct_orientation_error_deg
-            direct_orientation_error_text = (
-                float("nan")
-                if direct_orientation_error_deg is None
-                else float(direct_orientation_error_deg)
-            )
-            print(
-                f"[grasp rank={grasp_candidate.rank:02d}] "
-                f"direct_ik={prepared_target.direct_ik_error_m:.4f}m "
-                f"direct_ori={direct_orientation_error_text:.2f}deg "
-                f"conf={grasp_candidate.grasp_confidence:.4f} "
-                f"dist_to_midpoint={grasp_candidate.grasp_distance_to_gripper_midpoint_m:.4f}m "
-                f"-> feasible_ik={len(feasible_solutions)}",
-                flush=True,
             )
 
             visualization_records.append(
@@ -1533,51 +2093,28 @@ def main():
                     "target_pb": target_pb.astype(float).tolist(),
                     "target_quat_pb": target_quat_pb.astype(float).tolist(),
                     "feasible_solutions": feasible_solutions,
+                    "closest_solution": closest_solution,
                 }
             )
 
             if feasible_solutions:
-                best_feasible_solution = feasible_solutions[0]
-                _print_pb_pose(
-                    f"target local PB pose rank={grasp_candidate.rank:02d}",
-                    target_pb,
-                )
-                _print_pb_pose(
-                    f"selected local PB base_link rank={grasp_candidate.rank:02d}",
-                    best_feasible_solution["pb_base_link_xyz"],
-                    float(best_feasible_solution["pb_base_link_yaw_rad"]),
-                )
-                _print_ros_map_pose(
-                    f"selected feasible ROS map base_link pose rank={grasp_candidate.rank:02d}",
-                    best_feasible_solution.get("ros_map_base_link_pose"),
-                )
-                _print_selected_base_link_ros_map_banner(
-                    rank=grasp_candidate.rank,
-                    pose=best_feasible_solution.get("ros_map_base_link_pose"),
-                )
-                first_feasible_result = {
-                    "rank": grasp_candidate.rank,
-                    "feasible_ik_count": len(feasible_solutions),
-                    "direct_ik_error_m": float(prepared_target.direct_ik_error_m),
-                }
-                print(
-                    f"[test_base_sampler] First feasible IK found at grasp rank={grasp_candidate.rank:02d}; "
-                    "launching GUI next.",
-                    flush=True,
-                )
                 break
     finally:
         p_mod.disconnect(client_id)
 
-    if first_feasible_result is not None:
-        print(
-            f"[test_base_sampler] Visualizing first feasible grasp rank={first_feasible_result['rank']:02d} "
-            f"(feasible_ik={first_feasible_result['feasible_ik_count']}, "
-            f"direct_ik={first_feasible_result['direct_ik_error_m']:.4f}m)",
-            flush=True,
+    closest_record, closest_solution = _select_closest_visualization_solution(visualization_records)
+    if closest_record is None:
+        _print_closest_ik_distance_banner(
+            rank=0,
+            target_pb=np.zeros(3, dtype=np.float64),
+            solution=None,
         )
     else:
-        print("[test_base_sampler] No feasible IK found; GUI will show scene and targets.", flush=True)
+        _print_closest_ik_distance_banner(
+            rank=int(closest_record["rank"]),
+            target_pb=np.asarray(closest_record["target_pb"], dtype=np.float64),
+            solution=closest_solution,
+        )
 
     if not args.no_gui:
         _visualize_feasible_ik_results_in_gui(
