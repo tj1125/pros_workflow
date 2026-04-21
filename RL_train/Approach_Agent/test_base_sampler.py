@@ -513,7 +513,7 @@ def _print_selected_base_link_ros_map_banner(
     )
 
 
-def _print_closest_ik_distance_banner(
+def _print_closest_ik_solution_banner(
     *,
     rank: int,
     target_pb: np.ndarray,
@@ -523,7 +523,7 @@ def _print_closest_ik_distance_banner(
         print(
             "\n"
             "############################################################\n"
-            " CLOSEST IK DISTANCE DETAILS\n"
+            " CLOSEST SAMPLED IK ATTEMPT\n"
             "------------------------------------------------------------\n"
             f" grasp_rank : {int(rank):02d}\n"
             " status     : unavailable\n"
@@ -535,6 +535,9 @@ def _print_closest_ik_distance_banner(
     target_xyz = np.asarray(target_pb, dtype=np.float64).reshape(3)
     ee_xyz = np.asarray(solution["final_ee_position_xyz"], dtype=np.float64).reshape(3)
     ik_error_xyz = np.asarray(solution["ik_error_xyz_m"], dtype=np.float64).reshape(3)
+    base_xyz = np.asarray(solution["pb_base_link_xyz"], dtype=np.float64).reshape(3)
+    ros_base_link_pose = solution.get("ros_map_base_link_pose")
+    ros_amcl_pose = solution.get("ros_map_amcl_pose")
     orientation_error = solution.get("ee_orientation_error_deg")
     approach_axis_offset = solution.get("approach_axis_offset_m")
     lateral_offset = solution.get("lateral_offset_m")
@@ -542,10 +545,26 @@ def _print_closest_ik_distance_banner(
     print(
         "\n"
         "############################################################\n"
-        " CLOSEST IK DISTANCE DETAILS\n"
+        " CLOSEST SAMPLED IK ATTEMPT\n"
         "------------------------------------------------------------\n"
         f" grasp_rank : {int(rank):02d}\n"
         f" ik_feasible: {int(bool(solution.get('ik_feasible', False)))}\n"
+        f" source     : {solution.get('sample_source', 'unknown')}\n"
+        f" sample_idx : {int(solution['sample_index'])}\n"
+        f" region_cell: {int(solution['ros_map_sample_region_cell_count'])}\n"
+        "------------------------------------------------------------\n"
+        " AMCL / VEHICLE CENTER ROS MAP\n"
+        f"{_format_ros_map_pose_lines(ros_amcl_pose)}"
+        "------------------------------------------------------------\n"
+        " BASE_LINK ROS MAP\n"
+        f"{_format_ros_map_pose_lines(ros_base_link_pose)}"
+        "------------------------------------------------------------\n"
+        " BASE_LINK LOCAL PB\n"
+        f" pb_x       : {float(base_xyz[0]):.4f} m\n"
+        f" pb_y       : {float(base_xyz[1]):.4f} m\n"
+        f" pb_z       : {float(base_xyz[2]):.4f} m\n"
+        f" pb_yaw     : {float(solution['pb_base_link_yaw_rad']):.6f} rad  "
+        f"({float(solution['pb_base_link_yaw_deg']):.2f} deg)\n"
         "------------------------------------------------------------\n"
         " EE vs TARGET LOCAL PB AFTER IK MOVE\n"
         f" target_xyz : [{target_xyz[0]:.4f}, {target_xyz[1]:.4f}, {target_xyz[2]:.4f}] m\n"
@@ -1386,6 +1405,23 @@ def _sample_feasible_ik_solutions(
             max_yaw_delta_rad=max_base_yaw_delta_rad,
         )
 
+    rank_text = "" if grasp_rank is None else f" rank={int(grasp_rank):02d}"
+    target_ros_xy = sample_stats.get("target_ros_map_xy")
+    target_text = (
+        "target_ros_map=unavailable"
+        if target_ros_xy is None
+        else f"target_ros_map=({float(target_ros_xy[0]):.4f}, {float(target_ros_xy[1]):.4f})m"
+    )
+    print(
+        f"[test_base_sampler] aligned ROS map sample region{rank_text}: "
+        f"{target_text} "
+        f"safe_cells={int(sample_stats['safe_cell_count'])} "
+        f"region_cells={int(sample_stats['region_cell_count'])} "
+        f"footprint_rejected={int(sample_stats['footprint_rejected_count'])} "
+        f"sampled={int(sample_stats['sampled_count'])}",
+        flush=True,
+    )
+
     for sample_candidate in sample_candidates:
         local_pb_xy = sample_candidate["local_pb_xy"]
         local_pb_yaw = float(sample_candidate["local_pb_yaw_rad"])
@@ -1483,6 +1519,11 @@ def _sample_feasible_ik_solutions(
         )
         if direct_solution_record is not None:
             closest_candidate = direct_solution_record
+            print(
+                f"[test_base_sampler] no sampled IK attempt{rank_text}; "
+                "using direct current-base IK as GUI fallback.",
+                flush=True,
+            )
             if direct_feasible:
                 valid_candidates.append(direct_solution_record)
 
@@ -1492,24 +1533,6 @@ def _sample_feasible_ik_solutions(
     if closest_candidate is not None:
         closest_candidate["selected_as_closest"] = True
     return valid_candidates, closest_candidate
-
-
-def _select_closest_visualization_solution(
-    visualization_records: list[dict[str, object]],
-) -> tuple[dict[str, object] | None, dict[str, object] | None]:
-    closest_record: dict[str, object] | None = None
-    closest_solution: dict[str, object] | None = None
-    for record in visualization_records:
-        solution = record.get("closest_solution")
-        if not isinstance(solution, dict):
-            continue
-        if (
-            closest_solution is None
-            or _closest_ik_solution_sort_key(solution) < _closest_ik_solution_sort_key(closest_solution)
-        ):
-            closest_record = record
-            closest_solution = solution
-    return closest_record, closest_solution
 
 
 def _rank_rgba(rank: int) -> tuple[float, float, float, float]:
@@ -1598,7 +1621,7 @@ def _compute_gui_camera_view(
     planning_config,
     visualization_records: list[dict[str, object]],
     best_view_solution: dict[str, object] | None,
-) -> tuple[list[float], float]:
+) -> tuple[list[float], float, float, float]:
     points: list[np.ndarray] = [
         np.asarray([0.0, 0.0, float(planning_config.initial_height)], dtype=np.float64)
     ]
@@ -1606,18 +1629,30 @@ def _compute_gui_camera_view(
         points.append(np.asarray(record["target_pb"], dtype=np.float64).reshape(3))
     if best_view_solution is not None:
         points.append(np.asarray(best_view_solution["pb_base_link_xyz"], dtype=np.float64).reshape(3))
+        final_ee_position = best_view_solution.get("final_ee_position_xyz")
+        if final_ee_position is not None:
+            points.append(np.asarray(final_ee_position, dtype=np.float64).reshape(3))
 
     finite_points = [point for point in points if np.all(np.isfinite(point))]
     if not finite_points:
-        return [0.0, 0.0, float(planning_config.initial_height)], 1.2
+        return [0.0, 0.0, float(planning_config.initial_height)], 1.2, 90.0, -3.0
 
     point_arr = np.vstack(finite_points)
     lower = np.min(point_arr, axis=0)
     upper = np.max(point_arr, axis=0)
     center = 0.5 * (lower + upper)
     extent = float(np.max(upper - lower))
-    camera_distance = max(1.2, extent * 1.8 + 0.6)
-    return center.astype(float).tolist(), camera_distance
+    camera_distance = max(1.2, extent * 2.1 + 0.7)
+    camera_yaw = 90.0
+    if best_view_solution is not None:
+        camera_yaw = math.degrees(float(best_view_solution.get("pb_base_link_yaw_rad", 0.0))) + 90.0
+
+    yaw_override = os.getenv("BASE_SAMPLER_GUI_CAMERA_YAW_DEG", "").strip()
+    if yaw_override:
+        camera_yaw = float(yaw_override)
+    camera_pitch = float(os.getenv("BASE_SAMPLER_GUI_CAMERA_PITCH_DEG", "-3.0"))
+    camera_yaw = ((float(camera_yaw) + 180.0) % 360.0) - 180.0
+    return center.astype(float).tolist(), camera_distance, camera_yaw, camera_pitch
 
 
 def _visualize_feasible_ik_results_in_gui(
@@ -1814,6 +1849,37 @@ def _visualize_feasible_ik_results_in_gui(
                 textColorRGB=[1.0, 1.0, 1.0],
                 textSize=1.1,
             )
+            final_ee_position = best_view_solution.get("final_ee_position_xyz")
+            if final_ee_position is not None:
+                final_ee_pb = np.asarray(final_ee_position, dtype=float).reshape(3)
+                if np.all(np.isfinite(final_ee_pb)):
+                    p_mod.addUserDebugLine(
+                        final_ee_pb.astype(float).tolist(),
+                        target_pb.astype(float).tolist(),
+                        lineColorRGB=[1.0, 0.1, 1.0],
+                        lineWidth=4.0,
+                    )
+                    ee_visual_shape = p_mod.createVisualShape(
+                        p_mod.GEOM_SPHERE,
+                        radius=0.025,
+                        rgbaColor=[0.2, 1.0, 0.35, 1.0],
+                    )
+                    p_mod.createMultiBody(
+                        baseMass=0.0,
+                        baseVisualShapeIndex=ee_visual_shape,
+                        basePosition=final_ee_pb.astype(float).tolist(),
+                    )
+                    midpoint_pb = 0.5 * (final_ee_pb + target_pb)
+                    p_mod.addUserDebugText(
+                        f"EE-target {float(best_view_solution['ee_position_error_m']):.4f}m",
+                        textPosition=[
+                            float(midpoint_pb[0]),
+                            float(midpoint_pb[1]),
+                            float(midpoint_pb[2] + 0.08),
+                        ],
+                        textColorRGB=[1.0, 0.2, 1.0],
+                        textSize=1.0,
+                    )
             print(
                 f"[test_base_sampler] GUI open. Animating closest sampled IK rank={rank:02d} "
                 f"({closest_state}) at base={base_xyz}, pb_gui_yaw={math.degrees(base_yaw_rad):.2f}deg, "
@@ -1845,16 +1911,21 @@ def _visualize_feasible_ik_results_in_gui(
                 flush=True,
             )
 
-        camera_target, camera_distance = _compute_gui_camera_view(
+        camera_target, camera_distance, camera_yaw, camera_pitch = _compute_gui_camera_view(
             planning_config=planning_config,
             visualization_records=visualization_records,
             best_view_solution=best_view_solution,
         )
         p_mod.resetDebugVisualizerCamera(
             cameraDistance=camera_distance,
-            cameraYaw=45.0,
-            cameraPitch=-25.0,
+            cameraYaw=camera_yaw,
+            cameraPitch=camera_pitch,
             cameraTargetPosition=camera_target,
+        )
+        print(
+            f"[test_base_sampler] GUI camera side view yaw={camera_yaw:.1f}deg "
+            f"pitch={camera_pitch:.1f}deg target={camera_target} distance={camera_distance:.2f}.",
+            flush=True,
         )
         p_mod.addUserDebugText(
             (
@@ -2018,6 +2089,7 @@ def main():
 
     client_id = p_mod.connect(p_mod.DIRECT)
     visualization_records: list[dict[str, object]] = []
+    first_feasible_result: dict[str, object] | None = None
     try:
         p_mod.setAdditionalSearchPath(pybullet_data.getDataPath())
         p_mod.resetSimulation()
@@ -2084,6 +2156,40 @@ def main():
                 num_samples=int(args.num_samples),
             )
 
+            direct_orientation_error_deg = prepared_target.direct_orientation_error_deg
+            direct_orientation_error_text = (
+                float("nan")
+                if direct_orientation_error_deg is None
+                else float(direct_orientation_error_deg)
+            )
+            if closest_solution is None:
+                closest_text = "after_move_ee_target_dist=unavailable"
+            else:
+                closest_orientation_error = closest_solution["ee_orientation_error_deg"]
+                closest_orientation_error_text = (
+                    float("nan")
+                    if closest_orientation_error is None
+                    else float(closest_orientation_error)
+                )
+                closest_text = (
+                    f"after_move_ee_target_dist={float(closest_solution['ee_position_error_m']):.4f}m "
+                    f"after_move_ee_target_ori={closest_orientation_error_text:.2f}deg"
+                )
+            print(
+                f"[grasp rank={grasp_candidate.rank:02d}] "
+                f"direct_ik={prepared_target.direct_ik_error_m:.4f}m "
+                f"direct_ori={direct_orientation_error_text:.2f}deg "
+                f"conf={grasp_candidate.grasp_confidence:.4f} "
+                f"dist_to_midpoint={grasp_candidate.grasp_distance_to_gripper_midpoint_m:.4f}m "
+                f"{closest_text} -> feasible_ik={len(feasible_solutions)}",
+                flush=True,
+            )
+            _print_closest_ik_solution_banner(
+                rank=grasp_candidate.rank,
+                target_pb=target_pb,
+                solution=closest_solution,
+            )
+
             visualization_records.append(
                 {
                     "rank": grasp_candidate.rank,
@@ -2098,23 +2204,52 @@ def main():
             )
 
             if feasible_solutions:
+                best_feasible_solution = feasible_solutions[0]
+                _print_pb_pose(
+                    f"target local PB pose rank={grasp_candidate.rank:02d}",
+                    target_pb,
+                )
+                _print_pb_pose(
+                    f"selected local PB base_link rank={grasp_candidate.rank:02d}",
+                    best_feasible_solution["pb_base_link_xyz"],
+                    float(best_feasible_solution["pb_base_link_yaw_rad"]),
+                )
+                _print_ros_map_pose(
+                    f"selected feasible ROS map AMCL vehicle center rank={grasp_candidate.rank:02d}",
+                    best_feasible_solution.get("ros_map_amcl_pose"),
+                )
+                _print_ros_map_pose(
+                    f"selected feasible ROS map base_link pose rank={grasp_candidate.rank:02d}",
+                    best_feasible_solution.get("ros_map_base_link_pose"),
+                )
+                _print_selected_base_link_ros_map_banner(
+                    rank=grasp_candidate.rank,
+                    amcl_pose=best_feasible_solution.get("ros_map_amcl_pose"),
+                    base_link_pose=best_feasible_solution.get("ros_map_base_link_pose"),
+                )
+                first_feasible_result = {
+                    "rank": grasp_candidate.rank,
+                    "feasible_ik_count": len(feasible_solutions),
+                    "direct_ik_error_m": float(prepared_target.direct_ik_error_m),
+                }
+                print(
+                    f"[test_base_sampler] First feasible IK found at grasp rank={grasp_candidate.rank:02d}; "
+                    "launching GUI next.",
+                    flush=True,
+                )
                 break
     finally:
         p_mod.disconnect(client_id)
 
-    closest_record, closest_solution = _select_closest_visualization_solution(visualization_records)
-    if closest_record is None:
-        _print_closest_ik_distance_banner(
-            rank=0,
-            target_pb=np.zeros(3, dtype=np.float64),
-            solution=None,
+    if first_feasible_result is not None:
+        print(
+            f"[test_base_sampler] Visualizing first feasible grasp rank={first_feasible_result['rank']:02d} "
+            f"(feasible_ik={first_feasible_result['feasible_ik_count']}, "
+            f"direct_ik={first_feasible_result['direct_ik_error_m']:.4f}m)",
+            flush=True,
         )
     else:
-        _print_closest_ik_distance_banner(
-            rank=int(closest_record["rank"]),
-            target_pb=np.asarray(closest_record["target_pb"], dtype=np.float64),
-            solution=closest_solution,
-        )
+        print("[test_base_sampler] No feasible IK found; GUI will animate the closest sampled IK attempt.", flush=True)
 
     if not args.no_gui:
         _visualize_feasible_ik_results_in_gui(
