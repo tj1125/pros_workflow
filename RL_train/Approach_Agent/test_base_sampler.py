@@ -69,10 +69,10 @@ class RosMapPose2D:
 
 
 LIVE_VOXEL_MIN_DEPTH_M = 0.19
-LIVE_VOXEL_MAX_DEPTH_M = 1.5
+LIVE_VOXEL_MAX_DEPTH_M = 1.0
 LIVE_VOXEL_SCENE_POINT_STRIDE = 4
 LIVE_VOXEL_SCENE_DOWNSAMPLE_M = 0.01
-BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 30.0
+BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 15.0
 
 
 PLANNING_CAMERA_TO_PB_LOCAL = np.asarray(
@@ -251,16 +251,6 @@ def _unit_xy_or_default(vector_xyz: np.ndarray, default_xy: tuple[float, float] 
     return vector_xy / vector_norm
 
 
-def _yaw_is_within_limit(
-    yaw_rad: float,
-    reference_yaw_rad: float | None,
-    max_delta_rad: float,
-) -> bool:
-    if reference_yaw_rad is None:
-        return True
-    return _abs_angle_delta_rad(yaw_rad, reference_yaw_rad) <= float(max_delta_rad)
-
-
 def _get_reset_camera_transform_in_base_link_frame(
     planner_config_path: Path,
     planning_config,
@@ -374,6 +364,47 @@ def _print_ros_map_pose(label: str, pose: RosMapPose2D | dict[str, object] | Non
         f"[test_base_sampler] {label}: "
         f"ros_map_x={x:.4f}m ros_map_y={y:.4f}m "
         f"yaw={yaw_rad:.6f}rad ({math.degrees(yaw_rad):.2f}deg)",
+        flush=True,
+    )
+
+
+def _print_selected_base_link_ros_map_banner(
+    *,
+    rank: int,
+    pose: RosMapPose2D | dict[str, object] | None,
+) -> None:
+    if pose is None:
+        print(
+            "\n"
+            "============================================================\n"
+            " SELECTED SAMPLED BASE_LINK -> ROS MAP POSE\n"
+            "------------------------------------------------------------\n"
+            f" grasp_rank : {int(rank):02d}\n"
+            " ros_map    : unavailable\n"
+            "============================================================\n",
+            flush=True,
+        )
+        return
+
+    if isinstance(pose, RosMapPose2D):
+        x = float(pose.x)
+        y = float(pose.y)
+        yaw_rad = float(pose.yaw_rad)
+    else:
+        x = float(pose["x"])
+        y = float(pose["y"])
+        yaw_rad = float(pose["yaw_rad"])
+
+    print(
+        "\n"
+        "============================================================\n"
+        " SELECTED SAMPLED BASE_LINK -> ROS MAP POSE\n"
+        "------------------------------------------------------------\n"
+        f" grasp_rank : {int(rank):02d}\n"
+        f" ros_map_x  : {x:.4f} m\n"
+        f" ros_map_y  : {y:.4f} m\n"
+        f" yaw        : {yaw_rad:.6f} rad  ({math.degrees(yaw_rad):.2f} deg)\n"
+        "============================================================\n",
         flush=True,
     )
 
@@ -863,19 +894,18 @@ def _sample_feasible_ik_solutions(
     position_tolerance_m: float,
     orientation_tolerance_deg: float,
     current_base_link_pose: RosMapPose2D | None = None,
-    num_samples: int = 500,
+    num_samples: int = 10,
 ) -> list[dict[str, object]]:
     rng = np.random.default_rng(int(rng_seed))
     valid_candidates: list[dict[str, object]] = []
     target_pos = target_pb.tolist()
-    reference_base_yaw_pb: float | None = None
+    reference_base_yaw_pb = 0.0
     max_base_yaw_delta_rad = math.radians(BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG)
-    if current_base_link_pose is not None:
-        reference_base_yaw_pb = 0.0
 
     for sample_index in range(int(num_samples)):
         distance = float(rng.uniform(0.20, 0.48))
         angle_offset = float(rng.uniform(math.radians(-10), math.radians(10)))
+        yaw_delta = float(rng.uniform(-max_base_yaw_delta_rad, max_base_yaw_delta_rad))
 
         # target_rot_pb is the dynamic gripper/EE frame in the local PB scene, not base_link.
         # Its local +X is the gripper forward direction; sample the arm base behind it.
@@ -885,23 +915,15 @@ def _sample_feasible_ik_solutions(
 
         pb_bx = float(target_pos[0] - distance * math.cos(theta))
         pb_by = float(target_pos[1] - distance * math.sin(theta))
-        pb_yaw = float(math.atan2(target_pos[1] - pb_by, target_pos[0] - pb_bx))
-
-        final_pb_bx = pb_bx
-        final_pb_by = pb_by
-        final_pb_yaw = pb_yaw
-        if not _yaw_is_within_limit(final_pb_yaw, reference_base_yaw_pb, max_base_yaw_delta_rad):
-            continue
+        pb_yaw = _wrap_angle_rad(reference_base_yaw_pb + yaw_delta)
 
         best_attempt: dict[str, object] | None = None
-        current_pb_bx = final_pb_bx
-        current_pb_by = final_pb_by
-        current_pb_yaw = final_pb_yaw
+        current_pb_bx = pb_bx
+        current_pb_by = pb_by
+        current_pb_yaw = pb_yaw
 
         # After the first IK solve, nudge the base in the XY direction of the EE error.
         for _ in range(3):
-            if not _yaw_is_within_limit(current_pb_yaw, reference_base_yaw_pb, max_base_yaw_delta_rad):
-                break
             ik_attempt = _attempt_ik_at_base_pose(
                 p_mod=p_mod,
                 robot_id=robot_id,
@@ -927,7 +949,6 @@ def _sample_feasible_ik_solutions(
 
             current_pb_bx += float(error_xy[0]) * 0.75
             current_pb_by += float(error_xy[1]) * 0.75
-            current_pb_yaw = float(math.atan2(target_pos[1] - current_pb_by, target_pos[0] - current_pb_bx))
 
         if best_attempt is None:
             continue
@@ -951,11 +972,7 @@ def _sample_feasible_ik_solutions(
             joint_solution_deg = np.degrees(joint_solution_rad)
             best_base_xyz = [float(v) for v in best_attempt["pb_base_link_xyz"]]
             best_base_yaw = float(best_attempt["pb_base_link_yaw_rad"])
-            best_base_yaw_delta_from_reference = (
-                None
-                if reference_base_yaw_pb is None
-                else _abs_angle_delta_rad(best_base_yaw, reference_base_yaw_pb)
-            )
+            best_base_yaw_delta_from_reference = _abs_angle_delta_rad(best_base_yaw, reference_base_yaw_pb)
             best_error_xyz = np.asarray(best_attempt["ik_error_xyz"], dtype=np.float64)
             best_ros_map_pose = _local_pb_base_pose_to_ros_map_pose(
                 (best_base_xyz[0], best_base_xyz[1]),
@@ -967,21 +984,11 @@ def _sample_feasible_ik_solutions(
                 "pb_base_link_xyz": best_base_xyz,
                 "pb_base_link_yaw_rad": best_base_yaw,
                 "pb_base_link_yaw_deg": float(math.degrees(best_base_yaw)),
-                "pb_base_link_reference_yaw_rad": (
-                    None if reference_base_yaw_pb is None else float(reference_base_yaw_pb)
-                ),
-                "pb_base_link_reference_yaw_deg": (
-                    None if reference_base_yaw_pb is None else float(math.degrees(reference_base_yaw_pb))
-                ),
-                "pb_base_link_yaw_delta_from_reference_rad": (
-                    None
-                    if best_base_yaw_delta_from_reference is None
-                    else float(best_base_yaw_delta_from_reference)
-                ),
-                "pb_base_link_yaw_delta_from_reference_deg": (
-                    None
-                    if best_base_yaw_delta_from_reference is None
-                    else float(math.degrees(best_base_yaw_delta_from_reference))
+                "pb_base_link_reference_yaw_rad": float(reference_base_yaw_pb),
+                "pb_base_link_reference_yaw_deg": float(math.degrees(reference_base_yaw_pb)),
+                "pb_base_link_yaw_delta_from_reference_rad": float(best_base_yaw_delta_from_reference),
+                "pb_base_link_yaw_delta_from_reference_deg": float(
+                    math.degrees(best_base_yaw_delta_from_reference)
                 ),
                 "pb_base_link_yaw_max_delta_from_reference_deg": float(
                     BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG
@@ -1358,7 +1365,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-samples",
         type=int,
-        default=int(os.getenv("BASE_SAMPLER_NUM_SAMPLES", "500")),
+        default=int(os.getenv("BASE_SAMPLER_NUM_SAMPLES", "10")),
         help="Random PB base samples per grasp target.",
     )
     parser.add_argument(
@@ -1543,6 +1550,10 @@ def main():
                 _print_ros_map_pose(
                     f"selected feasible ROS map base_link pose rank={grasp_candidate.rank:02d}",
                     best_feasible_solution.get("ros_map_base_link_pose"),
+                )
+                _print_selected_base_link_ros_map_banner(
+                    rank=grasp_candidate.rank,
+                    pose=best_feasible_solution.get("ros_map_base_link_pose"),
                 )
                 first_feasible_result = {
                     "rank": grasp_candidate.rank,
