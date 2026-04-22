@@ -86,13 +86,24 @@ def load_config(config_path: Path) -> dict[str, Any]:
         min_distance_m=float(payload.get("min_distance_m", 0.5)),
         max_distance_m=float(payload.get("max_distance_m", 2.0)),
         heading_tolerance_deg=float(payload.get("heading_tolerance_deg", 10.0)),
+        base_footprint_radius_m=float(payload.get("base_footprint_radius_m", 0.32)),
         num_samples=int(payload.get("num_samples", 200)),
         rng_seed=int(payload.get("rng_seed", 42)),
+        # test_base_sampler-specific sampling
+        base_link_from_amcl_pb_xy=_vec(
+            payload.get("base_link_from_amcl_pb_xy", [0.0, 0.1288]),
+            "base_link_from_amcl_pb_xy", 2,
+        ),
+        consider_vehicle_body=bool(payload.get("consider_vehicle_body", False)),
+        base_footprint_length_x_m=float(payload.get("base_footprint_length_x_m", 0.33)),
+        base_footprint_length_y_m=float(payload.get("base_footprint_length_y_m", 0.42)),
+        approach_half_angle_deg=float(payload.get("approach_half_angle_deg", 30.0)),
         # Voxel / obstacle
         voxel_size_m=float(payload.get("voxel_size_m", 0.05)),
         obstacle_rgba=_vec(payload.get("obstacle_rgba", [0.85, 0.2, 0.2, 0.55]), "obstacle_rgba", 4),
         # Evaluation
         position_tolerance_m=float(payload.get("position_tolerance_m", 0.03)),
+        orientation_tolerance_deg=float(payload.get("orientation_tolerance_deg", 12.0)),
         max_ik_candidates=int(payload.get("max_ik_candidates", 20)),
         evaluate_all=bool(payload.get("evaluate_all", False)),
         # Render
@@ -126,6 +137,7 @@ import scipy.spatial.transform as st
 def _load_grasp_debug_data(
     npz_path: Path,
     planner_config_path: Path,
+    point_downsample_m: float = 0.05,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load target grasp pose and obstacle point clouds from the pipeline NPZ.
     Transforms them precisely using Forward Kinematics from the camera_1 link.
@@ -165,7 +177,7 @@ def _load_grasp_debug_data(
         
     # 4. Transform voxel points
     if len(scene_pc_camera) > 0:
-        scene_pc_camera = _voxel_downsample(scene_pc_camera, voxel_size=0.05)
+        scene_pc_camera = _voxel_downsample(scene_pc_camera, voxel_size=float(point_downsample_m))
         print(f"[Debug] Point cloud count AFTER voxel downsample: {len(scene_pc_camera)}")
         # R_full.T because points is (N, 3), so points @ R_full.T is standard R * p
         voxels_pb_world = (scene_pc_camera @ R_full.T) + cam_pos_arr
@@ -245,6 +257,7 @@ def run_base_pose_sampling(config_path: Path, *, gui: bool = False) -> dict[str,
     free_cells = load_free_cells_unity_xz(map_meta)
     report["map_yaml_path"] = str(cfg["map_yaml_path"])
     report["map_free_cell_count"] = int(len(free_cells))
+    report["base_footprint_radius_m"] = float(cfg["base_footprint_radius_m"])
 
     # ── 2. Load obstacles & target from grasp NPZ (if provided) ──────────────
     world_obstacles_unity: np.ndarray = np.empty((0, 3), dtype=np.float64)
@@ -254,10 +267,11 @@ def run_base_pose_sampling(config_path: Path, *, gui: bool = False) -> dict[str,
         try:
             target_pb, target_rot_pb, voxels_pb = _load_grasp_debug_data(
                 Path(cfg["grasp_debug_npz_path"]),
-                Path(cfg["planner_config_path"])
+                Path(cfg["planner_config_path"]),
+                point_downsample_m=float(cfg.get("voxel_size_m", 0.05)),
             )
             
-            # Apply downsampling to reduce point cloud density down to 5cm box sizes
+            # Apply downsampling to match the configured voxel box size.
             voxel_size = float(cfg.get("voxel_size_m", 0.05))
             if len(voxels_pb) > 0:
                 voxels_pb = _voxel_downsample(voxels_pb, voxel_size)
@@ -303,6 +317,8 @@ def run_base_pose_sampling(config_path: Path, *, gui: bool = False) -> dict[str,
         target_unity_xz=target_xz,
         free_cells_unity_xz=free_cells,
         target_approach_dir_unity_xz=cfg["target_approach_dir_unity_xz"],
+        footprint_radius_m=cfg["base_footprint_radius_m"],
+        map_resolution_m=map_meta.resolution_m,
         min_distance_m=cfg["min_distance_m"],
         max_distance_m=cfg["max_distance_m"],
         heading_tolerance_deg=cfg["heading_tolerance_deg"],
@@ -310,8 +326,11 @@ def run_base_pose_sampling(config_path: Path, *, gui: bool = False) -> dict[str,
         rng_seed=cfg["rng_seed"],
     )
     report["candidates_sampled"] = len(candidates)
-    print(f"[base_pose_sampling] {len(free_cells)} free cells in map → "
-          f"{len(candidates)} sampled candidates after filters.")
+    print(
+        f"[base_pose_sampling] {len(free_cells)} free cells in map -> "
+        f"{len(candidates)} sampled candidates after filters "
+        f"(base footprint radius={cfg['base_footprint_radius_m']:.2f}m)."
+    )
 
     if not candidates:
         report["failure_reason"] = "No candidates passed the sampling filters."
@@ -511,7 +530,8 @@ def replay_from_report(
         try:
             _, _, voxels_pb = _load_grasp_debug_data(
                 Path(cfg["grasp_debug_npz_path"]),
-                Path(cfg["planner_config_path"])
+                Path(cfg["planner_config_path"]),
+                point_downsample_m=float(cfg.get("voxel_size_m", 0.05)),
             )
             voxel_size = float(cfg.get("voxel_size_m", 0.05))
             if len(voxels_pb) > 0:

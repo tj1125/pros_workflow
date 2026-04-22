@@ -5,14 +5,15 @@ and rank them by suitability for reaching a specified grasp target.
 Algorithm
 ---------
 1. Take all free cells from the occupancy map (Unity x-z frame).
-2. Filter by horizontal distance to target: [min_dist_m, max_dist_m].
-3. Compute the **approach direction** check:
+2. Optionally erode those free cells by the robot footprint radius.
+3. Filter by horizontal distance to target: [min_dist_m, max_dist_m].
+4. Compute the **approach direction** check:
      - If the target rotation (approach axis) is known, keep only cells whose
        base→target direction is within ±heading_tolerance_deg of the target's
        approach axis projected onto the x-z floor plane.
      - If no approach axis is provided, skip this filter (all cells pass).
-4. Down-sample to at most ``num_samples`` cells using stratified random sampling.
-5. Sort by: (a) approach-axis alignment error (best first), (b) distance (closest first).
+5. Down-sample to at most ``num_samples`` cells using stratified random sampling.
+6. Sort by: (a) approach-axis alignment error (best first), (b) distance (closest first).
 
 Coordinate conventions
 ----------------------
@@ -50,6 +51,8 @@ def sample_candidate_base_poses(
     free_cells_unity_xz: np.ndarray,
     *,
     target_approach_dir_unity_xz: Sequence[float] | None = None,
+    footprint_radius_m: float = 0.0,
+    map_resolution_m: float | None = None,
     min_distance_m: float = 0.4,
     max_distance_m: float = 2.0,
     heading_tolerance_deg: float = 10.0,
@@ -70,6 +73,13 @@ def sample_candidate_base_poses(
         rotation matrix converted to Unity).  When provided, only cells whose
         base→target direction is within ±``heading_tolerance_deg`` of this
         vector are kept.
+    footprint_radius_m:
+        Robot footprint radius used to erode map free cells before sampling.
+        A candidate is kept only when all map cells covered by this radius are
+        free.  Set to 0 to keep point-sampling behaviour.
+    map_resolution_m:
+        Occupancy-grid resolution in metres. Required when
+        ``footprint_radius_m`` is greater than 0.
     min_distance_m:
         Minimum 2-D floor distance from base to target (metres).
     max_distance_m:
@@ -92,6 +102,14 @@ def sample_candidate_base_poses(
         raise ValueError(
             f"free_cells_unity_xz must be shape (N, 2), got {cells.shape}."
         )
+    if len(cells) == 0:
+        return []
+
+    cells = _filter_cells_by_footprint_radius(
+        cells,
+        footprint_radius_m=float(footprint_radius_m),
+        map_resolution_m=map_resolution_m,
+    )
     if len(cells) == 0:
         return []
 
@@ -171,3 +189,43 @@ def sample_candidate_base_poses(
             )
         )
     return candidates
+
+
+def _filter_cells_by_footprint_radius(
+    cells: np.ndarray,
+    *,
+    footprint_radius_m: float,
+    map_resolution_m: float | None,
+) -> np.ndarray:
+    if footprint_radius_m <= 0.0:
+        return cells
+    if map_resolution_m is None or float(map_resolution_m) <= 0.0:
+        raise ValueError("map_resolution_m must be provided when footprint_radius_m > 0.")
+
+    resolution = float(map_resolution_m)
+    radius_cells = int(math.ceil(float(footprint_radius_m) / resolution))
+    if radius_cells <= 0:
+        return cells
+
+    origin_x = float(np.min(cells[:, 0]))
+    origin_z = float(np.min(cells[:, 1]))
+    grid_x = np.rint((cells[:, 0] - origin_x) / resolution).astype(np.int32)
+    grid_z = np.rint((cells[:, 1] - origin_z) / resolution).astype(np.int32)
+
+    width = int(np.max(grid_x)) + 1
+    height = int(np.max(grid_z)) + 1
+    free_grid = np.zeros((height, width), dtype=bool)
+    free_grid[grid_z, grid_x] = True
+
+    eroded_grid = np.ones_like(free_grid, dtype=bool)
+    padded_free_grid = np.pad(free_grid, radius_cells, mode="constant", constant_values=False)
+    for offset_z in range(-radius_cells, radius_cells + 1):
+        for offset_x in range(-radius_cells, radius_cells + 1):
+            offset_distance = math.hypot(offset_x, offset_z) * resolution
+            if offset_distance > float(footprint_radius_m):
+                continue
+            z0 = radius_cells + offset_z
+            x0 = radius_cells + offset_x
+            eroded_grid &= padded_free_grid[z0 : z0 + height, x0 : x0 + width]
+
+    return cells[eroded_grid[grid_z, grid_x]]

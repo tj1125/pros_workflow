@@ -55,23 +55,45 @@ obstacle_rgba: [0.85, 0.2, 0.2, 0.55]
 base_ground_y_unity: 0.0
 
 # Horizontal distance range (metres) from candidate base to target.
-min_distance_m: 0.5
-max_distance_m: 2.0
+min_distance_m: 0.05
+max_distance_m: 0.25
+
+# Circular base footprint radius. Sampling erodes map free cells by this
+# radius so candidate base centers are not placed too close to occupied cells.
+# (Used by run_base_pose_sampling.py pipeline only.)
+base_footprint_radius_m: 0.0
 
 # Only keep candidates whose base→target heading is within this angle of
 # target_approach_dir_unity_xz.  Ignored when target_approach_dir_unity_xz
 # is null.
-heading_tolerance_deg: 10.0
+heading_tolerance_deg: 30.0
 
 # Maximum number of map free cells to sample before IK evaluation.
-num_samples: 200
+num_samples: 50
 
-# Random seed for reproducible sampling.
-rng_seed: 42
+# ── test_base_sampler.py 專用 ─────────────────────────────────────────────────
+# Offset from vehicle center (AMCL) to arm base_link in PyBullet local frame [x, y].
+base_link_from_amcl_pb_xy: [0.0, 0.1288]
+
+# Whether to check rectangular vehicle footprint collision against the map.
+consider_vehicle_body: false
+
+# Rectangular vehicle footprint dimensions (metres) in PyBullet frame.
+base_footprint_length_x_m: 0.37
+base_footprint_length_y_m: 0.46
+
+# Half-angle (degrees) for approach direction filter.
+# Only sample points whose base→target direction is within ±this angle
+# of the grasp approach axis.
+approach_half_angle_deg: 30.0
+
 
 # ── IK / OMPL evaluation ─────────────────────────────────────────────────────
 # Acceptable IK end-effector position error (metres).
 position_tolerance_m: 0.03
+
+# Acceptable IK end-effector orientation error (degrees).
+orientation_tolerance_deg: 12.0
 
 # After IK ranking, only the top-N candidates are passed to OMPL.
 max_ik_candidates: 20

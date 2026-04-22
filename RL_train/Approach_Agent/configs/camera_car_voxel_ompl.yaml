@@ -12,9 +12,9 @@ debug_target_grasp_key: best_grasp_camera
 planner_config_path: configs/pybullet_ompl.yaml
 output_root_dir: outputs/camera_car_voxel_ompl
 voxel_size_m: 0.05
-min_depth_m: 0.2
-# Only keep scene points within 1.5 m from the camera depth axis.
-max_depth_m: 1.5
+min_depth_m: 0.19
+# Only keep scene points within 1.0 m from the camera depth axis.
+max_depth_m: 1.0
 flip_depth_vertical: true
 # Use every valid depth pixel so the voxel scene is as complete as possible.
 pixel_stride: 1
