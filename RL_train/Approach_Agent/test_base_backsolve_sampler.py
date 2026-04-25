@@ -298,8 +298,8 @@ def _check_rectangular_footprint_with_contacts(
     footprint_points = np.asarray(footprint_map.footprint_points_pb_xy, dtype=np.float64).reshape(-1, 2)
     rot_xy = sampler._yaw_rotation_matrix(amcl_pb_yaw)[:2, :2]
     world_pb_xy = amcl_pb_xyz[:2].reshape(1, 2) + footprint_points @ rot_xy.T
-    ros_x = world_pb_xy[:, 1]
-    ros_y = -world_pb_xy[:, 0]
+    ros_x = -world_pb_xy[:, 1]
+    ros_y = world_pb_xy[:, 0]
 
     origin_x, origin_y = footprint_map.origin_xy
     resolution = float(footprint_map.resolution_m)

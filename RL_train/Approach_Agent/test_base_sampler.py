@@ -53,6 +53,9 @@ class LiveSceneCapture:
     camera_position_pb: np.ndarray
     amcl_pose: AmclPoseSnapshot | None
     valid_depth_point_count: int
+    obstacle_depth_point_count: int
+    target_object_point_count: int
+    target_excluded_depth_point_count: int
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,7 @@ LIVE_VOXEL_MIN_DEPTH_M = 0.19
 LIVE_VOXEL_MAX_DEPTH_M = 1.0
 LIVE_VOXEL_SCENE_POINT_STRIDE = 4
 LIVE_VOXEL_SCENE_DOWNSAMPLE_M = 0.05
+TARGET_OBJECT_POINTCLOUD_KEY = "object_pc_camera"
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_FOOTPRINT_LENGTH_X_M = 0.37
 BASE_FOOTPRINT_LENGTH_Y_M = 0.46
@@ -570,6 +574,94 @@ def _voxel_downsample_points(points_xyz: np.ndarray, voxel_size_m: float) -> np.
     return np.asarray(points_xyz[np.sort(keep_indices)], dtype=np.float32)
 
 
+def _repo_relative_existing_path(path: Path) -> Path:
+    path = path.expanduser()
+    if path.exists():
+        return path.resolve()
+
+    marker = "/VLM_RL/"
+    path_text = str(path)
+    if marker in path_text:
+        repo_relative = path_text.split(marker, 1)[1]
+        candidate = Path(__file__).resolve().parents[2] / repo_relative
+        if candidate.exists():
+            return candidate.resolve()
+    return path
+
+
+def _load_target_object_pointcloud_camera(npz_path: Path | None) -> np.ndarray | None:
+    if npz_path is None:
+        return None
+
+    resolved_path = _repo_relative_existing_path(Path(npz_path))
+    if not resolved_path.exists():
+        print(
+            f"[test_base_sampler] target object point cloud skipped: NPZ not found: {resolved_path}",
+            flush=True,
+        )
+        return None
+
+    try:
+        with np.load(resolved_path, allow_pickle=True) as payload:
+            if TARGET_OBJECT_POINTCLOUD_KEY not in payload:
+                print(
+                    f"[test_base_sampler] target object point cloud skipped: "
+                    f"'{TARGET_OBJECT_POINTCLOUD_KEY}' missing in {resolved_path}",
+                    flush=True,
+                )
+                return None
+            points_camera = np.asarray(payload[TARGET_OBJECT_POINTCLOUD_KEY], dtype=np.float32).reshape(-1, 3)
+    except Exception as exc:
+        print(
+            f"[test_base_sampler] target object point cloud skipped: failed to load {resolved_path}: {exc}",
+            flush=True,
+        )
+        return None
+
+    finite_mask = np.all(np.isfinite(points_camera), axis=1)
+    points_camera = points_camera[finite_mask]
+    if len(points_camera) == 0:
+        print(
+            f"[test_base_sampler] target object point cloud skipped: no finite points in {resolved_path}",
+            flush=True,
+        )
+        return None
+
+    print(
+        f"[test_base_sampler] loaded target object point cloud: {len(points_camera)} points from {resolved_path}",
+        flush=True,
+    )
+    return np.asarray(points_camera, dtype=np.float32)
+
+
+def _filter_points_outside_target_voxels(
+    points_pb: np.ndarray,
+    target_points_pb: np.ndarray | None,
+    *,
+    voxel_size_m: float,
+) -> tuple[np.ndarray, int]:
+    points_pb = np.asarray(points_pb, dtype=np.float64).reshape(-1, 3)
+    if target_points_pb is None or len(target_points_pb) == 0 or len(points_pb) == 0 or voxel_size_m <= 0.0:
+        return points_pb, 0
+
+    target_points_pb = np.asarray(target_points_pb, dtype=np.float64).reshape(-1, 3)
+    target_points_pb = target_points_pb[np.all(np.isfinite(target_points_pb), axis=1)]
+    if len(target_points_pb) == 0:
+        return points_pb, 0
+
+    voxel_size = float(voxel_size_m)
+    point_keys = np.floor(points_pb / voxel_size).astype(np.int64)
+    target_keys = np.unique(np.floor(target_points_pb / voxel_size).astype(np.int64), axis=0)
+    target_key_set = {tuple(key) for key in target_keys.tolist()}
+    keep_mask = np.fromiter(
+        (tuple(key) not in target_key_set for key in point_keys.tolist()),
+        dtype=bool,
+        count=len(point_keys),
+    )
+    removed_count = int(len(points_pb) - int(np.count_nonzero(keep_mask)))
+    return points_pb[keep_mask], removed_count
+
+
 def _backproject_live_depth_to_camera_points(
     depth_m: np.ndarray,
     intrinsic_matrix: np.ndarray,
@@ -611,6 +703,7 @@ def _capture_live_scene_voxels(
     camera_in_base_link_rotation: np.ndarray,
     camera_in_base_link_position: np.ndarray,
     base_link_z_pb: float,
+    target_object_points_camera: np.ndarray | None = None,
 ) -> LiveSceneCapture:
     camera_cfg = load_camera_car_voxel_ompl_config(camera_config_path)
     snapshot = capture_rgbd_snapshot(
@@ -647,14 +740,40 @@ def _capture_live_scene_voxels(
         camera_to_pb_rotation=camera_to_pb_rotation,
         camera_position_pb=camera_position_pb,
     )
-
+    target_object_point_count = 0
+    target_excluded_point_count = 0
+    if target_object_points_camera is not None and len(target_object_points_camera) > 0:
+        target_object_points_camera = np.asarray(target_object_points_camera, dtype=np.float64).reshape(-1, 3)
+        target_object_point_count = int(len(target_object_points_camera))
+        target_points_pybullet = _transform_camera_points_to_local_pb(
+            target_object_points_camera,
+            camera_to_pb_rotation=camera_to_pb_rotation,
+            camera_position_pb=camera_position_pb,
+        )
+        points_pybullet, target_excluded_point_count = _filter_points_outside_target_voxels(
+            points_pybullet,
+            target_points_pybullet,
+            voxel_size_m=camera_cfg.voxel_size_m,
+        )
+        print(
+            f"[test_base_sampler] excluded target object from live obstacle voxels: "
+            f"target_points={target_object_point_count} "
+            f"removed_depth_points={target_excluded_point_count} "
+            f"remaining_obstacle_points={len(points_pybullet)}",
+            flush=True,
+        )
     voxel_centers_pb = voxelize_points(
         points_pybullet,
         voxel_size_m=camera_cfg.voxel_size_m,
         max_voxels=camera_cfg.max_voxel_obstacles,
     )
-    if len(voxel_centers_pb) == 0:
+    if len(voxel_centers_pb) == 0 and target_excluded_point_count <= 0:
         raise RuntimeError("Live Camera_Car RGBD produced zero occupied voxels.")
+    if len(voxel_centers_pb) == 0:
+        print(
+            "[test_base_sampler] live obstacle voxels are empty after target-object exclusion.",
+            flush=True,
+        )
     return LiveSceneCapture(
         voxel_centers_pb=np.asarray(voxel_centers_pb, dtype=np.float64),
         voxel_size_m=float(camera_cfg.voxel_size_m),
@@ -662,6 +781,9 @@ def _capture_live_scene_voxels(
         camera_position_pb=np.asarray(camera_position_pb, dtype=np.float64),
         amcl_pose=amcl_pose,
         valid_depth_point_count=int(len(points_camera)),
+        obstacle_depth_point_count=int(len(points_pybullet)),
+        target_object_point_count=int(target_object_point_count),
+        target_excluded_depth_point_count=int(target_excluded_point_count),
     )
 
 
@@ -680,12 +802,12 @@ def _transform_grasp_pose_camera_to_pybullet(
 
 def _pb_world_xy_to_ros_map_xy(pb_xy: tuple[float, float]) -> tuple[float, float]:
     pb_x, pb_y = float(pb_xy[0]), float(pb_xy[1])
-    return (pb_y, -pb_x)
+    return (-pb_y, pb_x)
 
 
 def _ros_map_xy_to_pb_world_xy(ros_map_xy: tuple[float, float]) -> tuple[float, float]:
     ros_x, ros_y = float(ros_map_xy[0]), float(ros_map_xy[1])
-    return (-ros_y, ros_x)
+    return (ros_y, -ros_x)
 
 
 def _pb_yaw_to_ros_map_yaw(pb_yaw_rad: float) -> float:
@@ -834,7 +956,7 @@ def _local_pb_direction_to_ros_map_xy(
         direction_pb_world_xy = _yaw_rotation_matrix(current_pb_yaw)[:2, :2] @ direction_local_xy
 
     direction_ros_xy = np.asarray(
-        [direction_pb_world_xy[1], -direction_pb_world_xy[0]],
+        [-direction_pb_world_xy[1], direction_pb_world_xy[0]],
         dtype=np.float64,
     )
     direction_norm = float(np.linalg.norm(direction_ros_xy))
@@ -854,8 +976,8 @@ def _rectangular_footprint_is_clear_on_map(
     rot_xy = _yaw_rotation_matrix(amcl_pb_yaw)[:2, :2]
     world_pb_xy = amcl_pb_xyz[:2].reshape(1, 2) + footprint_points_pb @ rot_xy.T
 
-    ros_x = world_pb_xy[:, 1]
-    ros_y = -world_pb_xy[:, 0]
+    ros_x = -world_pb_xy[:, 1]
+    ros_y = world_pb_xy[:, 0]
     origin_x, origin_y = footprint_map.origin_xy
     resolution = float(footprint_map.resolution_m)
     keys = zip(
@@ -1221,6 +1343,29 @@ def _add_vehicle_body_visual(
     )
 
 
+def _add_arm_base_link_debug_axes(
+    p_mod,
+    *,
+    base_xyz: list[float] | np.ndarray,
+    base_yaw_rad: float | None = None,
+    orientation_xyzw: list[float] | tuple[float, float, float, float] | None = None,
+    label: str = "arm base_link",
+) -> None:
+    base_position = np.asarray(base_xyz, dtype=np.float64).reshape(3)
+    axis_length = float(os.getenv("BASE_SAMPLER_GUI_BASE_LINK_AXIS_LENGTH_M", "0.18"))
+    axis_width = float(os.getenv("BASE_SAMPLER_GUI_BASE_LINK_AXIS_WIDTH", "4.0"))
+    if orientation_xyzw is None:
+        orientation_xyzw = p_mod.getQuaternionFromEuler([0.0, 0.0, float(base_yaw_rad or 0.0)])
+    _add_debug_axes(
+        p_mod,
+        base_position.astype(float).tolist(),
+        orientation_xyzw=orientation_xyzw,
+        axis_length=axis_length,
+        axis_width=axis_width,
+        label=label,
+    )
+
+
 def _vehicle_footprint_points_local_pb(
     footprint_map: BaseFootprintMap,
     *,
@@ -1343,6 +1488,254 @@ def _add_vehicle_footprint_debug(
         f"yaw={math.degrees(float(base_yaw_rad)):.2f}deg "
         f"points={len(footprint_xyz)} shown={len(shown_points)}",
         flush=True,
+    )
+
+
+def _draw_map_clear_candidate_points(
+    p_mod,
+    *,
+    visualization_records: list[dict[str, object]],
+    z_pb: float,
+) -> int:
+    radius = float(os.getenv("BASE_SAMPLER_GUI_MAP_CLEAR_POINT_RADIUS_M", "0.005"))
+    radius = max(radius, 1e-5)
+    visual_shape = p_mod.createVisualShape(
+        p_mod.GEOM_SPHERE,
+        radius=radius,
+        rgbaColor=[0.1, 0.9, 1.0, 0.95],
+    )
+    drawn_count = 0
+    for record in visualization_records:
+        candidates = record.get("map_clear_candidates")
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            local_xy = candidate.get("local_pb_xy")
+            if local_xy is None:
+                continue
+            local_xy_arr = np.asarray(local_xy, dtype=np.float64).reshape(2)
+            p_mod.createMultiBody(
+                baseMass=0.0,
+                baseVisualShapeIndex=visual_shape,
+                basePosition=[
+                    float(local_xy_arr[0]),
+                    float(local_xy_arr[1]),
+                    float(z_pb),
+                ],
+            )
+            drawn_count += 1
+    print(
+        f"[test_base_sampler] GUI drew {drawn_count} ROS-map-clear sample points "
+        f"(radius={radius:.4f}m).",
+        flush=True,
+    )
+    return drawn_count
+
+
+def _ros_map_pose_like_to_dict(pose: object) -> dict[str, float] | None:
+    if isinstance(pose, RosMapPose2D):
+        return _ros_map_pose_to_dict(pose)
+    if isinstance(pose, dict):
+        try:
+            yaw_rad = float(pose["yaw_rad"])
+            return {
+                "x": float(pose["x"]),
+                "y": float(pose["y"]),
+                "yaw_rad": yaw_rad,
+                "yaw_deg": float(pose.get("yaw_deg", math.degrees(yaw_rad))),
+            }
+        except Exception:
+            return None
+    return None
+
+
+def _gui_solution_from_map_candidate(
+    map_candidate: dict[str, object],
+    *,
+    planning_config,
+) -> dict[str, object] | None:
+    local_xy = map_candidate.get("local_pb_xy")
+    if local_xy is None:
+        return None
+
+    local_xy_arr = np.asarray(local_xy, dtype=np.float64).reshape(2)
+    base_yaw_rad = float(map_candidate.get("local_pb_yaw_rad", 0.0))
+    ros_map_amcl_pose = _ros_map_pose_like_to_dict(map_candidate.get("ros_map_amcl_pose"))
+    ros_map_base_link_pose = _ros_map_pose_like_to_dict(map_candidate.get("ros_map_pose"))
+    return {
+        "sample_index": int(map_candidate.get("sample_index", -1)),
+        "sample_source": str(map_candidate.get("sample_source", "map_clear_candidate")),
+        "pb_base_link_xyz": [
+            float(local_xy_arr[0]),
+            float(local_xy_arr[1]),
+            float(planning_config.initial_height),
+        ],
+        "pb_base_link_yaw_rad": float(base_yaw_rad),
+        "pb_base_link_yaw_deg": float(math.degrees(base_yaw_rad)),
+        "ik_joint_solution_rad": None,
+        "map_footprint_clear": True,
+        "amcl_yaw_within_limit": True,
+        "ik_reachable": False,
+        "ik_feasible": False,
+        "ee_position_error_m": None,
+        "ee_orientation_error_deg": None,
+        "backoff_distance_m": float(map_candidate.get("distance_to_target_m", float("nan"))),
+        "ros_map_amcl_pose": ros_map_amcl_pose,
+        "ros_map_base_link_pose": ros_map_base_link_pose,
+    }
+
+
+def _select_gui_display_solution(
+    visualization_records: list[dict[str, object]],
+    *,
+    planning_config,
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    best_record: dict[str, object] | None = None
+    best_solution: dict[str, object] | None = None
+
+    for record in visualization_records:
+        feasible_solutions = record.get("feasible_solutions")
+        if not isinstance(feasible_solutions, list):
+            continue
+        for solution in feasible_solutions:
+            if not isinstance(solution, dict):
+                continue
+            if not (
+                bool(solution.get("ik_feasible", False))
+                and bool(solution.get("map_footprint_clear", False))
+                and bool(solution.get("amcl_yaw_within_limit", False))
+            ):
+                continue
+            if best_solution is None or _closest_ik_solution_sort_key(solution) < _closest_ik_solution_sort_key(best_solution):
+                best_record = record
+                best_solution = solution
+    if best_solution is not None:
+        return best_record, best_solution
+
+    for record in visualization_records:
+        solution = record.get("closest_solution")
+        if not isinstance(solution, dict):
+            continue
+        if best_solution is None or _closest_ik_solution_sort_key(solution) < _closest_ik_solution_sort_key(best_solution):
+            best_record = record
+            best_solution = solution
+    if best_solution is not None:
+        return best_record, best_solution
+
+    for record in visualization_records:
+        candidates = record.get("map_clear_candidates")
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            solution = _gui_solution_from_map_candidate(candidate, planning_config=planning_config)
+            if solution is not None:
+                return record, solution
+
+    return None, None
+
+
+def _write_solution_footprint_ros_map_png(
+    *,
+    map_yaml_path: Path,
+    footprint_map: BaseFootprintMap,
+    solution: dict[str, object],
+    output_path: Path,
+) -> bool:
+    amcl_pose_dict = _ros_map_pose_like_to_dict(solution.get("ros_map_amcl_pose"))
+    if amcl_pose_dict is None:
+        print(
+            "[test_base_sampler] map_occupied.png skipped: solution has no ROS-map AMCL pose.",
+            flush=True,
+        )
+        return False
+
+    try:
+        from PIL import Image, ImageDraw  # type: ignore[import]
+    except ImportError:
+        print(
+            "[test_base_sampler] map_occupied.png skipped: Pillow is not installed.",
+            flush=True,
+        )
+        return False
+
+    map_meta = load_map_meta(map_yaml_path)
+    image = Image.open(map_meta.pgm_path).convert("RGB")
+    width_px, height_px = image.size
+
+    amcl_pose = RosMapPose2D(
+        x=float(amcl_pose_dict["x"]),
+        y=float(amcl_pose_dict["y"]),
+        yaw_rad=float(amcl_pose_dict["yaw_rad"]),
+    )
+    amcl_pb_pose = _amcl_pose_to_pb_world_pose(amcl_pose, z_pb=0.0)
+    assert amcl_pb_pose is not None
+    amcl_pb_xyz, amcl_pb_yaw = amcl_pb_pose
+
+    half_x = float(footprint_map.length_x_m) * 0.5
+    half_y = float(footprint_map.length_y_m) * 0.5
+    corners_local = np.asarray(
+        [
+            [-half_x, -half_y],
+            [half_x, -half_y],
+            [half_x, half_y],
+            [-half_x, half_y],
+        ],
+        dtype=np.float64,
+    )
+    rot_xy = _yaw_rotation_matrix(amcl_pb_yaw)[:2, :2]
+    corners_pb_xy = amcl_pb_xyz[:2].reshape(1, 2) + corners_local @ rot_xy.T
+    corners_ros_xy = np.column_stack([-corners_pb_xy[:, 1], corners_pb_xy[:, 0]])
+
+    origin_x, origin_y = map_meta.origin_xy
+    resolution = float(map_meta.resolution_m)
+    polygon_px = [
+        (
+            float((ros_x - origin_x) / resolution),
+            float(height_px - 1 - ((ros_y - origin_y) / resolution)),
+        )
+        for ros_x, ros_y in corners_ros_xy
+    ]
+
+    draw = ImageDraw.Draw(image)
+    draw.polygon(polygon_px, fill=(0, 96, 255), outline=(0, 32, 180))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_path)
+    print(
+        f"[test_base_sampler] wrote ROS-map occupied footprint image: {output_path} "
+        f"amcl=({amcl_pose.x:.3f}, {amcl_pose.y:.3f}, {math.degrees(amcl_pose.yaw_rad):.2f}deg)",
+        flush=True,
+    )
+    return True
+
+
+def _write_best_display_solution_ros_map_png(
+    *,
+    map_yaml_path: Path,
+    footprint_map: BaseFootprintMap,
+    planning_config,
+    visualization_records: list[dict[str, object]],
+    output_path: Path,
+) -> bool:
+    _, solution = _select_gui_display_solution(
+        visualization_records,
+        planning_config=planning_config,
+    )
+    if solution is None:
+        print(
+            "[test_base_sampler] map_occupied.png skipped: no display solution or map-clear candidate.",
+            flush=True,
+        )
+        return False
+    return _write_solution_footprint_ros_map_png(
+        map_yaml_path=map_yaml_path,
+        footprint_map=footprint_map,
+        solution=solution,
+        output_path=output_path,
     )
 
 
@@ -1493,6 +1886,9 @@ def _visualize_feasible_ik_results_in_gui(
 
         best_view_record: dict[str, object] | None = None
         best_view_solution: dict[str, object] | None = None
+        best_animation_base_xyz: list[float] | None = None
+        best_animation_base_yaw_rad: float | None = None
+        best_animation_joint_solution_rad: list[float] | None = None
         camera_target = [0.0, 0.0, planning_config.initial_height]
         if visualization_records:
             camera_target = list(np.asarray(visualization_records[0]["target_pb"], dtype=float))
@@ -1502,18 +1898,33 @@ def _visualize_feasible_ik_results_in_gui(
             radius=0.03,
             rgbaColor=[1.0, 0.8, 0.0, 1.0],
         )
+        _draw_map_clear_candidate_points(
+            p_mod,
+            visualization_records=visualization_records,
+            z_pb=float(planning_config.initial_height),
+        )
 
-        for record in visualization_records:
-            closest_solution = record.get("closest_solution")
-            if isinstance(closest_solution, dict):
-                best_solution_is_better = (
-                    best_view_solution is None
-                    or _closest_ik_solution_sort_key(closest_solution)
-                    < _closest_ik_solution_sort_key(best_view_solution)
-                )
-                if best_solution_is_better:
-                    best_view_record = record
-                    best_view_solution = closest_solution
+        best_view_record, best_view_solution = _select_gui_display_solution(
+            visualization_records,
+            planning_config=planning_config,
+        )
+
+        if best_view_solution is None:
+            records_with_closest = sum(
+                1 for record in visualization_records if isinstance(record.get("closest_solution"), dict)
+            )
+            records_with_map_candidate = sum(
+                1
+                for record in visualization_records
+                if isinstance(record.get("map_clear_candidates"), list) and len(record["map_clear_candidates"]) > 0
+            )
+            print(
+                "[test_base_sampler] GUI has no feasible, closest, or map-clear base candidate to display "
+                f"(records={len(visualization_records)} "
+                f"closest_records={records_with_closest} "
+                f"map_candidate_records={records_with_map_candidate}).",
+                flush=True,
+            )
 
         if best_view_record is not None and best_view_solution is not None:
             rank = int(best_view_record["rank"])
@@ -1525,43 +1936,92 @@ def _visualize_feasible_ik_results_in_gui(
             )
             base_xyz = [float(v) for v in best_view_solution["pb_base_link_xyz"]]
             base_yaw_rad = float(best_view_solution["pb_base_link_yaw_rad"])
-            joint_solution_rad = [float(v) for v in best_view_solution["ik_joint_solution_rad"]]
-            _animate_gui_ik_solution(
-                p_mod,
-                robot_id=robot_id,
-                controllable_joint_ids=controllable_joint_ids,
-                planning_config=planning_config,
-                base_xyz=base_xyz,
-                base_yaw_rad=base_yaw_rad,
-                joint_solution_rad=joint_solution_rad,
+            raw_joint_solution = best_view_solution.get("ik_joint_solution_rad")
+            joint_solution_rad = (
+                None
+                if raw_joint_solution is None
+                else [float(v) for v in raw_joint_solution]
             )
+            if joint_solution_rad is not None:
+                best_animation_base_xyz = base_xyz
+                best_animation_base_yaw_rad = base_yaw_rad
+                best_animation_joint_solution_rad = joint_solution_rad
             p_mod.resetBasePositionAndOrientation(
                 robot_id,
                 base_xyz,
                 p_mod.getQuaternionFromEuler([0.0, 0.0, base_yaw_rad]),
             )
-            _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, joint_solution_rad)
+            _set_joint_positions_direct(
+                p_mod,
+                robot_id,
+                controllable_joint_ids,
+                joint_solution_rad if joint_solution_rad is not None else joint_reset_rad,
+            )
             p_mod.performCollisionDetection()
+            _add_arm_base_link_debug_axes(
+                p_mod,
+                base_xyz=base_xyz,
+                base_yaw_rad=base_yaw_rad,
+            )
             _add_vehicle_body_visual(
                 p_mod,
                 footprint_map,
                 base_xyz=base_xyz,
                 base_yaw_rad=base_yaw_rad,
             )
+            _add_vehicle_footprint_debug(
+                p_mod,
+                footprint_map,
+                base_xyz=base_xyz,
+                base_yaw_rad=base_yaw_rad,
+                label="best base",
+            )
             camera_target = target_pb.astype(float).tolist()
-            closest_state = "feasible" if bool(best_view_solution.get("ik_feasible", False)) else "closest"
+            map_clear = bool(best_view_solution.get("map_footprint_clear", False))
+            yaw_ok = bool(best_view_solution.get("amcl_yaw_within_limit", False))
+            ik_reachable = bool(best_view_solution.get("ik_reachable", False))
+            closest_state = (
+                "feasible"
+                if bool(best_view_solution.get("ik_feasible", False)) and map_clear and yaw_ok
+                else "closest/debug"
+            )
             orientation_error = best_view_solution.get("ee_orientation_error_deg")
             orientation_error_text = "nan" if orientation_error is None else f"{float(orientation_error):.2f}"
+            ee_position_error = best_view_solution.get("ee_position_error_m")
+            ee_position_error_text = (
+                "nan"
+                if ee_position_error is None
+                else f"{float(ee_position_error):.4f}"
+            )
             p_mod.addUserDebugText(
                 (
                     f"rank={rank}  show={closest_state}  feasible={len(best_view_record['feasible_solutions'])}  "
-                    f"ee_err={float(best_view_solution['ee_position_error_m']):.4f}m  "
+                    f"map_clear={int(map_clear)}  yaw_ok={int(yaw_ok)}  ik_reach={int(ik_reachable)}  "
+                    f"ee_err={ee_position_error_text}m  "
                     f"ori_err={orientation_error_text}deg"
                 ),
                 textPosition=[target_pb[0], target_pb[1], target_pb[2] + 0.24],
                 textColorRGB=[1.0, 1.0, 1.0],
                 textSize=1.1,
             )
+            print(
+                f"[test_base_sampler] GUI showing {closest_state} solution for "
+                f"grasp_rank={rank:02d}: "
+                f"sample_idx={int(best_view_solution['sample_index'])} "
+                f"backoff={float(best_view_solution.get('backoff_distance_m', float('nan'))):.3f}m "
+                f"map_clear={int(map_clear)} "
+                f"yaw_ok={int(yaw_ok)} "
+                f"ik_reach={int(ik_reachable)} "
+                f"ee_err={ee_position_error_text}m "
+                f"ori_err={orientation_error_text}",
+                flush=True,
+            )
+            if joint_solution_rad is None:
+                print(
+                    "[test_base_sampler] GUI has no IK joint solution to animate; "
+                    "showing the closest ROS-map-clear base candidate only.",
+                    flush=True,
+                )
 
         camera_records = [best_view_record] if best_view_record is not None else []
         if camera_records:
@@ -1574,6 +2034,12 @@ def _visualize_feasible_ik_results_in_gui(
             reset_base_xyz = np.asarray(
                 [0.0, 0.0, float(planning_config.initial_height)],
                 dtype=np.float64,
+            )
+            _add_arm_base_link_debug_axes(
+                p_mod,
+                base_xyz=reset_base_xyz,
+                orientation_xyzw=base_orientation_xyzw,
+                label="reset arm base_link",
             )
             scene_points = [reset_base_xyz.reshape(1, 3)]
             voxel_points = np.asarray(voxels_pb, dtype=np.float64).reshape(-1, 3)
@@ -1596,6 +2062,32 @@ def _visualize_feasible_ik_results_in_gui(
             cameraPitch=camera_pitch,
             cameraTargetPosition=camera_target,
         )
+        if (
+            best_animation_base_xyz is not None
+            and best_animation_base_yaw_rad is not None
+            and best_animation_joint_solution_rad is not None
+        ):
+            _animate_gui_ik_solution(
+                p_mod,
+                robot_id=robot_id,
+                controllable_joint_ids=controllable_joint_ids,
+                planning_config=planning_config,
+                base_xyz=best_animation_base_xyz,
+                base_yaw_rad=best_animation_base_yaw_rad,
+                joint_solution_rad=best_animation_joint_solution_rad,
+            )
+            p_mod.resetBasePositionAndOrientation(
+                robot_id,
+                best_animation_base_xyz,
+                p_mod.getQuaternionFromEuler([0.0, 0.0, best_animation_base_yaw_rad]),
+            )
+            _set_joint_positions_direct(
+                p_mod,
+                robot_id,
+                controllable_joint_ids,
+                best_animation_joint_solution_rad,
+            )
+            p_mod.performCollisionDetection()
 
         _spin_gui(p_mod, hold_seconds=hold_seconds, time_step=1.0 / 240.0)
     except Exception as exc:
@@ -1745,8 +2237,9 @@ def _run_simple_sample_logic_for_gui(
         if selected_record is None:
             print("[test_base_sampler] simple sample: no grasp pose was available.", flush=True)
         elif selected_solution is None:
+            closest_solution = selected_record.get("closest_solution")
             print(
-                f"[test_base_sampler] simple sample: no map-feasible IK attempt for "
+                f"[test_base_sampler] simple sample: no ROS-map-clear reachable IK solution for "
                 f"grasp_rank={int(selected_record['rank']):02d} "
                 f"(map_feasible={sample_result.map_feasible_count}, "
                 f"yaw_rejected={int(selected_record.get('sample_yaw_rejected_count', 0))}, "
@@ -1755,10 +2248,15 @@ def _run_simple_sample_logic_for_gui(
                 f"attempted={sample_result.attempted_count}).",
                 flush=True,
             )
+            if isinstance(closest_solution, dict):
+                _print_closest_ik_solution_banner(
+                    rank=int(selected_record["rank"]),
+                    target_pb=np.asarray(selected_record["target_pb"], dtype=np.float64),
+                    solution=closest_solution,
+                )
         else:
-            status = "feasible" if sample_result.feasible else "closest"
             print(
-                f"[test_base_sampler] simple sample selected {status} solution for "
+                f"[test_base_sampler] simple sample selected feasible solution for "
                 f"grasp_rank={int(selected_record['rank']):02d}: "
                 f"backoff={float(selected_solution.get('backoff_distance_m', float('nan'))):.3f}m "
                 f"map_clear={int(bool(selected_solution.get('map_footprint_clear', False)))} "
@@ -1847,12 +2345,16 @@ def main():
         Path(cfg["planner_config_path"]),
         planning_config,
     )
+    target_object_points_camera = _load_target_object_pointcloud_camera(
+        cfg.get("grasp_debug_npz_path")
+    )
 
     live_scene = _capture_live_scene_voxels(
         camera_config_path.resolve(),
         camera_in_base_link_rotation,
         camera_in_base_link_position,
         base_link_z_pb,
+        target_object_points_camera=target_object_points_camera,
     )
     voxels_pb = live_scene.voxel_centers_pb
     camera_to_pb_rotation = live_scene.camera_to_pb_rotation
@@ -1873,6 +2375,9 @@ def main():
         f"grasps={len(grasp_candidates)} | live RGBD voxels={len(voxels_pb)} | "
         f"voxel_size={live_scene.voxel_size_m:.3f}m | "
         f"depth_points={live_scene.valid_depth_point_count} | "
+        f"obstacle_points={live_scene.obstacle_depth_point_count} | "
+        f"target_points={live_scene.target_object_point_count} | "
+        f"target_removed={live_scene.target_excluded_depth_point_count} | "
         f"amcl={'yes' if current_amcl_pose is not None else 'no'}",
         flush=True,
     )
@@ -1933,6 +2438,13 @@ def main():
         visualization_records=visualization_records,
         footprint_map=footprint_map,
         current_amcl_pose=current_amcl_pose,
+    )
+    _write_best_display_solution_ros_map_png(
+        map_yaml_path=Path(cfg["map_yaml_path"]),
+        footprint_map=footprint_map,
+        planning_config=planning_config,
+        visualization_records=visualization_records,
+        output_path=Path(__file__).resolve().parent / "outputs" / "map_occupied.png",
     )
 
     if not args.no_gui:
