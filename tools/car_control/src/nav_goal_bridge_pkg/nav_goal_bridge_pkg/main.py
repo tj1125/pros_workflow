@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from functools import partial
 from typing import Any, Optional
@@ -10,6 +11,7 @@ from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Path
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from std_msgs.msg import String
 
 
 class NavGoalBridge(Node):
@@ -28,6 +30,7 @@ class NavGoalBridge(Node):
         self._received_plan_pub = self.create_publisher(Path, "/received_global_plan", 10)
         self.create_subscription(PoseStamped, "/goal_pose", self._goal_callback, 10)
         self.create_subscription(Path, "/plan", self._plan_callback, 10)
+        self.create_subscription(String, "/auto_nav/result", self._auto_nav_result_callback, 10)
         self.create_timer(self._tick_period_sec, self._tick)
 
         self._last_goal_key: Optional[tuple[float, ...]] = None
@@ -80,6 +83,17 @@ class NavGoalBridge(Node):
         empty = Path()
         empty.header.frame_id = "map"
         self._received_plan_pub.publish(empty)
+
+    def _auto_nav_result_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict) or not bool(payload.get("success", False)):
+            return
+        message = str(payload.get("message", ""))
+        if message.startswith("Navigation goal reached successfully."):
+            self._clear_received_global_plan()
 
     def _cancel_active_nav2_goal(self) -> None:
         if self._active_nav2_goal is not None:

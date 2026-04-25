@@ -151,7 +151,6 @@ class NavMoveRunner(Node):
             msg.pose.covariance = [float(v) for v in covariance]
         return msg
 
-
     def _goal_heading_error(
         self,
         car_orientation: tuple[float, float],
@@ -161,6 +160,33 @@ class NavMoveRunner(Node):
         goal_yaw = _yaw_rad_from_quaternion(goal_orientation[0], goal_orientation[1])
         return _normalize_angle_rad(goal_yaw - car_yaw)
 
+    def _auto_nav_result(self) -> Optional[Dict[str, Any]]:
+        if self._last_auto_nav_result is None:
+            return None
+
+        success = bool(self._last_auto_nav_result.get("success", False))
+        message = str(
+            self._last_auto_nav_result.get("message")
+            or ("navigation completed" if success else "navigation failed")
+        )
+        return {
+            "success": success,
+            "message": message,
+        }
+
+    @staticmethod
+    def _goal_pose_is_satisfied(
+        *,
+        distance_to_goal: float,
+        heading_error: float,
+        goal_tolerance_m: float,
+        goal_heading_tolerance_rad: float,
+    ) -> bool:
+        return (
+            distance_to_goal <= goal_tolerance_m
+            and abs(heading_error) <= goal_heading_tolerance_rad
+        )
+
     def _observe_until_arrival(
         self,
         goal_pose_msg: PoseStamped,
@@ -169,6 +195,7 @@ class NavMoveRunner(Node):
         goal_tolerance_m: float,
         goal_heading_tolerance_rad: float,
     ) -> Dict[str, Any]:
+        """Track AMCL pose, but treat /auto_nav/result as the authoritative finish."""
         goal_position_msg = goal_pose_msg.pose.position
         goal_orientation_msg = goal_pose_msg.pose.orientation
         goal_position = (float(goal_position_msg.x), float(goal_position_msg.y))
@@ -177,20 +204,14 @@ class NavMoveRunner(Node):
         last_detail = ""
         last_distance_to_goal: Optional[float] = None
         last_heading_error: Optional[float] = None
+        pose_goal_reached_event_sent = False
 
         while time.monotonic() <= deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
 
-            if self._last_auto_nav_result is not None:
-                success = bool(self._last_auto_nav_result.get("success", False))
-                message = str(
-                    self._last_auto_nav_result.get("message")
-                    or ("navigation completed" if success else "navigation failed")
-                )
-                return {
-                    "success": success,
-                    "message": message,
-                }
+            auto_nav_result = self._auto_nav_result()
+            if auto_nav_result is not None:
+                return auto_nav_result
 
             if self._last_amcl_pose_msg is None:
                 continue
@@ -216,16 +237,23 @@ class NavMoveRunner(Node):
                 self._emit_event("tracking", detail)
                 last_detail = detail
 
-            if (
-                distance_to_goal <= goal_tolerance_m
-                and abs(heading_error) <= goal_heading_tolerance_rad
+            if self._goal_pose_is_satisfied(
+                distance_to_goal=distance_to_goal,
+                heading_error=heading_error,
+                goal_tolerance_m=goal_tolerance_m,
+                goal_heading_tolerance_rad=goal_heading_tolerance_rad,
             ):
-                return {
-                    "success": True,
-                    "message": "goal pose reached",
-                }
+                if not pose_goal_reached_event_sent:
+                    self._emit_event(
+                        "pose_goal_reached_waiting_auto_nav",
+                        "goal pose tolerance met; waiting for /auto_nav/result",
+                    )
+                    pose_goal_reached_event_sent = True
+                continue
 
-        if last_distance_to_goal is None or last_heading_error is None:
+        if pose_goal_reached_event_sent:
+            timeout_reason = "waiting for /auto_nav/result"
+        elif last_distance_to_goal is None or last_heading_error is None:
             timeout_reason = "no amcl pose"
         else:
             distance_ok = last_distance_to_goal <= goal_tolerance_m

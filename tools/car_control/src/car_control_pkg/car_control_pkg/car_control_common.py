@@ -160,9 +160,6 @@ class BaseCarControlNode(Node):
             CarControlPublishers.create_publishers(self)
         )
 
-        # Publisher to clear the plan topic
-        self.plan_clear_pub = self.create_publisher(Path, '/plan', 10)
-
         # Create subscription to control signals
         self.subscription = CarControlPublishers.create_control_subscription(
             self, self.key_callback
@@ -180,16 +177,10 @@ class BaseCarControlNode(Node):
 
     def clear_plan(self):
         """
-        Clear the /plan topic by publishing an empty Path message
-        and resetting internal stored plan.
+        Clear the locally stored navigation plan without publishing to Nav2's /plan topic.
         """
-        empty = Path()
-        empty.header.stamp = self.get_clock().now().to_msg()
-        empty.header.frame_id = ''
-        empty.poses = []
-        self.plan_clear_pub.publish(empty)
         self.latest_global_plan = None
-        self.get_logger().info('Cleared /plan topic')
+        self.get_logger().info('Cleared stored navigation plan')
         
     def _create_navigation_subscribers(self):
         """Create all subscribers needed for navigation"""

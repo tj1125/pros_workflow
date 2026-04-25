@@ -25,6 +25,7 @@ class NavigationController:
             self.car_control_node.get_parameter("slow_approach_distance_m").value
         )
         self.reset_index()
+        self._active_goal_key = None
 
     def _get_context(self):
         car_position_msg, car_orientation_msg = (
@@ -52,12 +53,26 @@ class NavigationController:
         self.index = 0
         self.final_alignment_active = False
 
+    @staticmethod
+    def _goal_key(goal_position, goal_orientation):
+        return (
+            round(float(goal_position[0]), 3),
+            round(float(goal_position[1]), 3),
+            round(float(goal_orientation[0]), 3),
+            round(float(goal_orientation[1]), 3),
+        )
+
     def manual_nav(self):
         result = self._get_context()
         if isinstance(result, NavGoal.Result):
             return result
 
         car_position, car_orientation, goal_position, goal_orientation = result
+        goal_key = self._goal_key(goal_position, goal_orientation)
+        if goal_key != self._active_goal_key:
+            self.reset_index()
+            self._active_goal_key = goal_key
+
         target_distance = cal_distance(car_position, goal_position)
         if self.final_alignment_active:
             return self._run_final_heading_alignment(
@@ -77,9 +92,7 @@ class NavigationController:
         path_points = self.car_control_node.get_path_points()
         if not path_points:
             self.car_control_node.publish_control("STOP")
-            return NavGoal.Result(
-                success=False, message="No path points available for navigation"
-            )
+            return None
 
         target_point = self.get_next_target_point(
             car_position=car_position, path_points=path_points
@@ -109,7 +122,6 @@ class NavigationController:
         if abs(heading_error) <= self.align_stop_yaw_tolerance_rad:
             self.final_alignment_active = False
             self.car_control_node.publish_stop_burst()
-            self.car_control_node.clear_plan()
             return NavGoal.Result(
                 success=True,
                 message=(

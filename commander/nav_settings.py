@@ -10,7 +10,9 @@ import yaml
 _MAPPER_PARAMS_PATH = (
     Path(__file__).resolve().parent.parent
     / "tools"
-    / "nav"
+    / "car_control"
+    / "src"
+    / "nav_goal_bridge_pkg"
     / "config"
     / "mapper_params.yaml"
 )
