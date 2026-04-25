@@ -40,6 +40,7 @@ class NavGoalBridge(Node):
         self._nav2_goal_sent = False
         self._goal_sequence = 0
         self._active_goal_sequence = 0
+        self._navigation_completed = False
 
         self.get_logger().info("nav_goal_bridge_node ready: /goal_pose -> /navigate_to_pose")
 
@@ -64,6 +65,7 @@ class NavGoalBridge(Node):
         self._goal_sequence += 1
         self._last_goal_key = goal_key
         self._last_goal_received_at = now
+        self._navigation_completed = False
         self._clear_received_global_plan()
         self._cancel_active_nav2_goal()
         self._queue_nav2_goal(goal_sequence=self._goal_sequence, pose=self._copy_pose(msg))
@@ -77,6 +79,8 @@ class NavGoalBridge(Node):
         self._nav2_goal_sent = False
 
     def _plan_callback(self, msg: Path) -> None:
+        if self._navigation_completed:
+            return
         self._received_plan_pub.publish(msg)
 
     def _clear_received_global_plan(self) -> None:
@@ -93,6 +97,7 @@ class NavGoalBridge(Node):
             return
         message = str(payload.get("message", ""))
         if message.startswith("Navigation goal reached successfully."):
+            self._navigation_completed = True
             self._clear_received_global_plan()
 
     def _cancel_active_nav2_goal(self) -> None:

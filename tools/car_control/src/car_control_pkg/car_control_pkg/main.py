@@ -102,12 +102,8 @@ class AutoNavStarter(Node):
             return
 
         if goal_key == self._completed_goal_key:
-            if self._current_goal_is_satisfied(
-                car_position, car_orientation, goal_pose, goal_orientation
-            ):
-                self.get_logger().debug('Skipping already completed auto-nav goal')
-                return
-            self._completed_goal_key = None
+            self.get_logger().debug('Skipping already completed auto-nav goal')
+            return
 
         if self._current_goal_is_satisfied(
             car_position, car_orientation, goal_pose, goal_orientation
