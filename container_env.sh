@@ -60,7 +60,7 @@ ros_ws_build() {
         find "$ROS_WS_INSTALL" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         find "$ROS_WS_LOG" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         colcon --log-base "$ROS_WS_LOG" build \
-            --base-paths "$VLM_RL_ROOT/tools/nav" "$VLM_RL_ROOT/tools/car_control" \
+            --base-paths "$VLM_RL_ROOT/tools/car_control" \
             --build-base "$ROS_WS_BUILD" \
             --install-base "$ROS_WS_INSTALL" \
             "$@"

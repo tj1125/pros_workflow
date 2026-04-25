@@ -32,7 +32,7 @@ def _nested_get(payload: dict, *keys, default=None):
 @lru_cache(maxsize=1)
 def _load_shared_mapper_params() -> dict:
     try:
-        nav_share_dir = FilePath(get_package_share_directory("vlm_rl_nav"))
+        nav_share_dir = FilePath(get_package_share_directory("nav_goal_bridge_pkg"))
     except PackageNotFoundError:
         return {}
 

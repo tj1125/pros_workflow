@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description() -> LaunchDescription:
     nav_params_file = (
-        get_package_share_directory("vlm_rl_nav") + "/config/mapper_params.yaml"
+        get_package_share_directory("nav_goal_bridge_pkg") + "/config/mapper_params.yaml"
     )
     car_control_node = Node(
         package="car_control_pkg",

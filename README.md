@@ -121,7 +121,7 @@ ros2 run arm_control_pkg arm_control_node
 ros2 run keyboard_mode_interface_pkg keyboard_control_node
 
 # 啟動導航 launch
-ros2 launch vlm_rl_nav navigation.launch.py
+ros2 launch nav_goal_bridge_pkg navigation.launch.py
 ```
 
 同一輪 dev container 內如果你已經跑過 `r`，overlay 會自動載入；真的要手動重載才用：
@@ -156,15 +156,11 @@ VLM_RL/
 │   ├── approach_agent.py  # 靠近 Node (本地控制)
 │   ├── view_agent.py      # 視野調整 Node (A2A Client)
 │   └── schemas.py         # Pydantic 資料模型
-├── ros2/
-│   └── vlm_rl_nav/        # 自用 Nav2 ROS 2 Package
-│       ├── launch/
-│       │   └── navigation.launch.py  # Nav2 主 launch 檔
-│       ├── config/
-│       │   └── nav2_params.yaml      # AMCL + Nav2 參數 (yaw 5度精度)
-│       └── map/
-│           ├── map01.pgm             # 地圖圖像
-│           └── map01.yaml            # 地圖元資料
+├── tools/
+│   └── car_control/src/
+│       ├── nav_goal_bridge_pkg/      # Nav2 launch/config/map + /goal_pose bridge
+│       ├── car_control_pkg/          # 車體控制與自動導航 action server
+│       └── action_interface/         # ROS 2 action 定義
 ├── config/                # 其他設定檔 (camera, objects)
 └── logs/                  # JSONL 追蹤日誌輸出
 ```

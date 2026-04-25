@@ -50,7 +50,6 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-1}
     volumes:
       # Mount navigation tool sources only; runtime build/install/log stay isolated from dev shell volumes.
-      - ./tools/nav:/workspaces/tools/nav:rw
       - ./tools/car_control:/workspaces/tools/car_control:rw
       - vlm_rl_nav_build:/workspaces/build
       - vlm_rl_nav_install:/workspaces/install
@@ -65,15 +64,15 @@ services:
         set -e
         source /opt/ros/humble/setup.bash
         source /opt/ros/vendor_laser_scan_matcher/setup.bash
-        echo '🔧 Building vlm_rl_nav and car_control_pkg...'
+        echo '🔧 Building nav_goal_bridge_pkg and car_control_pkg...'
         cd /workspaces
         find /workspaces/build -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         find /workspaces/install -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         find /workspaces/log -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-        colcon --log-base /workspaces/log build --base-paths /workspaces/tools/nav /workspaces/tools/car_control --build-base /workspaces/build --install-base /workspaces/install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg vlm_rl_nav
+        colcon --log-base /workspaces/log build --base-paths /workspaces/tools/car_control --build-base /workspaces/build --install-base /workspaces/install --packages-select action_interface car_control_pkg nav_goal_bridge_pkg
         source /workspaces/install/setup.bash
         echo '🚀 Launching Nav2...'
-        exec ros2 launch vlm_rl_nav navigation.launch.py
+        exec ros2 launch nav_goal_bridge_pkg navigation.launch.py
     restart: "no"
 
   # ------------------------------------

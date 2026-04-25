@@ -1,6 +1,6 @@
 <launch>
-    <arg name="map_file" default="$(dirname)/map01.yaml"/>
-    <arg name="params_file" default="$(dirname)/mapper_params.yaml"/>
+    <arg name="map_file" default="$(find-pkg-share nav_goal_bridge_pkg)/config/map01.yaml"/>
+    <arg name="params_file" default="$(find-pkg-share nav_goal_bridge_pkg)/config/mapper_params.yaml"/>
     <arg name="use_sim_time" default="false"/>
 
     <include file="$(find-pkg-share nav2_bringup)/launch/navigation_launch.py">
