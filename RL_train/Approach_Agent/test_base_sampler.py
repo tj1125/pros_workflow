@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import scipy.spatial.transform as st
 
+import move_car
 import sample_logic
 from scripts.run_base_pose_sampling import load_config
 from src.camera_car_voxel_ompl import load_camera_car_voxel_ompl_config
@@ -66,14 +67,11 @@ class RosMapPose2D:
 
 
 @dataclass(frozen=True)
-class BaseFootprintMap:
+class MapFreeSpace:
     free_cell_keys: frozenset[tuple[int, int]]
-    free_cell_centers_xy: np.ndarray
-    footprint_points_pb_xy: np.ndarray
     origin_xy: tuple[float, float]
     resolution_m: float
-    length_x_m: float
-    length_y_m: float
+    vehicle_footprint_points_pb_xy: np.ndarray
 
 
 LIVE_VOXEL_MIN_DEPTH_M = 0.19
@@ -82,9 +80,9 @@ LIVE_VOXEL_SCENE_POINT_STRIDE = 4
 LIVE_VOXEL_SCENE_DOWNSAMPLE_M = 0.05
 TARGET_OBJECT_POINTCLOUD_KEY = "object_pc_camera"
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
-BASE_FOOTPRINT_LENGTH_X_M = 0.37
-BASE_FOOTPRINT_LENGTH_Y_M = 0.46
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
+VEHICLE_BASE_LENGTH_X_M = 0.35
+VEHICLE_BASE_LENGTH_Y_M = 0.44
 
 
 PLANNING_CAMERA_TO_PB_LOCAL = np.asarray(
@@ -134,7 +132,7 @@ def _rectangular_footprint_points_pb_xy(
     return np.unique(np.vstack([grid_points, corners]), axis=0)
 
 
-def _build_base_footprint_map(map_yaml_path: Path) -> BaseFootprintMap:
+def _build_map_free_space(map_yaml_path: Path) -> MapFreeSpace:
     map_meta = load_map_meta(map_yaml_path)
     free_cells_map_xy = np.asarray(load_free_cells_unity_xz(map_meta), dtype=np.float64).reshape(-1, 2)
     if len(free_cells_map_xy) == 0:
@@ -152,20 +150,17 @@ def _build_base_footprint_map(map_yaml_path: Path) -> BaseFootprintMap:
         )
         for cell in free_cells_map_xy
     )
-    footprint_points = _rectangular_footprint_points_pb_xy(
-        length_x_m=BASE_FOOTPRINT_LENGTH_X_M,
-        length_y_m=BASE_FOOTPRINT_LENGTH_Y_M,
+    vehicle_footprint_points_pb_xy = _rectangular_footprint_points_pb_xy(
+        length_x_m=VEHICLE_BASE_LENGTH_X_M,
+        length_y_m=VEHICLE_BASE_LENGTH_Y_M,
         resolution_m=resolution,
     )
 
-    return BaseFootprintMap(
+    return MapFreeSpace(
         free_cell_keys=free_cell_keys,
-        free_cell_centers_xy=free_cells_map_xy,
-        footprint_points_pb_xy=footprint_points,
         origin_xy=(origin_x, origin_y),
         resolution_m=resolution,
-        length_x_m=float(BASE_FOOTPRINT_LENGTH_X_M),
-        length_y_m=float(BASE_FOOTPRINT_LENGTH_Y_M),
+        vehicle_footprint_points_pb_xy=vehicle_footprint_points_pb_xy,
     )
 
 
@@ -451,6 +446,28 @@ def _print_selected_base_link_ros_map_banner(
     )
 
 
+def _publish_goal_pose_for_solution(solution: dict[str, object]) -> None:
+    enabled_text = os.getenv("APPROACH_AGENT_PUBLISH_GOAL_POSE", "1").strip().lower()
+    if enabled_text in {"0", "false", "no", "off"}:
+        print("[test_base_sampler] /goal_pose publisher disabled by APPROACH_AGENT_PUBLISH_GOAL_POSE.", flush=True)
+        return
+
+    publish_count = int(os.getenv("APPROACH_AGENT_GOAL_POSE_PUBLISH_COUNT", "3"))
+    interval_sec = float(os.getenv("APPROACH_AGENT_GOAL_POSE_INTERVAL_SEC", "0.1"))
+    goal_pose = move_car.publish_goal_pose(
+        solution,
+        publish_count=publish_count,
+        interval_sec=interval_sec,
+        prefer_amcl_pose=True,
+    )
+    print(
+        "[test_base_sampler] published selected /goal_pose = "
+        f"{goal_pose} "
+        f"(count={max(1, publish_count)}, interval={max(0.0, interval_sec):.3f}s).",
+        flush=True,
+    )
+
+
 def _print_closest_ik_solution_banner(
     *,
     rank: int,
@@ -494,7 +511,7 @@ def _print_closest_ik_solution_banner(
         f" sample_idx : {int(solution['sample_index'])}\n"
         f" region_cell: {int(solution['ros_map_sample_region_cell_count'])}\n"
         f" backoff    : {'nan' if backoff_distance is None else f'{float(backoff_distance):.4f}'} m\n"
-        f" map_clear  : {int(bool(solution.get('map_footprint_clear', False)))}\n"
+        f" map_clear  : {int(bool(solution.get('map_clear', False)))}\n"
         f" yaw_ok     : {int(bool(solution.get('amcl_yaw_within_limit', False)))}"
         f"  delta={'nan' if yaw_delta_deg is None else f'{float(yaw_delta_deg):.2f}'} deg"
         f"  limit={'nan' if yaw_limit_deg is None else f'{float(yaw_limit_deg):.2f}'} deg\n"
@@ -965,26 +982,31 @@ def _local_pb_direction_to_ros_map_xy(
     return direction_ros_xy / direction_norm
 
 
-def _rectangular_footprint_is_clear_on_map(
-    footprint_map: BaseFootprintMap,
-    amcl_pose: RosMapPose2D,
+def _ros_map_pose_is_clear_on_map(
+    map_free_space: MapFreeSpace,
+    ros_map_pose: RosMapPose2D,
 ) -> bool:
-    amcl_pb_pose = _amcl_pose_to_pb_world_pose(amcl_pose, z_pb=0.0)
-    assert amcl_pb_pose is not None
+    amcl_pb_pose = _amcl_pose_to_pb_world_pose(ros_map_pose, z_pb=0.0)
+    if amcl_pb_pose is None:
+        return False
     amcl_pb_xyz, amcl_pb_yaw = amcl_pb_pose
-    footprint_points_pb = np.asarray(footprint_map.footprint_points_pb_xy, dtype=np.float64).reshape(-1, 2)
+    footprint_points_pb = np.asarray(
+        map_free_space.vehicle_footprint_points_pb_xy,
+        dtype=np.float64,
+    ).reshape(-1, 2)
     rot_xy = _yaw_rotation_matrix(amcl_pb_yaw)[:2, :2]
-    world_pb_xy = amcl_pb_xyz[:2].reshape(1, 2) + footprint_points_pb @ rot_xy.T
-
-    ros_x = -world_pb_xy[:, 1]
-    ros_y = world_pb_xy[:, 0]
-    origin_x, origin_y = footprint_map.origin_xy
-    resolution = float(footprint_map.resolution_m)
-    keys = zip(
-        np.rint((ros_x - origin_x) / resolution).astype(np.int32),
-        np.rint((ros_y - origin_y) / resolution).astype(np.int32),
+    footprint_world_pb_xy = amcl_pb_xyz[:2].reshape(1, 2) + footprint_points_pb @ rot_xy.T
+    footprint_world_ros_xy = np.asarray(
+        [_pb_world_xy_to_ros_map_xy((float(pb_x), float(pb_y))) for pb_x, pb_y in footprint_world_pb_xy],
+        dtype=np.float64,
     )
-    return all((int(key_x), int(key_y)) in footprint_map.free_cell_keys for key_x, key_y in keys)
+    origin_x, origin_y = map_free_space.origin_xy
+    resolution = float(map_free_space.resolution_m)
+    keys = zip(
+        np.rint((footprint_world_ros_xy[:, 0] - origin_x) / resolution).astype(np.int32),
+        np.rint((footprint_world_ros_xy[:, 1] - origin_y) / resolution).astype(np.int32),
+    )
+    return all((int(key_x), int(key_y)) in map_free_space.free_cell_keys for key_x, key_y in keys)
 
 
 def _ros_map_pose_to_dict(pose: RosMapPose2D) -> dict[str, float]:
@@ -1311,25 +1333,19 @@ def _vehicle_amcl_from_base_link_local_pb(
     )
 
 
-def _add_vehicle_body_visual(
+def _add_vehicle_base_visual(
     p_mod,
-    footprint_map: BaseFootprintMap,
     *,
     base_xyz: list[float] | np.ndarray,
     base_yaw_rad: float,
 ) -> None:
     body_height_m = float(os.getenv("BASE_SAMPLER_GUI_VEHICLE_BODY_HEIGHT_M", "0.05"))
     half_extents = [
-        float(footprint_map.length_x_m) * 0.5,
-        float(footprint_map.length_y_m) * 0.5,
+        VEHICLE_BASE_LENGTH_X_M * 0.5,
+        VEHICLE_BASE_LENGTH_Y_M * 0.5,
         max(body_height_m, 1e-3) * 0.5,
     ]
     amcl_xyz = _vehicle_amcl_from_base_link_local_pb(base_xyz, base_yaw_rad)
-    body_center_xyz = [
-        float(amcl_xyz[0]),
-        float(amcl_xyz[1]),
-        float(half_extents[2]),
-    ]
     visual_shape = p_mod.createVisualShape(
         p_mod.GEOM_BOX,
         halfExtents=half_extents,
@@ -1338,7 +1354,7 @@ def _add_vehicle_body_visual(
     p_mod.createMultiBody(
         baseMass=0.0,
         baseVisualShapeIndex=visual_shape,
-        basePosition=body_center_xyz,
+        basePosition=[float(amcl_xyz[0]), float(amcl_xyz[1]), float(half_extents[2])],
         baseOrientation=p_mod.getQuaternionFromEuler([0.0, 0.0, float(base_yaw_rad)]),
     )
 
@@ -1363,131 +1379,6 @@ def _add_arm_base_link_debug_axes(
         axis_length=axis_length,
         axis_width=axis_width,
         label=label,
-    )
-
-
-def _vehicle_footprint_points_local_pb(
-    footprint_map: BaseFootprintMap,
-    *,
-    base_xyz: list[float] | np.ndarray,
-    base_yaw_rad: float,
-    z_pb: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    amcl_xyz = _vehicle_amcl_from_base_link_local_pb(base_xyz, base_yaw_rad)
-    rot_xy = _yaw_rotation_matrix(float(base_yaw_rad))[:2, :2]
-    footprint_points = np.asarray(footprint_map.footprint_points_pb_xy, dtype=np.float64).reshape(-1, 2)
-    world_xy = amcl_xyz[:2].reshape(1, 2) + footprint_points @ rot_xy.T
-    world_xyz = np.column_stack(
-        [
-            world_xy[:, 0],
-            world_xy[:, 1],
-            np.full(len(world_xy), float(z_pb), dtype=np.float64),
-        ]
-    )
-    amcl_xyz[2] = float(z_pb)
-    return amcl_xyz, world_xyz
-
-
-def _add_vehicle_footprint_debug(
-    p_mod,
-    footprint_map: BaseFootprintMap,
-    *,
-    base_xyz: list[float] | np.ndarray,
-    base_yaw_rad: float,
-    label: str,
-) -> None:
-    footprint_z = float(os.getenv("BASE_SAMPLER_GUI_FOOTPRINT_Z_M", "0.035"))
-    amcl_xyz, footprint_xyz = _vehicle_footprint_points_local_pb(
-        footprint_map,
-        base_xyz=base_xyz,
-        base_yaw_rad=base_yaw_rad,
-        z_pb=footprint_z,
-    )
-    if len(footprint_xyz) == 0:
-        return
-
-    max_points = max(1, int(os.getenv("BASE_SAMPLER_GUI_MAX_FOOTPRINT_POINTS", "900")))
-    stride = max(1, int(math.ceil(len(footprint_xyz) / float(max_points))))
-    shown_points = footprint_xyz[::stride]
-    point_color = [0.0, 0.95, 1.0]
-    try:
-        p_mod.addUserDebugPoints(
-            pointPositions=shown_points.astype(float).tolist(),
-            pointColorsRGB=[point_color for _ in range(len(shown_points))],
-            pointSize=float(os.getenv("BASE_SAMPLER_GUI_FOOTPRINT_POINT_SIZE", "5.0")),
-        )
-    except Exception:
-        visual_shape = p_mod.createVisualShape(
-            p_mod.GEOM_SPHERE,
-            radius=0.006,
-            rgbaColor=[0.0, 0.95, 1.0, 0.95],
-        )
-        for point_xyz in shown_points:
-            p_mod.createMultiBody(
-                baseMass=0.0,
-                baseVisualShapeIndex=visual_shape,
-                basePosition=point_xyz.astype(float).tolist(),
-            )
-
-    base_arr = np.asarray(base_xyz, dtype=np.float64).reshape(3)
-    base_point = np.asarray([base_arr[0], base_arr[1], footprint_z], dtype=np.float64)
-    p_mod.addUserDebugLine(
-        amcl_xyz.astype(float).tolist(),
-        base_point.astype(float).tolist(),
-        lineColorRGB=[0.2, 1.0, 1.0],
-        lineWidth=3.0,
-    )
-    _add_base_marker(
-        p_mod,
-        amcl_xyz.astype(float).tolist(),
-        (0.0, 1.0, 1.0, 1.0),
-        radius=0.018,
-    )
-
-    half_x = float(footprint_map.length_x_m) * 0.5
-    half_y = float(footprint_map.length_y_m) * 0.5
-    corners_local = np.asarray(
-        [
-            [-half_x, -half_y],
-            [half_x, -half_y],
-            [half_x, half_y],
-            [-half_x, half_y],
-        ],
-        dtype=np.float64,
-    )
-    rot_xy = _yaw_rotation_matrix(float(base_yaw_rad))[:2, :2]
-    corners_xy = amcl_xyz[:2].reshape(1, 2) + corners_local @ rot_xy.T
-    corners_xyz = np.column_stack(
-        [
-            corners_xy[:, 0],
-            corners_xy[:, 1],
-            np.full(4, footprint_z + 0.01, dtype=np.float64),
-        ]
-    )
-    for index in range(4):
-        p_mod.addUserDebugLine(
-            corners_xyz[index].astype(float).tolist(),
-            corners_xyz[(index + 1) % 4].astype(float).tolist(),
-            lineColorRGB=[1.0, 0.95, 0.1],
-            lineWidth=3.0,
-        )
-
-    p_mod.addUserDebugText(
-        (
-            f"{label} AMCL=({amcl_xyz[0]:.3f}, {amcl_xyz[1]:.3f}) "
-            f"footprint_pts={len(footprint_xyz)}"
-        ),
-        textPosition=[float(amcl_xyz[0]), float(amcl_xyz[1]), float(footprint_z + 0.08)],
-        textColorRGB=[0.0, 1.0, 1.0],
-        textSize=0.85,
-    )
-    print(
-        f"[test_base_sampler] GUI vehicle footprint {label}: "
-        f"amcl_local_pb=({amcl_xyz[0]:.4f}, {amcl_xyz[1]:.4f}, {amcl_xyz[2]:.4f}) "
-        f"base_link_local_pb=({base_arr[0]:.4f}, {base_arr[1]:.4f}, {base_arr[2]:.4f}) "
-        f"yaw={math.degrees(float(base_yaw_rad)):.2f}deg "
-        f"points={len(footprint_xyz)} shown={len(shown_points)}",
-        flush=True,
     )
 
 
@@ -1575,7 +1466,7 @@ def _gui_solution_from_map_candidate(
         "pb_base_link_yaw_rad": float(base_yaw_rad),
         "pb_base_link_yaw_deg": float(math.degrees(base_yaw_rad)),
         "ik_joint_solution_rad": None,
-        "map_footprint_clear": True,
+        "map_clear": True,
         "amcl_yaw_within_limit": True,
         "ik_reachable": False,
         "ik_feasible": False,
@@ -1604,7 +1495,7 @@ def _select_gui_display_solution(
                 continue
             if not (
                 bool(solution.get("ik_feasible", False))
-                and bool(solution.get("map_footprint_clear", False))
+                and bool(solution.get("map_clear", False))
                 and bool(solution.get("amcl_yaw_within_limit", False))
             ):
                 continue
@@ -1638,10 +1529,9 @@ def _select_gui_display_solution(
     return None, None
 
 
-def _write_solution_footprint_ros_map_png(
+def _write_solution_vehicle_base_ros_map_png(
     *,
     map_yaml_path: Path,
-    footprint_map: BaseFootprintMap,
     solution: dict[str, object],
     output_path: Path,
 ) -> bool:
@@ -1664,7 +1554,7 @@ def _write_solution_footprint_ros_map_png(
 
     map_meta = load_map_meta(map_yaml_path)
     image = Image.open(map_meta.pgm_path).convert("RGB")
-    width_px, height_px = image.size
+    _, height_px = image.size
 
     amcl_pose = RosMapPose2D(
         x=float(amcl_pose_dict["x"]),
@@ -1675,8 +1565,8 @@ def _write_solution_footprint_ros_map_png(
     assert amcl_pb_pose is not None
     amcl_pb_xyz, amcl_pb_yaw = amcl_pb_pose
 
-    half_x = float(footprint_map.length_x_m) * 0.5
-    half_y = float(footprint_map.length_y_m) * 0.5
+    half_x = VEHICLE_BASE_LENGTH_X_M * 0.5
+    half_y = VEHICLE_BASE_LENGTH_Y_M * 0.5
     corners_local = np.asarray(
         [
             [-half_x, -half_y],
@@ -1716,7 +1606,6 @@ def _write_solution_footprint_ros_map_png(
 def _write_best_display_solution_ros_map_png(
     *,
     map_yaml_path: Path,
-    footprint_map: BaseFootprintMap,
     planning_config,
     visualization_records: list[dict[str, object]],
     output_path: Path,
@@ -1731,9 +1620,8 @@ def _write_best_display_solution_ros_map_png(
             flush=True,
         )
         return False
-    return _write_solution_footprint_ros_map_png(
+    return _write_solution_vehicle_base_ros_map_png(
         map_yaml_path=map_yaml_path,
-        footprint_map=footprint_map,
         solution=solution,
         output_path=output_path,
     )
@@ -1835,7 +1723,6 @@ def _visualize_feasible_ik_results_in_gui(
     voxels_pb: np.ndarray,
     voxel_size_m: float,
     visualization_records: list[dict[str, object]],
-    footprint_map: BaseFootprintMap,
 ) -> None:
     expected_joint_count = int(arm_config["pybullet"]["controllable_joints"])
     hold_seconds = float(os.getenv("BASE_SAMPLER_GUI_HOLD_SEC", "0.0"))
@@ -1898,12 +1785,6 @@ def _visualize_feasible_ik_results_in_gui(
             radius=0.03,
             rgbaColor=[1.0, 0.8, 0.0, 1.0],
         )
-        _draw_map_clear_candidate_points(
-            p_mod,
-            visualization_records=visualization_records,
-            z_pb=float(planning_config.initial_height),
-        )
-
         best_view_record, best_view_solution = _select_gui_display_solution(
             visualization_records,
             planning_config=planning_config,
@@ -1963,21 +1844,13 @@ def _visualize_feasible_ik_results_in_gui(
                 base_xyz=base_xyz,
                 base_yaw_rad=base_yaw_rad,
             )
-            _add_vehicle_body_visual(
+            _add_vehicle_base_visual(
                 p_mod,
-                footprint_map,
                 base_xyz=base_xyz,
                 base_yaw_rad=base_yaw_rad,
-            )
-            _add_vehicle_footprint_debug(
-                p_mod,
-                footprint_map,
-                base_xyz=base_xyz,
-                base_yaw_rad=base_yaw_rad,
-                label="best base",
             )
             camera_target = target_pb.astype(float).tolist()
-            map_clear = bool(best_view_solution.get("map_footprint_clear", False))
+            map_clear = bool(best_view_solution.get("map_clear", False))
             yaw_ok = bool(best_view_solution.get("amcl_yaw_within_limit", False))
             ik_reachable = bool(best_view_solution.get("ik_reachable", False))
             closest_state = (
@@ -2110,8 +1983,9 @@ def _run_simple_sample_logic_for_gui(
     voxels_pb: np.ndarray,
     voxel_size_m: float,
     visualization_records: list[dict[str, object]],
-    footprint_map: BaseFootprintMap,
+    map_free_space: MapFreeSpace,
     current_amcl_pose: RosMapPose2D | None,
+    publish_goal_pose: bool,
 ) -> list[dict[str, object]]:
     client_id = p_mod.connect(p_mod.DIRECT)
     if client_id < 0:
@@ -2174,10 +2048,10 @@ def _run_simple_sample_logic_for_gui(
                 local_pb_yaw_rad=float(local_yaw),
             )
 
-        def _footprint_is_clear(ros_map_amcl_pose: object) -> bool:
+        def _map_pose_is_clear(ros_map_amcl_pose: object) -> bool:
             if not isinstance(ros_map_amcl_pose, RosMapPose2D):
                 return False
-            return _rectangular_footprint_is_clear_on_map(footprint_map, ros_map_amcl_pose)
+            return _ros_map_pose_is_clear_on_map(map_free_space, ros_map_amcl_pose)
 
         def _attempt_ik(local_xy: np.ndarray, local_yaw: float, record: dict[str, object]) -> dict[str, object]:
             return _attempt_ik_at_base_pose(
@@ -2211,7 +2085,7 @@ def _run_simple_sample_logic_for_gui(
             reset_ee_position_xyz=reset_ee_position_xyz,
             reset_ee_orientation_xyzw=reset_ee_orientation_xyzw,
             pose_from_local_base_fn=_pose_from_local_base,
-            footprint_is_clear_fn=_footprint_is_clear,
+            map_pose_is_clear_fn=_map_pose_is_clear,
             attempt_ik_fn=_attempt_ik,
             make_solution_record_fn=_make_solution_record,
             position_tolerance_m=float(cfg.get("position_tolerance_m", planning_config.position_tolerance_m)),
@@ -2234,17 +2108,27 @@ def _run_simple_sample_logic_for_gui(
 
         selected_record = sample_result.selected_record
         selected_solution = sample_result.selected_solution
+        evaluated_records = [
+            record
+            for record in sample_result.visualization_records
+            if "sample_attempted_count" in record
+        ]
+        evaluated_grasp_count = len(evaluated_records)
+        total_yaw_rejected = sum(int(record.get("sample_yaw_rejected_count", 0)) for record in evaluated_records)
+        total_map_blocked = sum(int(record.get("sample_map_blocked_count", 0)) for record in evaluated_records)
+        total_ik_reachable = sum(int(record.get("sample_ik_reachable_count", 0)) for record in evaluated_records)
         if selected_record is None:
             print("[test_base_sampler] simple sample: no grasp pose was available.", flush=True)
         elif selected_solution is None:
             closest_solution = selected_record.get("closest_solution")
             print(
-                f"[test_base_sampler] simple sample: no ROS-map-clear reachable IK solution for "
-                f"grasp_rank={int(selected_record['rank']):02d} "
-                f"(map_feasible={sample_result.map_feasible_count}, "
-                f"yaw_rejected={int(selected_record.get('sample_yaw_rejected_count', 0))}, "
-                f"footprint_blocked={int(selected_record.get('sample_footprint_blocked_count', 0))}, "
-                f"ik_reachable={int(selected_record.get('sample_ik_reachable_count', 0))}, "
+                f"[test_base_sampler] simple sample: no ROS-map-clear reachable IK solution after "
+                f"trying {evaluated_grasp_count} grasp targets "
+                f"(best_display_grasp_rank={int(selected_record['rank']):02d}, "
+                f"map_feasible={sample_result.map_feasible_count}, "
+                f"yaw_rejected={total_yaw_rejected}, "
+                f"map_blocked={total_map_blocked}, "
+                f"ik_reachable={total_ik_reachable}, "
                 f"attempted={sample_result.attempted_count}).",
                 flush=True,
             )
@@ -2257,9 +2141,10 @@ def _run_simple_sample_logic_for_gui(
         else:
             print(
                 f"[test_base_sampler] simple sample selected feasible solution for "
-                f"grasp_rank={int(selected_record['rank']):02d}: "
+                f"grasp_rank={int(selected_record['rank']):02d} "
+                f"after trying {evaluated_grasp_count} grasp targets: "
                 f"backoff={float(selected_solution.get('backoff_distance_m', float('nan'))):.3f}m "
-                f"map_clear={int(bool(selected_solution.get('map_footprint_clear', False)))} "
+                f"map_clear={int(bool(selected_solution.get('map_clear', False)))} "
                 f"yaw_ok={int(bool(selected_solution.get('amcl_yaw_within_limit', False)))} "
                 f"yaw_clamped={int(bool(selected_solution.get('base_yaw_clamped', False)))} "
                 f"ee_err={float(selected_solution['ee_position_error_m']):.4f}m "
@@ -2277,6 +2162,8 @@ def _run_simple_sample_logic_for_gui(
                     amcl_pose=selected_solution.get("ros_map_amcl_pose"),
                     base_link_pose=selected_solution.get("ros_map_base_link_pose"),
                 )
+                if publish_goal_pose:
+                    _publish_goal_pose_for_solution(selected_solution)
 
         return sample_result.visualization_records
     finally:
@@ -2324,6 +2211,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip PyBullet GUI replay.",
     )
+    parser.add_argument(
+        "--no-publish-goal-pose",
+        action="store_true",
+        help="Do not publish the selected ROS map goal on /goal_pose.",
+    )
     return parser.parse_args()
 
 
@@ -2336,7 +2228,7 @@ def main():
     planning_config = load_planning_config(Path(cfg["planner_config_path"]))
     arm_config = _load_arm_config()
     _, p_mod, pybullet_data = _load_python_dependencies()
-    footprint_map = _build_base_footprint_map(Path(cfg["map_yaml_path"]))
+    map_free_space = _build_map_free_space(Path(cfg["map_yaml_path"]))
     (
         camera_in_base_link_rotation,
         camera_in_base_link_position,
@@ -2383,13 +2275,10 @@ def main():
     )
     print(
         "[test_base_sampler] aligned ROS map context: "
-        f"rect_footprint_pb_x={footprint_map.length_x_m:.3f}m "
-        f"rect_footprint_pb_y={footprint_map.length_y_m:.3f}m "
         f"base_link_from_amcl_pb_xy=[{BASE_LINK_FROM_AMCL_PB_XY[0]:.4f}, "
         f"{BASE_LINK_FROM_AMCL_PB_XY[1]:.4f}]m "
-        f"map_resolution={footprint_map.resolution_m:.3f}m "
-        f"free_cells={len(footprint_map.free_cell_keys)} "
-        f"footprint_check_points={len(footprint_map.footprint_points_pb_xy)} "
+        f"map_resolution={map_free_space.resolution_m:.3f}m "
+        f"free_cells={len(map_free_space.free_cell_keys)} "
         f"amcl_align={'yes' if current_amcl_pose is not None else 'no'}",
         flush=True,
     )
@@ -2436,12 +2325,12 @@ def main():
         voxels_pb=voxels_pb,
         voxel_size_m=live_scene.voxel_size_m,
         visualization_records=visualization_records,
-        footprint_map=footprint_map,
+        map_free_space=map_free_space,
         current_amcl_pose=current_amcl_pose,
+        publish_goal_pose=not args.no_publish_goal_pose,
     )
     _write_best_display_solution_ros_map_png(
         map_yaml_path=Path(cfg["map_yaml_path"]),
-        footprint_map=footprint_map,
         planning_config=planning_config,
         visualization_records=visualization_records,
         output_path=Path(__file__).resolve().parent / "outputs" / "map_occupied.png",
@@ -2456,7 +2345,6 @@ def main():
             voxels_pb=voxels_pb,
             voxel_size_m=live_scene.voxel_size_m,
             visualization_records=visualization_records,
-            footprint_map=footprint_map,
         )
 
 

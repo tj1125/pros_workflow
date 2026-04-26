@@ -22,7 +22,7 @@ target_approach_dir_unity_xz: null
 
 # ── Map (navigable region) ────────────────────────────────────────────────────
 # Path relative to REPO_ROOT (VLM_RL/); _resolve_input_path checks REPO_ROOT as a search root.
-map_yaml_path: tools/nav/config/map01.yaml
+map_yaml_path: tools/car_control/src/nav_goal_bridge_pkg/config/map01.yaml
 
 # ── Planner ───────────────────────────────────────────────────────────────────
 planner_config_path: configs/pybullet_ompl.yaml
@@ -74,13 +74,6 @@ num_samples: 50
 # ── test_base_sampler.py 專用 ─────────────────────────────────────────────────
 # Offset from vehicle center (AMCL) to arm base_link in PyBullet local frame [x, y].
 base_link_from_amcl_pb_xy: [0.0, 0.1288]
-
-# Whether to check rectangular vehicle footprint collision against the map.
-consider_vehicle_body: false
-
-# Rectangular vehicle footprint dimensions (metres) in PyBullet frame.
-base_footprint_length_x_m: 0.37
-base_footprint_length_y_m: 0.46
 
 # Half-angle (degrees) for approach direction filter.
 # Only sample points whose base→target direction is within ±this angle

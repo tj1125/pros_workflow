@@ -362,7 +362,7 @@ def _frontmost_display_sort_key(solution: dict[str, object]) -> tuple[float, int
     orientation_error = solution.get("ee_orientation_error_deg")
     return (
         float(solution.get("backoff_distance_m", solution.get("ros_map_sample_distance_to_target_m", float("inf")))),
-        0 if bool(solution.get("map_footprint_clear", False)) else 1,
+        0 if bool(solution.get("map_clear", False)) else 1,
         float(solution.get("ee_position_error_m", float("inf"))),
         float("inf") if orientation_error is None else float(orientation_error),
         float(solution.get("joint_reset_delta_norm_l2", float("inf"))),
@@ -397,7 +397,7 @@ def sample_base_pose_for_best_grasp(
     reset_ee_position_xyz: np.ndarray,
     reset_ee_orientation_xyzw: np.ndarray,
     pose_from_local_base_fn: Callable[[np.ndarray, float], tuple[object | None, object]],
-    footprint_is_clear_fn: Callable[[object], bool],
+    map_pose_is_clear_fn: Callable[[object], bool],
     attempt_ik_fn: Callable[[np.ndarray, float, dict[str, object]], dict[str, object]],
     make_solution_record_fn: Callable[[dict[str, object], dict[str, object], dict[str, object], bool], dict[str, object] | None],
     position_tolerance_m: float,
@@ -425,8 +425,8 @@ def sample_base_pose_for_best_grasp(
         )
 
     min_backoff = float(os.getenv("BASE_SIMPLE_SAMPLE_MIN_BACKOFF_M", "0.10")) if min_backoff_m is None else float(min_backoff_m)
-    max_backoff = float(os.getenv("BASE_SIMPLE_SAMPLE_MAX_BACKOFF_M", "0.70")) if max_backoff_m is None else float(max_backoff_m)
-    step = float(os.getenv("BASE_SIMPLE_SAMPLE_STEP_M", "0.01")) if step_m is None else float(step_m)
+    max_backoff = float(os.getenv("BASE_SIMPLE_SAMPLE_MAX_BACKOFF_M", "0.60")) if max_backoff_m is None else float(max_backoff_m)
+    step = float(os.getenv("BASE_SIMPLE_SAMPLE_STEP_M", "0.02")) if step_m is None else float(step_m)
     max_yaw_delta_deg = (
         float(os.getenv("BASE_SIMPLE_SAMPLE_MAX_AMCL_YAW_DELTA_DEG", "30.0"))
         if max_amcl_yaw_delta_deg is None
@@ -444,170 +444,201 @@ def sample_base_pose_for_best_grasp(
         step_m=step,
     )
 
-    selected_record = ranked_records[0]
-    target_pb = np.asarray(selected_record["target_pb"], dtype=np.float64).reshape(3)
-    target_rot_pb = np.asarray(selected_record["target_rot_pb"], dtype=np.float64).reshape(3, 3)
-    approach_xy = np.asarray(target_rot_pb[:2, 0], dtype=np.float64)
-    approach_norm = float(np.linalg.norm(approach_xy))
-    if approach_norm <= 1e-6:
-        approach_xy = np.asarray([1.0, 0.0], dtype=np.float64)
-    else:
-        approach_xy = approach_xy / approach_norm
-    desired_base_yaw_rad = _wrap_angle_rad(float(math.atan2(float(approach_xy[1]), float(approach_xy[0]))))
-    yaw_candidates = _yaw_candidates_rad(
-        desired_yaw_rad=desired_base_yaw_rad,
-        max_abs_yaw_rad=max_yaw_delta_rad,
-        step_deg=yaw_step,
-        constrained=current_amcl_yaw_rad is not None,
-    )
-    primary_base_yaw_rad = float(yaw_candidates[0])
-
-    selected_record["sample_source"] = "simple_backoff_from_grasp"
-    selected_record["sample_backoff_min_m"] = float(min_backoff)
-    selected_record["sample_backoff_max_m"] = float(max_backoff)
-    selected_record["sample_backoff_step_m"] = float(step)
-    selected_record["sample_yaw_step_deg"] = float(yaw_step)
-    selected_record["sample_max_amcl_yaw_delta_deg"] = float(max_yaw_delta_deg)
-    selected_record["sample_approach_dir_pb_xy"] = approach_xy.astype(float).tolist()
-    selected_record["sample_desired_base_yaw_rad"] = float(desired_base_yaw_rad)
-    selected_record["sample_desired_base_yaw_deg"] = float(math.degrees(desired_base_yaw_rad))
-    selected_record["sample_used_base_yaw_rad"] = float(primary_base_yaw_rad)
-    selected_record["sample_used_base_yaw_deg"] = float(math.degrees(primary_base_yaw_rad))
-    selected_record["sample_yaw_candidates_deg"] = [float(math.degrees(yaw)) for yaw in yaw_candidates]
-    selected_record["sample_base_yaw_clamped"] = bool(
-        abs(primary_base_yaw_rad - desired_base_yaw_rad) > 1e-9
-    )
-    selected_record["feasible_solutions"] = []
-    selected_record["closest_solution"] = None
-    selected_record["map_clear_candidates"] = []
-
-    closest_solution: dict[str, object] | None = None
-    map_clear_candidates: list[dict[str, object]] = []
-    feasible_solution: dict[str, object] | None = None
+    selected_record: dict[str, object] | None = ranked_records[0]
+    selected_solution: dict[str, object] | None = None
+    best_closest_record: dict[str, object] | None = None
+    best_closest_solution: dict[str, object] | None = None
+    first_map_clear_record: dict[str, object] | None = None
     attempted_count = 0
     map_feasible_count = 0
-    yaw_rejected_count = 0
-    footprint_blocked_count = 0
-    ik_reachable_count = 0
-    sample_stats = {"region_cell_count": int(len(distances) * len(yaw_candidates))}
-    sample_index = 0
+    for record in ranked_records:
+        target_pb = np.asarray(record["target_pb"], dtype=np.float64).reshape(3)
+        target_rot_pb = np.asarray(record["target_rot_pb"], dtype=np.float64).reshape(3, 3)
+        approach_xy = np.asarray(target_rot_pb[:2, 0], dtype=np.float64)
+        approach_norm = float(np.linalg.norm(approach_xy))
+        if approach_norm <= 1e-6:
+            approach_xy = np.asarray([1.0, 0.0], dtype=np.float64)
+        else:
+            approach_xy = approach_xy / approach_norm
+        desired_base_yaw_rad = _wrap_angle_rad(float(math.atan2(float(approach_xy[1]), float(approach_xy[0]))))
+        yaw_candidates = _yaw_candidates_rad(
+            desired_yaw_rad=desired_base_yaw_rad,
+            max_abs_yaw_rad=max_yaw_delta_rad,
+            step_deg=yaw_step,
+            constrained=current_amcl_yaw_rad is not None,
+        )
+        primary_base_yaw_rad = float(yaw_candidates[0])
 
-    for backoff_distance_m in distances:
-        local_xy = target_pb[:2] - approach_xy * float(backoff_distance_m)
-        for yaw_sample_index, base_yaw_rad in enumerate(yaw_candidates):
-            current_sample_index = sample_index
-            sample_index += 1
-            ros_map_amcl_pose, ros_map_base_link_pose = pose_from_local_base_fn(local_xy, base_yaw_rad)
-            yaw_delta_rad: float | None = None
-            yaw_within_limit = True
-            if current_amcl_yaw_rad is not None and ros_map_amcl_pose is not None:
-                yaw_delta_rad = _abs_angle_delta_rad(
-                    float(getattr(ros_map_amcl_pose, "yaw_rad")),
-                    float(current_amcl_yaw_rad),
+        record["sample_source"] = "simple_backoff_from_grasp"
+        record["sample_backoff_min_m"] = float(min_backoff)
+        record["sample_backoff_max_m"] = float(max_backoff)
+        record["sample_backoff_step_m"] = float(step)
+        record["sample_yaw_step_deg"] = float(yaw_step)
+        record["sample_max_amcl_yaw_delta_deg"] = float(max_yaw_delta_deg)
+        record["sample_approach_dir_pb_xy"] = approach_xy.astype(float).tolist()
+        record["sample_desired_base_yaw_rad"] = float(desired_base_yaw_rad)
+        record["sample_desired_base_yaw_deg"] = float(math.degrees(desired_base_yaw_rad))
+        record["sample_used_base_yaw_rad"] = float(primary_base_yaw_rad)
+        record["sample_used_base_yaw_deg"] = float(math.degrees(primary_base_yaw_rad))
+        record["sample_yaw_candidates_deg"] = [float(math.degrees(yaw)) for yaw in yaw_candidates]
+        record["sample_base_yaw_clamped"] = bool(
+            abs(primary_base_yaw_rad - desired_base_yaw_rad) > 1e-9
+        )
+        record["feasible_solutions"] = []
+        record["closest_solution"] = None
+        record["map_clear_candidates"] = []
+
+        closest_solution: dict[str, object] | None = None
+        feasible_solution: dict[str, object] | None = None
+        map_clear_candidates: list[dict[str, object]] = []
+        record_attempted_count = 0
+        record_map_feasible_count = 0
+        record_yaw_rejected_count = 0
+        record_map_blocked_count = 0
+        record_ik_reachable_count = 0
+        sample_stats = {"region_cell_count": int(len(distances) * len(yaw_candidates))}
+        sample_index = 0
+
+        for backoff_distance_m in distances:
+            local_xy = target_pb[:2] - approach_xy * float(backoff_distance_m)
+            for yaw_sample_index, base_yaw_rad in enumerate(yaw_candidates):
+                current_sample_index = sample_index
+                sample_index += 1
+                ros_map_amcl_pose, ros_map_base_link_pose = pose_from_local_base_fn(local_xy, base_yaw_rad)
+                yaw_delta_rad: float | None = None
+                yaw_within_limit = True
+                if current_amcl_yaw_rad is not None and ros_map_amcl_pose is not None:
+                    yaw_delta_rad = _abs_angle_delta_rad(
+                        float(getattr(ros_map_amcl_pose, "yaw_rad")),
+                        float(current_amcl_yaw_rad),
+                    )
+                    yaw_within_limit = yaw_delta_rad <= max_yaw_delta_rad
+                map_clear = ros_map_amcl_pose is not None and map_pose_is_clear_fn(ros_map_amcl_pose)
+                map_candidate_feasible = bool(yaw_within_limit and map_clear)
+                if not yaw_within_limit:
+                    record_yaw_rejected_count += 1
+                if yaw_within_limit and not map_clear:
+                    record_map_blocked_count += 1
+                if map_candidate_feasible:
+                    record_map_feasible_count += 1
+                    map_feasible_count += 1
+
+                approach_error_rad = _abs_angle_delta_rad(base_yaw_rad, desired_base_yaw_rad)
+                sample_candidate = {
+                    "sample_index": int(current_sample_index),
+                    "yaw_sample_index": int(yaw_sample_index),
+                    "sample_source": "simple_backoff_from_grasp",
+                    "map_cell_index": -1,
+                    "local_pb_xy": (float(local_xy[0]), float(local_xy[1])),
+                    "local_pb_yaw_rad": float(base_yaw_rad),
+                    "desired_local_pb_yaw_rad": float(desired_base_yaw_rad),
+                    "base_yaw_clamped": bool(abs(base_yaw_rad - desired_base_yaw_rad) > 1e-9),
+                    "ros_map_pose": ros_map_base_link_pose,
+                    "ros_map_amcl_pose": ros_map_amcl_pose,
+                    "distance_to_target_m": float(backoff_distance_m),
+                    "approach_error_deg": float(math.degrees(approach_error_rad)),
+                }
+                if not map_candidate_feasible:
+                    continue
+
+                map_clear_candidates.append(dict(sample_candidate))
+                if first_map_clear_record is None:
+                    first_map_clear_record = record
+
+                ik_attempt = attempt_ik_fn(local_xy, base_yaw_rad, record)
+                attempted_count += 1
+                record_attempted_count += 1
+                ik_feasible = _ik_attempt_is_feasible(
+                    ik_attempt,
+                    position_tolerance_m=position_tolerance_m,
+                    orientation_tolerance_deg=orientation_tolerance_deg,
                 )
-                yaw_within_limit = yaw_delta_rad <= max_yaw_delta_rad
-            footprint_clear = ros_map_amcl_pose is not None and footprint_is_clear_fn(ros_map_amcl_pose)
-            map_candidate_feasible = bool(yaw_within_limit and footprint_clear)
-            if not yaw_within_limit:
-                yaw_rejected_count += 1
-            if yaw_within_limit and not footprint_clear:
-                footprint_blocked_count += 1
-            if map_candidate_feasible:
-                map_feasible_count += 1
+                if ik_feasible:
+                    record_ik_reachable_count += 1
+                feasible = bool(map_candidate_feasible and ik_feasible)
+                solution_record = make_solution_record_fn(
+                    ik_attempt,
+                    sample_candidate,
+                    sample_stats,
+                    feasible,
+                )
+                if solution_record is None:
+                    continue
+                solution_record["backoff_distance_m"] = float(backoff_distance_m)
+                solution_record["yaw_sample_index"] = int(yaw_sample_index)
+                solution_record["target_average_rank"] = float(record["target_average_rank"])
+                solution_record["target_sample_order"] = int(record["target_sample_order"])
+                solution_record["reset_ee_distance_rank"] = int(record["reset_ee_distance_rank"])
+                solution_record["reset_ee_yaw_rank"] = int(record["reset_ee_yaw_rank"])
+                solution_record["map_clear"] = bool(map_clear)
+                solution_record["amcl_yaw_within_limit"] = bool(yaw_within_limit)
+                solution_record["ik_reachable"] = bool(ik_feasible)
+                solution_record["desired_pb_base_link_yaw_rad"] = float(desired_base_yaw_rad)
+                solution_record["desired_pb_base_link_yaw_deg"] = float(math.degrees(desired_base_yaw_rad))
+                solution_record["base_yaw_clamped"] = bool(abs(base_yaw_rad - desired_base_yaw_rad) > 1e-9)
+                solution_record["backoff_direction_pb_xy"] = approach_xy.astype(float).tolist()
+                solution_record["sample_yaw_approach_error_deg"] = float(math.degrees(approach_error_rad))
+                if current_amcl_yaw_rad is not None:
+                    if yaw_delta_rad is not None:
+                        solution_record["ros_map_amcl_yaw_delta_from_current_rad"] = float(yaw_delta_rad)
+                        solution_record["ros_map_amcl_yaw_delta_from_current_deg"] = float(math.degrees(yaw_delta_rad))
+                    else:
+                        solution_record["ros_map_amcl_yaw_delta_from_current_rad"] = None
+                        solution_record["ros_map_amcl_yaw_delta_from_current_deg"] = None
+                solution_record["ros_map_amcl_yaw_max_delta_from_current_deg"] = float(max_yaw_delta_deg)
 
-            approach_error_rad = _abs_angle_delta_rad(base_yaw_rad, desired_base_yaw_rad)
-            sample_candidate = {
-                "sample_index": int(current_sample_index),
-                "yaw_sample_index": int(yaw_sample_index),
-                "sample_source": "simple_backoff_from_grasp",
-                "map_cell_index": -1,
-                "local_pb_xy": (float(local_xy[0]), float(local_xy[1])),
-                "local_pb_yaw_rad": float(base_yaw_rad),
-                "desired_local_pb_yaw_rad": float(desired_base_yaw_rad),
-                "base_yaw_clamped": bool(abs(base_yaw_rad - desired_base_yaw_rad) > 1e-9),
-                "ros_map_pose": ros_map_base_link_pose,
-                "ros_map_amcl_pose": ros_map_amcl_pose,
-                "distance_to_target_m": float(backoff_distance_m),
-                "approach_error_deg": float(math.degrees(approach_error_rad)),
-            }
-            if not map_candidate_feasible:
-                continue
-            map_clear_candidates.append(dict(sample_candidate))
-
-            ik_attempt = attempt_ik_fn(local_xy, base_yaw_rad, selected_record)
-            attempted_count += 1
-            ik_feasible = _ik_attempt_is_feasible(
-                ik_attempt,
-                position_tolerance_m=position_tolerance_m,
-                orientation_tolerance_deg=orientation_tolerance_deg,
-            )
-            if ik_feasible:
-                ik_reachable_count += 1
-            feasible = bool(map_candidate_feasible and ik_feasible)
-            solution_record = make_solution_record_fn(
-                ik_attempt,
-                sample_candidate,
-                sample_stats,
-                feasible,
-            )
-            if solution_record is None:
-                continue
-            solution_record["backoff_distance_m"] = float(backoff_distance_m)
-            solution_record["yaw_sample_index"] = int(yaw_sample_index)
-            solution_record["target_average_rank"] = float(selected_record["target_average_rank"])
-            solution_record["target_sample_order"] = int(selected_record["target_sample_order"])
-            solution_record["reset_ee_distance_rank"] = int(selected_record["reset_ee_distance_rank"])
-            solution_record["reset_ee_yaw_rank"] = int(selected_record["reset_ee_yaw_rank"])
-            solution_record["map_footprint_clear"] = bool(footprint_clear)
-            solution_record["amcl_yaw_within_limit"] = bool(yaw_within_limit)
-            solution_record["ik_reachable"] = bool(ik_feasible)
-            solution_record["desired_pb_base_link_yaw_rad"] = float(desired_base_yaw_rad)
-            solution_record["desired_pb_base_link_yaw_deg"] = float(math.degrees(desired_base_yaw_rad))
-            solution_record["base_yaw_clamped"] = bool(abs(base_yaw_rad - desired_base_yaw_rad) > 1e-9)
-            solution_record["backoff_direction_pb_xy"] = approach_xy.astype(float).tolist()
-            solution_record["sample_yaw_approach_error_deg"] = float(math.degrees(approach_error_rad))
-            if current_amcl_yaw_rad is not None:
-                if yaw_delta_rad is not None:
-                    solution_record["ros_map_amcl_yaw_delta_from_current_rad"] = float(yaw_delta_rad)
-                    solution_record["ros_map_amcl_yaw_delta_from_current_deg"] = float(math.degrees(yaw_delta_rad))
-                else:
-                    solution_record["ros_map_amcl_yaw_delta_from_current_rad"] = None
-                    solution_record["ros_map_amcl_yaw_delta_from_current_deg"] = None
-            solution_record["ros_map_amcl_yaw_max_delta_from_current_deg"] = float(max_yaw_delta_deg)
-
-            if map_candidate_feasible and (
-                closest_solution is None
-                or _frontmost_display_sort_key(solution_record) < _frontmost_display_sort_key(closest_solution)
-            ):
-                closest_solution = solution_record
-            if feasible:
-                feasible_solution = solution_record
+                if closest_solution is None or _frontmost_display_sort_key(solution_record) < _frontmost_display_sort_key(
+                    closest_solution
+                ):
+                    closest_solution = solution_record
+                if feasible:
+                    feasible_solution = solution_record
+                    break
+            if feasible_solution is not None:
                 break
+
+        if feasible_solution is not None:
+            feasible_solution["selected_as_best"] = True
+            feasible_solution["selected_as_closest"] = True
+            record["feasible_solutions"] = [feasible_solution]
+            record["closest_solution"] = feasible_solution
+            selected_record = record
+            selected_solution = feasible_solution
+            best_closest_record = record
+            best_closest_solution = feasible_solution
+        elif closest_solution is not None:
+            record["closest_solution"] = closest_solution
+            if best_closest_solution is None or _frontmost_display_sort_key(closest_solution) < _frontmost_display_sort_key(
+                best_closest_solution
+            ):
+                best_closest_record = record
+                best_closest_solution = closest_solution
+
+        record["map_clear_candidates"] = map_clear_candidates
+        record["sample_attempted_count"] = int(record_attempted_count)
+        record["sample_map_feasible_count"] = int(record_map_feasible_count)
+        record["sample_yaw_rejected_count"] = int(record_yaw_rejected_count)
+        record["sample_map_blocked_count"] = int(record_map_blocked_count)
+        record["sample_ik_reachable_count"] = int(record_ik_reachable_count)
+        record["sample_success"] = bool(feasible_solution is not None)
+
         if feasible_solution is not None:
             break
 
-    if feasible_solution is not None:
-        feasible_solution["selected_as_best"] = True
-        feasible_solution["selected_as_closest"] = True
-        selected_record["feasible_solutions"] = [feasible_solution]
-        selected_record["closest_solution"] = feasible_solution
-    elif closest_solution is not None:
-        closest_solution["selected_as_closest"] = True
-        selected_record["closest_solution"] = closest_solution
-    selected_record["map_clear_candidates"] = map_clear_candidates
+    if selected_solution is None:
+        if best_closest_record is not None and best_closest_solution is not None:
+            best_closest_solution["selected_as_closest"] = True
+            selected_record = best_closest_record
+        elif first_map_clear_record is not None:
+            selected_record = first_map_clear_record
+        else:
+            selected_record = ranked_records[0]
 
-    selected_solution = feasible_solution
-    selected_record["sample_attempted_count"] = int(attempted_count)
-    selected_record["sample_map_feasible_count"] = int(map_feasible_count)
-    selected_record["sample_yaw_rejected_count"] = int(yaw_rejected_count)
-    selected_record["sample_footprint_blocked_count"] = int(footprint_blocked_count)
-    selected_record["sample_ik_reachable_count"] = int(ik_reachable_count)
-    selected_record["sample_success"] = bool(feasible_solution is not None)
     return SimpleBaseSampleResult(
         visualization_records=ranked_records,
         selected_record=selected_record,
         selected_solution=selected_solution,
-        feasible=feasible_solution is not None,
+        feasible=selected_solution is not None,
         attempted_count=attempted_count,
         map_feasible_count=map_feasible_count,
     )
