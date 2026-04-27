@@ -10,6 +10,7 @@ class AmclPoseSnapshot:
     stamp_sec: float | None
     position_xyz: tuple[float, float, float]
     orientation_xyzw: tuple[float, float, float, float]
+    covariance: tuple[float, ...] | None = None
 
 
 @dataclass
@@ -43,6 +44,7 @@ def capture_rgbd_snapshot(
     *,
     timeout_sec: float = 15.0,
     amcl_topic: str = "/amcl_pose",
+    pre_capture_amcl_timeout_sec: float = 2.0,
 ) -> CameraRgbdSnapshot:
     try:
         import rclpy
@@ -83,9 +85,35 @@ def capture_rgbd_snapshot(
         def _on_amcl(self, msg: PoseWithCovarianceStamped) -> None:
             self._latest_amcl_msg = msg
 
+        def _wait_for_initial_amcl(self) -> None:
+            deadline = time.monotonic() + max(0.0, float(pre_capture_amcl_timeout_sec))
+            while self._latest_amcl_msg is None and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.05)
+
+        def _amcl_snapshot_from_msg(
+            self,
+            msg: PoseWithCovarianceStamped | None,
+        ) -> AmclPoseSnapshot | None:
+            if msg is None:
+                return None
+            position = msg.pose.pose.position
+            orientation = msg.pose.pose.orientation
+            return AmclPoseSnapshot(
+                stamp_sec=_stamp_to_seconds(msg.header.stamp),
+                position_xyz=(float(position.x), float(position.y), float(position.z)),
+                orientation_xyzw=(
+                    float(orientation.x),
+                    float(orientation.y),
+                    float(orientation.z),
+                    float(orientation.w),
+                ),
+                covariance=tuple(float(value) for value in msg.pose.covariance),
+            )
+
         def capture(self) -> CameraRgbdSnapshot:
             if not self._client.wait_for_service(timeout_sec=self._timeout_sec):
                 raise RuntimeError(f"{self._service_name} is not available.")
+            self._wait_for_initial_amcl()
 
             self._rgb_msg = None
             self._depth_msg = None
@@ -104,26 +132,14 @@ def capture_rgbd_snapshot(
                     break
                 rclpy.spin_once(self, timeout_sec=0.1)
             self._waiting_capture = False
+            capture_time_amcl_msg = self._latest_amcl_msg
 
             if self._rgb_msg is None:
                 raise RuntimeError("RGB topic timed out.")
             if self._depth_msg is None:
                 raise RuntimeError("Depth topic timed out.")
 
-            amcl_snapshot: AmclPoseSnapshot | None = None
-            if self._latest_amcl_msg is not None:
-                position = self._latest_amcl_msg.pose.pose.position
-                orientation = self._latest_amcl_msg.pose.pose.orientation
-                amcl_snapshot = AmclPoseSnapshot(
-                    stamp_sec=_stamp_to_seconds(self._latest_amcl_msg.header.stamp),
-                    position_xyz=(float(position.x), float(position.y), float(position.z)),
-                    orientation_xyzw=(
-                        float(orientation.x),
-                        float(orientation.y),
-                        float(orientation.z),
-                        float(orientation.w),
-                    ),
-                )
+            amcl_snapshot = self._amcl_snapshot_from_msg(capture_time_amcl_msg)
 
             return CameraRgbdSnapshot(
                 camera_name=camera_name,

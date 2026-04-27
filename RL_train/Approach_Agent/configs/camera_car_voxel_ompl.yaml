@@ -11,7 +11,8 @@ debug_scene_pointcloud_key: scene_pc_camera
 debug_target_grasp_key: best_grasp_camera
 planner_config_path: configs/pybullet_ompl.yaml
 output_root_dir: outputs/camera_car_voxel_ompl
-voxel_size_m: 0.05
+# 9 cm^3 voxel volume => cube side length cbrt(9) cm = 0.0208008 m.
+voxel_size_m: 0.0208008
 min_depth_m: 0.19
 # Only keep scene points within 1.0 m from the camera depth axis.
 max_depth_m: 1.0

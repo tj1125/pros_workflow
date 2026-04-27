@@ -21,6 +21,7 @@ from src.pybullet_ompl import (
     _add_debug_axes,
     _compute_pose_alignment_metrics,
     _find_controllable_joints,
+    _load_ompl_dependencies,
     _set_joint_positions_direct,
     get_reset_camera_transform,
     load_planning_config,
@@ -53,6 +54,7 @@ class LiveSceneCapture:
     camera_to_pb_rotation: np.ndarray
     camera_position_pb: np.ndarray
     amcl_pose: AmclPoseSnapshot | None
+    captured_amcl_pose: AmclPoseSnapshot | None
     valid_depth_point_count: int
     obstacle_depth_point_count: int
     target_object_point_count: int
@@ -76,13 +78,11 @@ class MapFreeSpace:
 
 LIVE_VOXEL_MIN_DEPTH_M = 0.19
 LIVE_VOXEL_MAX_DEPTH_M = 1.0
-LIVE_VOXEL_SCENE_POINT_STRIDE = 4
-LIVE_VOXEL_SCENE_DOWNSAMPLE_M = 0.05
 TARGET_OBJECT_POINTCLOUD_KEY = "object_pc_camera"
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
-VEHICLE_BASE_LENGTH_X_M = 0.35
-VEHICLE_BASE_LENGTH_Y_M = 0.44
+VEHICLE_BASE_LENGTH_X_M = 0.33
+VEHICLE_BASE_LENGTH_Y_M = 0.42
 
 
 PLANNING_CAMERA_TO_PB_LOCAL = np.asarray(
@@ -221,6 +221,7 @@ def _wait_for_amcl_pose(
                 float(orientation.z),
                 float(orientation.w),
             ),
+            covariance=tuple(float(value) for value in node.latest_msg.pose.covariance),
         )
     finally:
         node.destroy_node()
@@ -446,24 +447,78 @@ def _print_selected_base_link_ros_map_banner(
     )
 
 
-def _publish_goal_pose_for_solution(solution: dict[str, object]) -> None:
-    enabled_text = os.getenv("APPROACH_AGENT_PUBLISH_GOAL_POSE", "1").strip().lower()
-    if enabled_text in {"0", "false", "no", "off"}:
-        print("[test_base_sampler] /goal_pose publisher disabled by APPROACH_AGENT_PUBLISH_GOAL_POSE.", flush=True)
+def _run_rule_navigation_for_solution(
+    solution: dict[str, object],
+    *,
+    initial_pose: AmclPoseSnapshot | None,
+) -> None:
+    if not _env_flag("APPROACH_AGENT_RULE_NAV", True):
+        print("[test_base_sampler] rule navigation disabled by APPROACH_AGENT_RULE_NAV.", flush=True)
         return
 
-    publish_count = int(os.getenv("APPROACH_AGENT_GOAL_POSE_PUBLISH_COUNT", "3"))
-    interval_sec = float(os.getenv("APPROACH_AGENT_GOAL_POSE_INTERVAL_SEC", "0.1"))
-    goal_pose = move_car.publish_goal_pose(
+    publish_initial_pose = _env_flag("APPROACH_AGENT_PUBLISH_INITIAL_POSE", True)
+    initial_pose_topic = os.getenv("APPROACH_AGENT_INITIAL_POSE_TOPIC", move_car.DEFAULT_INITIAL_POSE_TOPIC).strip()
+    initial_pose_topic = initial_pose_topic or move_car.DEFAULT_INITIAL_POSE_TOPIC
+    initial_pose_publish_count = int(os.getenv("APPROACH_AGENT_INITIAL_POSE_PUBLISH_COUNT", "5"))
+    initial_pose_interval_sec = float(os.getenv("APPROACH_AGENT_INITIAL_POSE_INTERVAL_SEC", "0.1"))
+    initial_pose_wait_for_subscribers_sec = float(
+        os.getenv("APPROACH_AGENT_INITIAL_POSE_WAIT_FOR_SUBSCRIBERS_SEC", "2.0")
+    )
+    rule_config = move_car.RuleNavigationConfig(
+        amcl_topic=os.getenv("APPROACH_AGENT_AMCL_TOPIC", move_car.DEFAULT_AMCL_TOPIC).strip()
+        or move_car.DEFAULT_AMCL_TOPIC,
+        initial_pose_topic=initial_pose_topic,
+        initial_pose_frame_id=move_car.DEFAULT_FRAME_ID,
+        initial_pose_publish_count=initial_pose_publish_count if publish_initial_pose else 0,
+        initial_pose_interval_sec=initial_pose_interval_sec,
+        initial_pose_wait_for_subscribers_sec=initial_pose_wait_for_subscribers_sec,
+        front_wheel_topic=os.getenv(
+            "APPROACH_AGENT_FRONT_WHEEL_TOPIC",
+            move_car.DEFAULT_FRONT_WHEEL_TOPIC,
+        ).strip()
+        or move_car.DEFAULT_FRONT_WHEEL_TOPIC,
+        rear_wheel_topic=os.getenv(
+            "APPROACH_AGENT_REAR_WHEEL_TOPIC",
+            move_car.DEFAULT_REAR_WHEEL_TOPIC,
+        ).strip()
+        or move_car.DEFAULT_REAR_WHEEL_TOPIC,
+        xy_tolerance_m=float(os.getenv("APPROACH_AGENT_RULE_XY_TOLERANCE_M", "0.03")),
+        face_target_yaw_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_FACE_YAW_TOLERANCE_RAD", "0.08")),
+        drive_heading_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_DRIVE_HEADING_TOLERANCE_RAD", "0.14")),
+        final_yaw_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_FINAL_YAW_TOLERANCE_RAD", "0.08")),
+        slow_approach_distance_m=float(os.getenv("APPROACH_AGENT_RULE_SLOW_DISTANCE_M", "0.12")),
+        command_period_sec=float(os.getenv("APPROACH_AGENT_RULE_COMMAND_PERIOD_SEC", "0.1")),
+        amcl_wait_timeout_sec=float(os.getenv("APPROACH_AGENT_RULE_AMCL_WAIT_TIMEOUT_SEC", "5.0")),
+        amcl_stale_timeout_sec=float(os.getenv("APPROACH_AGENT_RULE_AMCL_STALE_TIMEOUT_SEC", "1.0")),
+        max_duration_sec=float(os.getenv("APPROACH_AGENT_RULE_MAX_DURATION_SEC", "120.0")),
+        stop_repeat=int(os.getenv("APPROACH_AGENT_RULE_STOP_REPEAT", "5")),
+        stop_interval_sec=float(os.getenv("APPROACH_AGENT_RULE_STOP_INTERVAL_SEC", "0.03")),
+        log_interval_sec=float(os.getenv("APPROACH_AGENT_RULE_LOG_INTERVAL_SEC", "1.0")),
+    )
+    if initial_pose is None:
+        print(
+            "[test_base_sampler] /initialpose source unavailable: no capture-time /amcl_pose.",
+            flush=True,
+        )
+    else:
+        initial_yaw = _yaw_from_quaternion_xyzw(initial_pose.orientation_xyzw)
+        print(
+            "[test_base_sampler] /initialpose source=capture-time /amcl_pose: "
+            f"x={initial_pose.position_xyz[0]:.3f} "
+            f"y={initial_pose.position_xyz[1]:.3f} "
+            f"yaw={initial_yaw:.3f} "
+            f"stamp={initial_pose.stamp_sec}",
+            flush=True,
+        )
+    result = move_car.drive_to_pose_by_rule(
         solution,
-        publish_count=publish_count,
-        interval_sec=interval_sec,
+        initial_pose=initial_pose if publish_initial_pose else None,
+        config=rule_config,
         prefer_amcl_pose=True,
     )
     print(
-        "[test_base_sampler] published selected /goal_pose = "
-        f"{goal_pose} "
-        f"(count={max(1, publish_count)}, interval={max(0.0, interval_sec):.3f}s).",
+        "[test_base_sampler] rule navigation result = "
+        f"{result}.",
         flush=True,
     )
 
@@ -728,11 +783,26 @@ def _capture_live_scene_voxels(
         timeout_sec=camera_cfg.capture_timeout_sec,
         amcl_topic=camera_cfg.amcl_topic,
     )
-    amcl_pose = snapshot.amcl_pose
+    captured_amcl_pose = snapshot.amcl_pose
+    amcl_pose = captured_amcl_pose
     if amcl_pose is None:
         amcl_pose = _wait_for_amcl_pose(
             camera_cfg.amcl_topic,
             timeout_sec=camera_cfg.capture_timeout_sec,
+        )
+    if captured_amcl_pose is None:
+        print(
+            "[test_base_sampler] RGBD capture had no simultaneous /amcl_pose; "
+            "/initialpose will be skipped before rule navigation.",
+            flush=True,
+        )
+    else:
+        print(
+            "[test_base_sampler] recorded capture-time /amcl_pose for /initialpose: "
+            f"x={captured_amcl_pose.position_xyz[0]:.3f} "
+            f"y={captured_amcl_pose.position_xyz[1]:.3f} "
+            f"stamp={captured_amcl_pose.stamp_sec}",
+            flush=True,
         )
     camera_to_pb_rotation, camera_position_pb = _camera_local_transform_from_base_link(
         camera_in_base_link_rotation=camera_in_base_link_rotation,
@@ -746,9 +816,9 @@ def _capture_live_scene_voxels(
         intrinsics.k,
         min_depth_m=LIVE_VOXEL_MIN_DEPTH_M,
         max_depth_m=LIVE_VOXEL_MAX_DEPTH_M,
-        stride=LIVE_VOXEL_SCENE_POINT_STRIDE,
+        stride=camera_cfg.pixel_stride,
     )
-    points_camera = _voxel_downsample_points(points_camera, voxel_size_m=LIVE_VOXEL_SCENE_DOWNSAMPLE_M)
+    points_camera = _voxel_downsample_points(points_camera, voxel_size_m=camera_cfg.voxel_size_m)
     if len(points_camera) == 0:
         raise RuntimeError("Live Camera_Car RGBD produced zero valid camera-frame points.")
 
@@ -797,6 +867,7 @@ def _capture_live_scene_voxels(
         camera_to_pb_rotation=np.asarray(camera_to_pb_rotation, dtype=np.float64),
         camera_position_pb=np.asarray(camera_position_pb, dtype=np.float64),
         amcl_pose=amcl_pose,
+        captured_amcl_pose=captured_amcl_pose,
         valid_depth_point_count=int(len(points_camera)),
         obstacle_depth_point_count=int(len(points_pybullet)),
         target_object_point_count=int(target_object_point_count),
@@ -1048,6 +1119,206 @@ def _joint_limit_metrics(
     )
 
 
+def _joint_bounds_rad_from_planning_config(planning_config, joint_count: int) -> tuple[list[float], list[float]]:
+    if len(planning_config.joint_bounds_deg) != int(joint_count):
+        raise ValueError(
+            "joint_bounds_deg length does not match controllable joint count: "
+            f"{len(planning_config.joint_bounds_deg)} vs {joint_count}"
+        )
+    lower_bounds = [math.radians(float(lower)) for lower, _ in planning_config.joint_bounds_deg]
+    upper_bounds = [math.radians(float(upper)) for _, upper in planning_config.joint_bounds_deg]
+    return lower_bounds, upper_bounds
+
+
+def _joint_values_within_bounds(
+    joint_values: list[float] | tuple[float, ...] | np.ndarray,
+    lower_bounds: list[float],
+    upper_bounds: list[float],
+) -> bool:
+    return all(
+        float(lower) <= float(value) <= float(upper)
+        for value, lower, upper in zip(joint_values, lower_bounds, upper_bounds)
+    )
+
+
+def _ompl_state_values(state: object, dimension: int) -> list[float]:
+    return [float(state[index]) for index in range(int(dimension))]
+
+
+def _ompl_path_states(path: object, dimension: int) -> list[list[float]]:
+    return [_ompl_state_values(path.getState(index), dimension) for index in range(path.getStateCount())]
+
+
+def _closest_robot_obstacle_distance_and_collision(
+    p_mod,
+    robot_id: int,
+    obstacle_body_ids: list[int],
+    *,
+    query_distance_m: float,
+    collision_threshold_m: float,
+) -> tuple[float | None, bool]:
+    closest_distance: float | None = None
+    in_collision = False
+    query_distance = max(float(query_distance_m), float(collision_threshold_m), 0.0)
+    threshold = float(collision_threshold_m)
+    for obstacle_body_id in obstacle_body_ids:
+        closest_points = p_mod.getClosestPoints(robot_id, obstacle_body_id, distance=query_distance)
+        for point in closest_points:
+            distance = float(point[8])
+            if closest_distance is None or distance < closest_distance:
+                closest_distance = distance
+            if distance <= threshold:
+                in_collision = True
+    return closest_distance, in_collision
+
+
+def _check_ompl_path_for_ik_solution(
+    *,
+    p_mod,
+    robot_id: int,
+    controllable_joint_ids: list[int],
+    planning_config,
+    base_xyz: list[float],
+    base_yaw_rad: float,
+    goal_joint_solution_rad: np.ndarray,
+    obstacle_body_ids: list[int],
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "ompl_checked": True,
+        "ompl_path_found": False,
+        "ompl_path_collision_free": False,
+        "ompl_planning_time_sec": 0.0,
+        "ompl_path_state_count": 0,
+        "ompl_min_distance_along_path_m": None,
+        "ompl_first_collision_state_index": None,
+        "ompl_error": None,
+    }
+    if len(obstacle_body_ids) == 0:
+        result.update(
+            {
+                "ompl_path_found": True,
+                "ompl_path_collision_free": True,
+                "ompl_error": "skipped_no_obstacles",
+            }
+        )
+        return result
+
+    try:
+        ob, og = _load_ompl_dependencies()
+        dimension = len(controllable_joint_ids)
+        start_joint_positions = [float(v) for v in _degrees_to_radians(planning_config.joint_reset_deg)]
+        goal_joint_positions = [float(v) for v in np.asarray(goal_joint_solution_rad, dtype=np.float64).reshape(-1)[:dimension]]
+        if len(start_joint_positions) != dimension or len(goal_joint_positions) != dimension:
+            result["ompl_error"] = (
+                "joint vector length mismatch: "
+                f"start={len(start_joint_positions)} goal={len(goal_joint_positions)} expected={dimension}"
+            )
+            return result
+
+        lower_bounds, upper_bounds = _joint_bounds_rad_from_planning_config(planning_config, dimension)
+        if not _joint_values_within_bounds(start_joint_positions, lower_bounds, upper_bounds):
+            result["ompl_error"] = "reset joint state is outside joint_bounds_deg"
+            return result
+        if not _joint_values_within_bounds(goal_joint_positions, lower_bounds, upper_bounds):
+            result["ompl_error"] = "IK goal joint state is outside joint_bounds_deg"
+            return result
+
+        base_quat = p_mod.getQuaternionFromEuler([0.0, 0.0, float(base_yaw_rad)])
+
+        def _set_candidate_state(joint_values: list[float] | tuple[float, ...]) -> tuple[float | None, bool]:
+            p_mod.resetBasePositionAndOrientation(robot_id, base_xyz, base_quat)
+            _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, joint_values)
+            p_mod.performCollisionDetection()
+            return _closest_robot_obstacle_distance_and_collision(
+                p_mod,
+                robot_id,
+                obstacle_body_ids,
+                query_distance_m=float(planning_config.collision_query_distance_m),
+                collision_threshold_m=float(planning_config.collision_threshold_m),
+            )
+
+        _, start_in_collision = _set_candidate_state(start_joint_positions)
+        if start_in_collision:
+            result["ompl_error"] = "reset joint state is in collision"
+            return result
+        _, goal_in_collision = _set_candidate_state(goal_joint_positions)
+        if goal_in_collision:
+            result["ompl_error"] = "IK goal joint state is in collision"
+            return result
+
+        space = ob.RealVectorStateSpace(dimension)
+        bounds = ob.RealVectorBounds(dimension)
+        for index in range(dimension):
+            bounds.setLow(index, lower_bounds[index])
+            bounds.setHigh(index, upper_bounds[index])
+        space.setBounds(bounds)
+
+        si = ob.SpaceInformation(space)
+
+        def _is_state_valid(state: object) -> bool:
+            joint_values = _ompl_state_values(state, dimension)
+            if not _joint_values_within_bounds(joint_values, lower_bounds, upper_bounds):
+                return False
+            _, in_collision = _set_candidate_state(joint_values)
+            return not in_collision
+
+        si.setStateValidityChecker(ob.StateValidityCheckerFn(_is_state_valid))
+        si.setup()
+
+        start_state = ob.State(space)
+        goal_state = ob.State(space)
+        for index, value in enumerate(start_joint_positions):
+            start_state[index] = float(value)
+        for index, value in enumerate(goal_joint_positions):
+            goal_state[index] = float(value)
+
+        pdef = ob.ProblemDefinition(si)
+        pdef.setStartAndGoalStates(start_state, goal_state)
+        planner = og.RRTConnect(si)
+        if hasattr(planner, "setRange") and float(planning_config.planning_range_rad) > 0.0:
+            planner.setRange(float(planning_config.planning_range_rad))
+        planner.setProblemDefinition(pdef)
+        planner.setup()
+
+        planning_start_time = time.perf_counter()
+        solved = planner.solve(float(planning_config.planning_timeout_sec))
+        result["ompl_planning_time_sec"] = float(time.perf_counter() - planning_start_time)
+        if not solved:
+            result["ompl_error"] = (
+                f"OMPL RRTConnect failed within {float(planning_config.planning_timeout_sec):.3f}s"
+            )
+            return result
+
+        path = pdef.getSolutionPath()
+        target_state_count = max(int(planning_config.path_interpolation_states), int(path.getStateCount()))
+        if target_state_count > path.getStateCount():
+            path.interpolate(target_state_count)
+        path_states = _ompl_path_states(path, dimension)
+
+        min_distance_along_path: float | None = None
+        first_collision_state_index: int | None = None
+        for state_index, joint_values in enumerate(path_states):
+            min_distance, in_collision = _set_candidate_state(joint_values)
+            if min_distance is not None:
+                if min_distance_along_path is None or min_distance < min_distance_along_path:
+                    min_distance_along_path = min_distance
+            if in_collision:
+                first_collision_state_index = state_index
+                break
+
+        result["ompl_path_found"] = True
+        result["ompl_path_state_count"] = int(len(path_states))
+        result["ompl_min_distance_along_path_m"] = min_distance_along_path
+        result["ompl_first_collision_state_index"] = first_collision_state_index
+        result["ompl_path_collision_free"] = first_collision_state_index is None
+        if first_collision_state_index is not None:
+            result["ompl_error"] = f"OMPL path collided at interpolated state {first_collision_state_index}"
+        return result
+    except Exception as exc:
+        result["ompl_error"] = str(exc)
+        return result
+
+
 def _feasible_ik_solution_sort_key(solution: dict[str, object]) -> tuple[float, float, float, float, float, int]:
     return (
         -float(solution.get("joint_limit_margin_min_ratio", -1.0)),
@@ -1081,6 +1352,7 @@ def _attempt_ik_at_base_pose(
     base_link_yaw_rad: float,
     obstacle_body_ids: list[int] | None = None,
     solve_attempts: int = 3,
+    enable_ompl_path_check: bool = True,
 ) -> dict[str, object]:
     base_xyz = [
         float(base_link_xy[0]),
@@ -1142,7 +1414,29 @@ def _attempt_ik_at_base_pose(
             joint_reset_delta_norm_l2,
         ) = _joint_limit_metrics(joint_solution_rad, planning_config)
 
-    return {
+    ompl_result: dict[str, object] = {
+        "ompl_checked": False,
+        "ompl_path_found": False,
+        "ompl_path_collision_free": False,
+        "ompl_planning_time_sec": None,
+        "ompl_path_state_count": 0,
+        "ompl_min_distance_along_path_m": None,
+        "ompl_first_collision_state_index": None,
+        "ompl_error": None,
+    }
+    if enable_ompl_path_check and joint_solution_rad is not None and obstacle_body_ids is not None:
+        ompl_result = _check_ompl_path_for_ik_solution(
+            p_mod=p_mod,
+            robot_id=robot_id,
+            controllable_joint_ids=controllable_joint_ids,
+            planning_config=planning_config,
+            base_xyz=base_xyz,
+            base_yaw_rad=float(base_link_yaw_rad),
+            goal_joint_solution_rad=joint_solution_rad,
+            obstacle_body_ids=obstacle_body_ids,
+        )
+
+    result = {
         "pb_base_link_xyz": base_xyz,
         "pb_base_link_yaw_rad": float(base_link_yaw_rad),
         "final_ee_position_xyz": final_pos,
@@ -1158,6 +1452,8 @@ def _attempt_ik_at_base_pose(
         "joint_limit_margin_mean_ratio": joint_limit_margin_mean_ratio,
         "joint_reset_delta_norm_l2": joint_reset_delta_norm_l2,
     }
+    result.update(ompl_result)
+    return result
 
 
 def _prepare_ranked_grasp_targets(
@@ -1282,6 +1578,14 @@ def _make_sampled_ik_solution_record(
         "joint_limit_margin_min_ratio": float(ik_attempt["joint_limit_margin_min_ratio"]),
         "joint_limit_margin_mean_ratio": float(ik_attempt["joint_limit_margin_mean_ratio"]),
         "joint_reset_delta_norm_l2": float(ik_attempt["joint_reset_delta_norm_l2"]),
+        "ompl_checked": bool(ik_attempt.get("ompl_checked", False)),
+        "ompl_path_found": bool(ik_attempt.get("ompl_path_found", False)),
+        "ompl_path_collision_free": bool(ik_attempt.get("ompl_path_collision_free", False)),
+        "ompl_planning_time_sec": ik_attempt.get("ompl_planning_time_sec"),
+        "ompl_path_state_count": int(ik_attempt.get("ompl_path_state_count", 0) or 0),
+        "ompl_min_distance_along_path_m": ik_attempt.get("ompl_min_distance_along_path_m"),
+        "ompl_first_collision_state_index": ik_attempt.get("ompl_first_collision_state_index"),
+        "ompl_error": ik_attempt.get("ompl_error"),
         "refinement_applied": False,
     }
 
@@ -1985,12 +2289,11 @@ def _run_simple_sample_logic_for_gui(
     visualization_records: list[dict[str, object]],
     map_free_space: MapFreeSpace,
     current_amcl_pose: RosMapPose2D | None,
-    publish_goal_pose: bool,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     client_id = p_mod.connect(p_mod.DIRECT)
     if client_id < 0:
         print("[test_base_sampler] PyBullet DIRECT unavailable; GUI will show grasp poses only.", flush=True)
-        return visualization_records
+        return visualization_records, None
 
     try:
         p_mod.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -2064,6 +2367,7 @@ def _run_simple_sample_logic_for_gui(
                 base_link_xy=(float(local_xy[0]), float(local_xy[1])),
                 base_link_yaw_rad=float(local_yaw),
                 obstacle_body_ids=obstacle_body_ids,
+                enable_ompl_path_check=False,
             )
 
         def _make_solution_record(
@@ -2162,10 +2466,8 @@ def _run_simple_sample_logic_for_gui(
                     amcl_pose=selected_solution.get("ros_map_amcl_pose"),
                     base_link_pose=selected_solution.get("ros_map_base_link_pose"),
                 )
-                if publish_goal_pose:
-                    _publish_goal_pose_for_solution(selected_solution)
 
-        return sample_result.visualization_records
+        return sample_result.visualization_records, selected_solution if sample_result.feasible else None
     finally:
         try:
             p_mod.disconnect(client_id)
@@ -2176,7 +2478,7 @@ def _run_simple_sample_logic_for_gui(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Live viewer for Camera_Car RGBD voxels, grasp poses, /amcl_pose ROS-map "
+            "Live sampler for Camera_Car RGBD voxels, grasp poses, /amcl_pose ROS-map "
             "alignment, and the PyBullet reset arm pose."
         )
     )
@@ -2206,21 +2508,51 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Continue even if no /amcl_pose was received during camera capture.",
     )
-    parser.add_argument(
-        "--no-gui",
+    gui_group = parser.add_mutually_exclusive_group()
+    gui_group.add_argument(
+        "--gui",
+        dest="show_gui",
         action="store_true",
-        help="Skip PyBullet GUI replay.",
+        default=None,
+        help="Show PyBullet GUI replay.",
+    )
+    gui_group.add_argument(
+        "--no-gui",
+        dest="show_gui",
+        action="store_false",
+        help="Skip PyBullet GUI replay. This is the default.",
     )
     parser.add_argument(
         "--no-publish-goal-pose",
+        dest="no_publish_goal_pose",
         action="store_true",
-        help="Do not publish the selected ROS map goal on /goal_pose.",
+        help="Do not run rule-based car movement after sampling.",
+    )
+    parser.add_argument(
+        "--no-rule-nav",
+        dest="no_publish_goal_pose",
+        action="store_true",
+        help="Do not run rule-based car movement after sampling.",
     )
     return parser.parse_args()
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    return value.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _should_show_gui(args: argparse.Namespace) -> bool:
+    if args.show_gui is not None:
+        return bool(args.show_gui)
+    return _env_flag("BASE_SAMPLER_SHOW_GUI", False)
+
+
 def main():
     args = _parse_args()
+    show_gui = _should_show_gui(args)
     base_config_path = args.base_config
     camera_config_path = args.camera_config
 
@@ -2316,7 +2648,7 @@ def main():
     _print_camera_to_pb_axis_mapping()
     _print_pb_pose("reset depth camera local PB pose from default arm posture", camera_position_pb)
 
-    visualization_records = _run_simple_sample_logic_for_gui(
+    visualization_records, selected_solution = _run_simple_sample_logic_for_gui(
         p_mod=p_mod,
         pybullet_data=pybullet_data,
         cfg=cfg,
@@ -2327,8 +2659,29 @@ def main():
         visualization_records=visualization_records,
         map_free_space=map_free_space,
         current_amcl_pose=current_amcl_pose,
-        publish_goal_pose=not args.no_publish_goal_pose,
     )
+    goal_pose_solution = selected_solution
+    if goal_pose_solution is None:
+        _, goal_pose_solution = _select_gui_display_solution(
+            visualization_records,
+            planning_config=planning_config,
+        )
+        if goal_pose_solution is not None:
+            print(
+                "[test_base_sampler] no feasible solution; driving to best available "
+                "closest/debug candidate.",
+                flush=True,
+            )
+    if goal_pose_solution is None:
+        print("[test_base_sampler] no target pose solution available; rule navigation not started.", flush=True)
+    elif args.no_publish_goal_pose:
+        print("[test_base_sampler] rule navigation disabled by --no-publish-goal-pose.", flush=True)
+    else:
+        _run_rule_navigation_for_solution(
+            goal_pose_solution,
+            initial_pose=live_scene.captured_amcl_pose,
+        )
+
     _write_best_display_solution_ros_map_png(
         map_yaml_path=Path(cfg["map_yaml_path"]),
         planning_config=planning_config,
@@ -2336,7 +2689,7 @@ def main():
         output_path=Path(__file__).resolve().parent / "outputs" / "map_occupied.png",
     )
 
-    if not args.no_gui:
+    if show_gui:
         _visualize_feasible_ik_results_in_gui(
             p_mod=p_mod,
             pybullet_data=pybullet_data,
@@ -2345,6 +2698,11 @@ def main():
             voxels_pb=voxels_pb,
             voxel_size_m=live_scene.voxel_size_m,
             visualization_records=visualization_records,
+        )
+    else:
+        print(
+            "[test_base_sampler] PyBullet GUI skipped. Use --gui or BASE_SAMPLER_SHOW_GUI=1 to enable replay.",
+            flush=True,
         )
 
 

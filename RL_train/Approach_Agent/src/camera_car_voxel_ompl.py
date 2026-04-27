@@ -27,6 +27,7 @@ CAMERA_TO_PYBULLET_ROTATION = np.asarray(
     ],
     dtype=np.float32,
 )
+DEFAULT_VOXEL_SIZE_M = 0.0208008
 
 
 @dataclass
@@ -137,7 +138,7 @@ def load_camera_car_voxel_ompl_config(config_path: Path) -> CameraCarVoxelOmplCo
         debug_target_grasp_key=str(payload.get("debug_target_grasp_key", "best_grasp_camera")),
         planner_config_path=str(_resolve_input_path(str(payload["planner_config_path"]), config_path)),
         output_root_dir=str(_resolve_output_path(str(payload.get("output_root_dir", "outputs/camera_car_voxel_ompl")), config_path)),
-        voxel_size_m=float(payload.get("voxel_size_m", 0.05)),
+        voxel_size_m=float(payload.get("voxel_size_m", DEFAULT_VOXEL_SIZE_M)),
         min_depth_m=float(payload.get("min_depth_m", 0)),
         max_depth_m=float(payload.get("max_depth_m", 3.0)),
         flip_depth_vertical=bool(payload.get("flip_depth_vertical", True)),
@@ -190,11 +191,15 @@ def _save_capture_artifacts(
 def _amcl_pose_to_dict(amcl_pose: Any | None) -> dict[str, Any] | None:
     if amcl_pose is None:
         return None
-    return {
+    payload = {
         "stamp_sec": amcl_pose.stamp_sec,
         "position_xyz": list(amcl_pose.position_xyz),
         "orientation_xyzw": list(amcl_pose.orientation_xyzw),
     }
+    covariance = getattr(amcl_pose, "covariance", None)
+    if covariance is not None:
+        payload["covariance"] = [float(value) for value in covariance]
+    return payload
 
 
 def _load_debug_npz_array(debug_npz_path: Path, array_key: str) -> np.ndarray:

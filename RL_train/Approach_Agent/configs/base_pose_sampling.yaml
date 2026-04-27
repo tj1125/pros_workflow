@@ -28,10 +28,8 @@ map_yaml_path: tools/car_control/src/nav_goal_bridge_pkg/config/map01.yaml
 planner_config_path: configs/pybullet_ompl.yaml
 
 # ── Input Data (Scene & Target) ───────────────────────────────────────────────
-# Path to the NPZ file produced by the grasp agent pipeline (e.g. latest_grasp_debug.npz).
-# If provided, target_unity_xyz and voxel obstacles will be automatically
-# extracted from this file, ignoring manual target_unity_xyz.
-grasp_debug_npz_path: /workspaces/VLM_RL/3090server/VLM_RL/grasp_agent/data/debug_outputs/latest_grasp_debug.npz
+# Optional offline debug NPZ. Keep null for live Camera_Car operation.
+grasp_debug_npz_path: null
 
 # Fallback target position (Unity world frame) if grasp_debug_npz_path is null.
 # y = 0.51 is the target height.
@@ -47,7 +45,8 @@ robot_unity_z_at_snapshot: -0.518159792346899
 robot_heading_rad_at_snapshot: -0.9106090623
 
 # ── Obstacle appearance ───────────────────────────────────────────────────────
-voxel_size_m: 0.05
+# 9 cm^3 voxel volume => cube side length cbrt(9) cm = 0.0208008 m.
+voxel_size_m: 0.0208008
 obstacle_rgba: [0.85, 0.2, 0.2, 0.55]
 
 # ── Sampling parameters ───────────────────────────────────────────────────────
