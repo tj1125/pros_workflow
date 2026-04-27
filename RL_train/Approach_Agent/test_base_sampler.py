@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import scipy.spatial.transform as st
 
+import move_arm
 import move_car
 import sample_logic
 from scripts.run_base_pose_sampling import load_config
@@ -78,11 +79,12 @@ class MapFreeSpace:
 
 LIVE_VOXEL_MIN_DEPTH_M = 0.19
 LIVE_VOXEL_MAX_DEPTH_M = 1.0
+MAX_GRASP_POSES_TO_EVALUATE = 10
 TARGET_OBJECT_POINTCLOUD_KEY = "object_pc_camera"
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
-VEHICLE_BASE_LENGTH_X_M = 0.33
-VEHICLE_BASE_LENGTH_Y_M = 0.42
+VEHICLE_BASE_LENGTH_X_M = 0.30
+VEHICLE_BASE_LENGTH_Y_M = 0.32
 
 
 PLANNING_CAMERA_TO_PB_LOCAL = np.asarray(
@@ -451,10 +453,10 @@ def _run_rule_navigation_for_solution(
     solution: dict[str, object],
     *,
     initial_pose: AmclPoseSnapshot | None,
-) -> None:
+) -> dict[str, object]:
     if not _env_flag("APPROACH_AGENT_RULE_NAV", True):
         print("[test_base_sampler] rule navigation disabled by APPROACH_AGENT_RULE_NAV.", flush=True)
-        return
+        return {"success": False, "skipped": True, "phase": "disabled_by_env"}
 
     publish_initial_pose = _env_flag("APPROACH_AGENT_PUBLISH_INITIAL_POSE", True)
     initial_pose_topic = os.getenv("APPROACH_AGENT_INITIAL_POSE_TOPIC", move_car.DEFAULT_INITIAL_POSE_TOPIC).strip()
@@ -521,6 +523,28 @@ def _run_rule_navigation_for_solution(
         f"{result}.",
         flush=True,
     )
+    return result
+
+
+def _run_arm_motion_for_solution(
+    solution: dict[str, object],
+    *,
+    planning_config,
+) -> dict[str, object]:
+    if not _env_flag("APPROACH_AGENT_MOVE_ARM", True):
+        print("[test_base_sampler] arm movement disabled by APPROACH_AGENT_MOVE_ARM.", flush=True)
+        return {"success": False, "skipped": True, "phase": "disabled_by_env"}
+
+    result = move_arm.move_arm_for_solution(
+        solution,
+        planning_config=planning_config,
+    )
+    print(
+        "[test_base_sampler] arm movement result = "
+        f"{result}.",
+        flush=True,
+    )
+    return result
 
 
 def _print_closest_ik_solution_banner(
@@ -2534,6 +2558,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not run rule-based car movement after sampling.",
     )
+    parser.add_argument(
+        "--no-move-arm",
+        action="store_true",
+        help="Do not publish the selected IK arm trajectory after rule navigation succeeds.",
+    )
     return parser.parse_args()
 
 
@@ -2588,6 +2617,15 @@ def main():
         camera_to_pb_rotation=camera_to_pb_rotation,
         camera_position_pb=camera_position_pb,
     )
+    total_grasp_count = len(grasp_candidates)
+    if total_grasp_count > MAX_GRASP_POSES_TO_EVALUATE:
+        visualization_records = visualization_records[:MAX_GRASP_POSES_TO_EVALUATE]
+        grasp_candidates = grasp_candidates[:MAX_GRASP_POSES_TO_EVALUATE]
+        print(
+            f"[test_base_sampler] using top {MAX_GRASP_POSES_TO_EVALUATE} grasp poses "
+            f"out of {total_grasp_count}.",
+            flush=True,
+        )
     current_amcl_pose = _amcl_snapshot_to_ros_map_pose(live_scene.amcl_pose)
     if current_amcl_pose is None and not args.allow_missing_amcl:
         raise RuntimeError(
@@ -2596,7 +2634,7 @@ def main():
         )
     print(
         f"[test_base_sampler] grasp_json={grasp_result_json_path} | "
-        f"grasps={len(grasp_candidates)} | live RGBD voxels={len(voxels_pb)} | "
+        f"grasps={len(grasp_candidates)}/{total_grasp_count} | live RGBD voxels={len(voxels_pb)} | "
         f"voxel_size={live_scene.voxel_size_m:.3f}m | "
         f"depth_points={live_scene.valid_depth_point_count} | "
         f"obstacle_points={live_scene.obstacle_depth_point_count} | "
@@ -2677,10 +2715,29 @@ def main():
     elif args.no_publish_goal_pose:
         print("[test_base_sampler] rule navigation disabled by --no-publish-goal-pose.", flush=True)
     else:
-        _run_rule_navigation_for_solution(
+        nav_result = _run_rule_navigation_for_solution(
             goal_pose_solution,
             initial_pose=live_scene.captured_amcl_pose,
         )
+        if bool(nav_result.get("success", False)):
+            if not bool(goal_pose_solution.get("ik_feasible", False)):
+                print(
+                    "[test_base_sampler] arm movement skipped because the navigation target "
+                    "is not a feasible IK solution.",
+                    flush=True,
+                )
+            elif args.no_move_arm:
+                print("[test_base_sampler] arm movement disabled by --no-move-arm.", flush=True)
+            else:
+                _run_arm_motion_for_solution(
+                    goal_pose_solution,
+                    planning_config=planning_config,
+                )
+        else:
+            print(
+                "[test_base_sampler] arm movement skipped because rule navigation did not reach the target.",
+                flush=True,
+            )
 
     _write_best_display_solution_ros_map_png(
         map_yaml_path=Path(cfg["map_yaml_path"]),
