@@ -67,6 +67,20 @@ class PybulletRobotController:
 
         raise FileNotFoundError(f"Unable to locate robot description URDF: {urdf_name}")
 
+    def _get_urdf_search_paths(self) -> list[str]:
+        urdf_dir = Path(self.urdf_path).resolve().parent
+        package_dir = urdf_dir.parent
+        candidates = [package_dir, package_dir.parent]
+        search_paths = []
+
+        for candidate in candidates:
+            if candidate.exists():
+                candidate_path = str(candidate)
+                if candidate_path not in search_paths:
+                    search_paths.append(candidate_path)
+
+        return search_paths
+
     def set_end_effector(self, ee_type: str):
         if ee_type == "gripper":
             self.end_eff_index = self.end_eff_indices[0]
@@ -483,6 +497,9 @@ class PybulletRobotController:
         )
         p.setRealTimeSimulation(True)
         p.loadURDF("plane.urdf")
+
+        for search_path in self._get_urdf_search_paths():
+            p.setAdditionalSearchPath(search_path)
 
         rotation = R.from_euler("z", 90, degrees=True).as_quat()
         self.robot_id = p.loadURDF(
