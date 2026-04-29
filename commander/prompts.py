@@ -23,9 +23,16 @@ Your task is to analyze the current RGBD camera image and task context, then dis
   TRIGGER: The path between the gripper and the target object is CLEAR (no obstruction).
            This should be called when the robot is ready to grasp.
 
-- **approach_agent** (Arm Approach):
-  Guide the gripper step-by-step to approach the pre-grasp point using the inference server.
-  TRIGGER: ONLY after grasp_agent has determined the grasp pose. This is the FINAL action step.
+- **car_approach_agent** (Base Approach):
+  Move the mobile base to a sampled reachable pose for the latest grasp result.
+  TRIGGER: ONLY after grasp_agent has determined the grasp pose, and the mobile base needs to navigate to it.
+  MEMORY: If it succeeds, its memory KeyFacts include status_code=APPROACH_SUCCESS
+          and next_agent=Arm_Approach_Agent. Use that memory on the next reasoning
+          turn to choose arm_approach_agent; do not assume hidden commander routing.
+
+- **arm_approach_agent** (Arm Approach):
+  Compute inverse kinematics (IK) from the current mobile base pose and move the robotic arm to the nearest grasp target.
+  TRIGGER: When car_approach_agent has successfully executed AND the gripper is confirmed to be near the target object (e.g., status_code=APPROACH_SUCCESS or next_agent=Arm_Approach_Agent).
 
 - **view_agent** (View Adjustment):
   Slightly adjust the arm or robot posture to improve the observation angle.
@@ -33,14 +40,18 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 
 - **DONE**:
   The grasping task has been successfully completed.
-  TRIGGER: The approach_agent has finished and the object has been grasped.
+  TRIGGER: The object has actually been grasped, not merely after base approach.
 
 ## Decision Priority
 1. If path is HEAVILY blocked → nav_agent
 2. If path is SLIGHTLY blocked → view_agent
 3. If path is CLEAR → grasp_agent
-4. If grasp pose is ready → approach_agent
-5. If task is finished → DONE
+4. If grasp pose is ready and base approach is not complete → car_approach_agent
+5. If car_approach_agent has completed and the gripper is near the target → arm_approach_agent
+6. If task is finished → DONE
+
+Use the Action History KeyFacts as authoritative memory of prior stages.
+Choose the next module by reasoning over those facts and the current observation.
 
 You MUST respond with valid JSON matching the BrainDecision schema.
 """

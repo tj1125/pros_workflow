@@ -332,6 +332,8 @@ class SessionMemoryStore:
             "grasp_agent": "latest_grasp_result",
             "view_agent": "latest_view_result",
             "approach_agent": "latest_approach_result",
+            "car_approach_agent": "latest_approach_result",
+            "arm_approach_agent": "latest_approach_result",
         }
         return mapping.get(module, "")
 

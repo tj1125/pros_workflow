@@ -30,7 +30,7 @@ class CommanderState(TypedDict):
     # VLM reasoning output
     reasoning: str
 
-    # Target agent module to invoke (nav_agent / grasp_agent / approach_agent / view_agent / DONE)
+    # Target agent module to invoke (nav_agent / grasp_agent / car_approach_agent / arm_approach_agent / view_agent / DONE)
     call_module: str
 
     # Parameters to pass into the target agent

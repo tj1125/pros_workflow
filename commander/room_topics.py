@@ -99,6 +99,39 @@ async def get_compressed_image_topic_base64(
     return await loop.run_in_executor(None, _capture)
 
 
+async def get_amcl_pose(
+    timeout_sec: float = 5.0,
+) -> Optional[dict]:
+    """Return the latest /amcl_pose as {x, y, z, qx, qy, qz, qw}, or None on timeout.
+
+    Spawns a system-Python subprocess (rclpy available) that subscribes to
+    /amcl_pose once and prints the pose as JSON to stdout.
+    """
+    loop = asyncio.get_event_loop()
+
+    def _capture() -> Optional[dict]:
+        try:
+            result = subprocess.run(
+                ["/bin/bash", "-lc", _topic_subprocess_cmd("amcl_pose", "/amcl_pose", timeout_sec)],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec + 2.0,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    return json.loads(result.stdout.strip())
+                except json.JSONDecodeError as exc:
+                    logger.error("[Topic] amcl_pose JSON decode failed: %s", exc)
+                    return None
+            logger.error("[Topic] amcl_pose capture failed: %s", result.stderr.strip())
+            return None
+        except Exception as exc:
+            logger.error("[Topic] amcl_pose subprocess error: %s", exc)
+            return None
+
+    return await loop.run_in_executor(None, _capture)
+
+
 def save_preview_bbox_annotated(image_base64: str, bbox: list[float], output_path: Path) -> bool:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +174,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="One-shot ROS topic helpers.")
     parser.add_argument(
         "mode",
-        choices=("string_topic", "compressed_image_topic", "annotate_preview", "crop_preview"),
+        choices=("string_topic", "compressed_image_topic", "amcl_pose", "annotate_preview", "crop_preview"),
     )
     parser.add_argument("topic_name", nargs="?", default="")
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -190,11 +223,12 @@ if __name__ == "__main__":
 
             if mode == "string_topic":
                 from std_msgs.msg import String
-
                 self.create_subscription(String, topic_name, self._callback, 10)
+            elif mode == "amcl_pose":
+                from geometry_msgs.msg import PoseWithCovarianceStamped
+                self.create_subscription(PoseWithCovarianceStamped, topic_name, self._callback, 10)
             else:
                 from sensor_msgs.msg import CompressedImage
-
                 self.create_subscription(CompressedImage, topic_name, self._callback, 10)
 
         def _callback(self, msg):
@@ -211,6 +245,19 @@ if __name__ == "__main__":
 
             if self._mode == "string_topic":
                 return str(self._message.data)
+
+            if self._mode == "amcl_pose":
+                pos = self._message.pose.pose.position
+                ori = self._message.pose.pose.orientation
+                return json.dumps({
+                    "x": pos.x,
+                    "y": pos.y,
+                    "z": pos.z,
+                    "qx": ori.x,
+                    "qy": ori.y,
+                    "qz": ori.z,
+                    "qw": ori.w,
+                })
 
             return base64.b64encode(bytes(self._message.data)).decode()
 

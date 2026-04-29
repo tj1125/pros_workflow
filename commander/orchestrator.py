@@ -38,11 +38,16 @@ class Orchestrator:
         observe_node → reason_node
             input_node → find_node → get_item_info_no_sam3d_node → nav_move_node
             nav_move_node → observe_node → reason_node
-            reason_node --[nav_agent]-------> nav_node ┐
-            reason_node --[grasp_agent]-----> grasp_node ├─→ update_memory_node → observe_node
-            reason_node --[approach_agent]--> approach_node ┘
-            reason_node --[view_agent]------> view_node ┘
+            reason_node --[nav_agent]-------> nav_node   ┐
+            reason_node --[grasp_agent]-----> grasp_node ┤→ approach_node ─→ update_memory_node → observe_node
+            reason_node --[car_approach_agent]--> car_grasp_node ┘
+            reason_node --[arm_approach_agent]--> arm_grasp_node ┘
+            reason_node --[view_agent]------> view_node  ─→ update_memory_node
             reason_node --[DONE]-----------> END
+
+    grasp_node: 擷取 RGBD、呼叫 GraspAgent，取得 6-DoF 抓取位姿並寫入 latest_grasp_result。
+    car_approach_node: 讀取 latest_grasp_result，呼叫 CarApproachAgent 移動車體至接近點。
+    arm_approach_node: 重新取得 grasp pose，呼叫 ArmApproachAgent 固定車體移動手臂至預抓取點。
     """
 
     def __init__(self, trace_logger: TraceLogger, use_mock: bool = True):
@@ -69,8 +74,10 @@ class Orchestrator:
         # Individual Agent nodes (A2A Clients)
         workflow.add_node("nav_node", self._nav_node)
         workflow.add_node("nav_move_node", self._nav_move_node)
-        workflow.add_node("grasp_node", self._grasp_node)
-        workflow.add_node("approach_node", self._approach_node)
+        workflow.add_node("car_grasp_node", self._car_grasp_node)
+        workflow.add_node("arm_grasp_node", self._arm_grasp_node)
+        workflow.add_node("car_approach_node", self._car_approach_node)
+        workflow.add_node("arm_approach_node", self._arm_approach_node)
         workflow.add_node("view_node", self._view_node)
         workflow.add_node("get_item_info_no_sam3d_node", self._get_item_info_no_sam3d_node)
 
@@ -82,8 +89,14 @@ class Orchestrator:
         workflow.add_edge("get_item_info_no_sam3d_node", "nav_move_node")
         workflow.add_edge("observe_node", "reason_node")
         workflow.add_edge("nav_node", "nav_move_node")
-        workflow.add_edge("grasp_node", "update_memory_node")
-        workflow.add_edge("approach_node", "update_memory_node")
+        
+        # Grasp nodes statically route to their respective approach nodes
+        workflow.add_edge("car_grasp_node", "car_approach_node")
+        workflow.add_edge("car_approach_node", "update_memory_node")
+        
+        workflow.add_edge("arm_grasp_node", "arm_approach_node")
+        workflow.add_edge("arm_approach_node", "update_memory_node")
+        
         workflow.add_edge("view_node", "update_memory_node")
         workflow.add_edge("update_memory_node", "observe_node")
 
@@ -99,11 +112,11 @@ class Orchestrator:
             "reason_node",
             self._route_decision,
             {
-                "nav_node":      "nav_node",
-                "grasp_node":    "grasp_node",
-                "approach_node": "approach_node",
-                "view_node":     "view_node",
-                "end":           END,
+                "nav_node":    "nav_node",
+                "car_grasp_node": "car_grasp_node",
+                "arm_grasp_node": "arm_grasp_node",
+                "view_node":  "view_node",
+                "end":        END,
             },
         )
         workflow.add_conditional_edges(
@@ -675,16 +688,18 @@ class Orchestrator:
 
     def _route_decision(
         self, state: CommanderState
-    ) -> Literal["nav_node", "grasp_node", "approach_node", "view_node", "end"]:
+    ) -> Literal["nav_node", "car_grasp_node", "arm_grasp_node", "view_node", "end"]:
         module = state.get("call_module", "")
         if module == "DONE" or state.get("task_complete", False):
             logger.info("[route] Task complete — ending graph.")
             return "end"
         mapping = {
-            "nav_agent":      "nav_node",
-            "grasp_agent":    "grasp_node",
-            "approach_agent": "approach_node",
-            "view_agent":     "view_node",
+            "nav_agent":          "nav_node",
+            "grasp_agent":        "car_grasp_node",
+            "approach_agent":     "car_grasp_node",
+            "car_approach_agent": "car_grasp_node",
+            "arm_approach_agent": "arm_grasp_node",
+            "view_agent":         "view_node",
         }
         return mapping.get(module, "end")
 
@@ -893,33 +908,25 @@ class Orchestrator:
             "_exec_latency": time.time() - start_t,
         }
 
-    async def _grasp_node(self, state: CommanderState) -> Dict[str, Any]:
-        """GraspGen Agent Node: capture Camera_Car RGBD and call INF_GRASP."""
+    async def _do_grasp_logic(self, state: CommanderState, context_label: str) -> Dict[str, Any]:
+        """GraspGen Agent Logic — outputs information only."""
         from agents.grasp_agent import GraspAgent
         from commander.camera import get_camera_rgbd_base64
 
         target_object = state.get("target_object", {}) or {}
         object_id = target_object.get("id")
         if not object_id:
-            logger.error("[grasp_node] target_object.id is missing.")
-            return {
-                "agent_result": "[GRASP] target_object.id is missing, cannot call grasp agent.",
-                "agent_success": False,
-                "current_status": "EXECUTED",
-                "_exec_latency": 0.0,
-            }
+            logger.error(f"[{context_label}] target_object.id is missing — passing empty grasp result.")
+            return {"latest_grasp_result": {}}
 
-        print("\n📷 正在擷取 Camera_Car 的 RGBD 影像...")
+        # --- Step 1: Capture RGBD ---
+        print(f"\n📷 [{context_label}] 擷取 Camera_Car RGBD...")
         rgbd = await get_camera_rgbd_base64("Camera_Car", timeout_sec=15.0)
         if not rgbd:
-            logger.error("[grasp_node] Failed to get Camera_Car RGBD image.")
-            return {
-                "agent_result": "[GRASP] Failed to capture Camera_Car RGBD image.",
-                "agent_success": False,
-                "current_status": "EXECUTED",
-                "_exec_latency": 0.0,
-            }
+            logger.error(f"[{context_label}] Failed to get Camera_Car RGBD — passing empty grasp result.")
+            return {"latest_grasp_result": {}}
 
+        # --- Step 2: Call GraspAgent ---
         params = dict(state.get("module_params", {}) or {})
         params.update(
             {
@@ -929,15 +936,93 @@ class Orchestrator:
                 "depth_base64": rgbd.get("depth_base64"),
             }
         )
-        logger.info("[grasp_node] Captured Camera_Car RGBD and prepared grasp request for '%s'.", object_id)
-        agent = GraspAgent(http_client=self.http_client)
-        return await self._run_agent(agent, state, params_override=params)
+        logger.info(f"[{context_label}] RGBD captured, calling GraspAgent for '{object_id}'.")
 
-    async def _approach_node(self, state: CommanderState) -> Dict[str, Any]:
-        """Approach Agent Node: guide arm to pre-grasp point (local control, no GPU)."""
-        from agents.approach_agent import ApproachAgent
-        agent = ApproachAgent()
-        return await self._run_agent(agent, state, has_http=False)
+        agent = GraspAgent(http_client=self.http_client)
+        result = await agent.execute(params, state.get("context_id", ""))
+        success = bool(result.get("success", False))
+        payload = result.get("result", {})
+        if not isinstance(payload, dict):
+            payload = {}
+        logger.info(f"[{context_label}] GraspAgent finished, success={success}")
+
+        # --- Step 3: Pack data for approach_node (no agent_result / agent_success here) ---
+        return {
+            "latest_grasp_result": {
+                "object_id": payload.get("object_id") or object_id,
+                "camera_name": payload.get("camera_name", "Camera_Car"),
+                "grasp_success": success,
+                "grasp_confidence": payload.get("grasp_confidence"),
+                "num_candidate_grasps": payload.get("num_candidate_grasps"),
+                "num_valid_grasps": payload.get("num_valid_grasps"),
+                "best_grasp_pose_camera": payload.get("best_grasp_pose_camera", {}),
+                "valid_grasp_poses_camera": payload.get("valid_grasp_poses_camera", []),
+                "object_reference_center_camera": payload.get("object_reference_center_camera", []),
+                # Raw images carried forward
+                "rgb_base64": rgbd.get("rgb_base64"),
+                "depth_base64": rgbd.get("depth_base64"),
+            },
+        }
+
+    async def _car_grasp_node(self, state: CommanderState) -> Dict[str, Any]:
+        return await self._do_grasp_logic(state, "car_grasp_node")
+
+    async def _arm_grasp_node(self, state: CommanderState) -> Dict[str, Any]:
+        return await self._do_grasp_logic(state, "arm_grasp_node")
+
+    async def _car_approach_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Car Approach Agent Node."""
+        from agents.car_approach_agent import CarApproachAgent
+        from commander.room_topics import get_amcl_pose
+
+        params = dict(state.get("module_params", {}) or {})
+        latest_grasp = state.get("latest_grasp_result", {}) or {}
+
+        # Fetch fresh amcl_pose now that grasp computation is done
+        print("\n📍 [car_approach_node] 取得最新 /amcl_pose...")
+        amcl_pose = await get_amcl_pose(timeout_sec=5.0)
+        if not amcl_pose:
+            logger.warning("[car_approach_node] /amcl_pose not available — proceeding without it.")
+            amcl_pose = {}
+        else:
+            logger.info("[car_approach_node] amcl_pose=%s", amcl_pose)
+
+        # Inject grasp result and robot pose into params
+        if "grasp_result" not in params and "grasp_result_payload" not in params:
+            params["grasp_result"] = latest_grasp
+        if amcl_pose and "amcl_pose" not in params:
+            params["amcl_pose"] = amcl_pose
+
+        agent = CarApproachAgent()
+        result = await self._run_agent(agent, state, has_http=False, params_override=params)
+        result["call_module"] = "car_approach_agent"
+        return result
+
+    async def _arm_approach_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Arm Approach Agent Node."""
+        from agents.arm_approach_agent import ArmApproachAgent
+        from commander.room_topics import get_amcl_pose
+
+        params = dict(state.get("module_params", {}) or {})
+        latest_grasp = state.get("latest_grasp_result", {}) or {}
+
+        print("\n📍 [arm_approach_node] 取得最新 /amcl_pose...")
+        amcl_pose = await get_amcl_pose(timeout_sec=5.0)
+        if not amcl_pose:
+            logger.warning("[arm_approach_node] /amcl_pose not available — proceeding without it.")
+            amcl_pose = {}
+        else:
+            logger.info("[arm_approach_node] amcl_pose=%s", amcl_pose)
+
+        if "grasp_result" not in params and "grasp_result_payload" not in params:
+            params["grasp_result"] = latest_grasp
+        if amcl_pose and "amcl_pose" not in params:
+            params["amcl_pose"] = amcl_pose
+
+        agent = ArmApproachAgent()
+        result = await self._run_agent(agent, state, has_http=False, params_override=params)
+        result["call_module"] = "arm_approach_agent"
+        return result
 
     async def _view_node(self, state: CommanderState) -> Dict[str, Any]:
         """View Agent Node: adjust camera/arm posture via INF_VIEW (A2A Server)."""
@@ -1051,11 +1136,31 @@ class Orchestrator:
                 "has_delta_joints": bool(delta_joints),
             }
 
-        if module == "approach_agent":
-            summary = self._condense_text(result)
+        if module in {"approach_agent", "car_approach_agent", "arm_approach_agent"}:
+            payload = result if isinstance(result, dict) else {}
+            default_success = "ARM_APPROACH_SUCCESS" if module == "arm_approach_agent" else "APPROACH_SUCCESS"
+            default_fail = "ARM_APPROACH_FAIL" if module == "arm_approach_agent" else "APPROACH_FAIL"
+            status_code = str(
+                payload.get("status_code")
+                or (default_success if success else default_fail)
+            )
+            phase = payload.get("phase", "")
+            next_agent = payload.get("next_agent")
+            message = payload.get("message") or payload.get("error") or result
+            summary = f"{status_code}: {self._condense_text(message)}"
+            if success and next_agent:
+                summary = f"{summary} next_agent={next_agent}"
             return summary, {
                 "success": success,
-                "raw_kind": type(result).__name__,
+                "status_code": status_code,
+                "phase": phase,
+                "next_agent": next_agent,
+                "nav_success": bool((payload.get("nav_result") or {}).get("success", False))
+                if isinstance(payload.get("nav_result"), dict)
+                else False,
+                "arm_success": bool((payload.get("arm_result") or {}).get("success", False))
+                if isinstance(payload.get("arm_result"), dict)
+                else False,
             }
 
         return self._condense_text(result), {}
@@ -1118,13 +1223,26 @@ class Orchestrator:
             }
             return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
 
-        if module == "approach_agent":
+        if module in {"approach_agent", "car_approach_agent", "arm_approach_agent"}:
+            payload = result if isinstance(result, dict) else {}
+            default_success = "ARM_APPROACH_SUCCESS" if module == "arm_approach_agent" else "APPROACH_SUCCESS"
+            default_fail = "ARM_APPROACH_FAIL" if module == "arm_approach_agent" else "APPROACH_FAIL"
+            status_code = str(
+                payload.get("status_code")
+                or (default_success if success else default_fail)
+            )
             latest_key = "latest_approach_result"
             latest_value = {
                 "trace_id": trace_id,
-                "summary": self._condense_text(result),
+                "module": module,
+                "summary": self._condense_text(payload.get("message") or payload.get("error") or result),
                 "success": success,
-                "raw_kind": type(result).__name__,
+                "status_code": status_code,
+                "phase": payload.get("phase", ""),
+                "next_agent": payload.get("next_agent"),
+                "nav_result": payload.get("nav_result", {}),
+                "arm_result": payload.get("arm_result", {}),
+                "selected_solution": payload.get("selected_solution", {}),
             }
             return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
 

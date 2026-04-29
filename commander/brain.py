@@ -24,7 +24,7 @@ class BrainDecision(BaseModel):
         description="Step-by-step reasoning about the current scene and why this action is chosen"
     )
     call_module: Literal[
-        "nav_agent", "grasp_agent", "approach_agent", "view_agent", "DONE"
+        "nav_agent", "grasp_agent", "car_approach_agent", "arm_approach_agent", "view_agent", "DONE"
     ] = Field(description="The agent module to invoke, or DONE if the task is complete")
     module_params: Dict[str, Any] = Field(
         default_factory=dict,
@@ -183,13 +183,19 @@ class Brain:
             )
         elif count == 2:
             return BrainDecision(
-                reasoning="Grasp pose received. Begin arm approach sequence.",
-                call_module="approach_agent",
+                reasoning="Grasp pose received. Begin base approach sequence.",
+                call_module="car_approach_agent",
                 module_params={"target_id": "apple"},
             )
         elif count == 3:
             return BrainDecision(
-                reasoning="Approach complete. Adjust view for final confirmation.",
+                reasoning="Base approach complete. Execute arm approach to reach the grasp target.",
+                call_module="arm_approach_agent",
+                module_params={"target_id": "apple"},
+            )
+        elif count == 4:
+            return BrainDecision(
+                reasoning="Arm approach complete. Adjust view for final confirmation.",
                 call_module="view_agent",
                 module_params={},
             )

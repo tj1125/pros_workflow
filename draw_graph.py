@@ -30,3 +30,4 @@ try:
 except Exception as e:
     print(f"\nPNG generation failed (expected if no graphviz): {e}")
     print("You can paste the Mermaid text above into https://mermaid.live to view the chart.")
+
