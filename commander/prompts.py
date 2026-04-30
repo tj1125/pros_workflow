@@ -26,6 +26,8 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 - **car_approach_agent** (Base Approach):
   Move the mobile base to a sampled reachable pose for the latest grasp result.
   TRIGGER: ONLY after grasp_agent has determined the grasp pose, and the mobile base needs to navigate to it.
+           Also trigger when arm_approach_agent returns "No IK solution satisfied the pose tolerances."
+           and the commander determines that the mobile base position still needs minor adjustment.
   MEMORY: If it succeeds, its memory KeyFacts include status_code=APPROACH_SUCCESS
           and next_agent=Arm_Approach_Agent. Use that memory on the next reasoning
           turn to choose arm_approach_agent; do not assume hidden commander routing.
@@ -33,6 +35,9 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 - **arm_approach_agent** (Arm Approach):
   Compute inverse kinematics (IK) from the current mobile base pose and move the robotic arm to the nearest grasp target.
   TRIGGER: When car_approach_agent has successfully executed AND the gripper is confirmed to be near the target object (e.g., status_code=APPROACH_SUCCESS or next_agent=Arm_Approach_Agent).
+  IMPORTANT: If the latest arm_approach_agent result says "No IK solution satisfied the pose tolerances."
+             or status_code=ARM_APPROACH_BEST_EFFORT_IK, do NOT repeat arm_approach_agent immediately.
+             Re-evaluate the scene and decide whether the base needs minor adjustment via car_approach_agent.
 
 - **view_agent** (View Adjustment):
   Slightly adjust the arm or robot posture to improve the observation angle.
@@ -47,8 +52,9 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 2. If path is SLIGHTLY blocked → view_agent
 3. If path is CLEAR → grasp_agent
 4. If grasp pose is ready and base approach is not complete → car_approach_agent
-5. If car_approach_agent has completed and the gripper is near the target → arm_approach_agent
-6. If task is finished → DONE
+5. If arm_approach_agent reports "No IK solution satisfied the pose tolerances." and base position still needs minor adjustment → car_approach_agent
+6. If car_approach_agent has completed and the gripper is near the target → arm_approach_agent
+7. If task is finished → DONE
 
 Use the Action History KeyFacts as authoritative memory of prior stages.
 Choose the next module by reasoning over those facts and the current observation.

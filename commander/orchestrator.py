@@ -1356,8 +1356,8 @@ class Orchestrator:
 
     def _default_initial_pose(self) -> Dict[str, Any]:
         return {
-            "x": 3.3596361258505296,
-            "y": -3.1483084430012473,
+            "x": 3.4133476128639803,
+            "y": -3.040367824880008,
             "z": 0.0,
             "qx": 0.0,
             "qy": 0.0,
