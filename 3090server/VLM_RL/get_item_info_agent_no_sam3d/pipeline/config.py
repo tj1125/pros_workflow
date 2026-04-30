@@ -71,7 +71,11 @@ def load_scene_config(path: Path) -> tuple[dict[str, Any], Path]:
         ],
         "alignment",
     )
-    _require_keys(map_cfg, ["map_pgm", "map_yaml", "unity_map_origin", "offset", "white_threshold"], "map")
+    _require_keys(
+        map_cfg,
+        ["map_pgm", "map_yaml", "unity_map_origin", "offset", "robot_radius", "white_threshold"],
+        "map",
+    )
     _require_keys(
         runtime,
         [

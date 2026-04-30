@@ -98,20 +98,28 @@ def unity_to_map(unity_x: float, unity_z: float, unity_origin: tuple[float, floa
     return map_x, map_y
 
 
-def is_white(
+def is_footprint_white(
     unity_point: np.ndarray,
     pgm: np.ndarray,
     info: MapInfo,
     white_threshold: int,
     unity_origin: tuple[float, float, float],
+    robot_radius: float,
 ) -> bool:
     map_x, map_y = unity_to_map(float(unity_point[0]), float(unity_point[2]), unity_origin)
     pgm_x, pgm_y = map_to_pgm(map_x, map_y, info)
-    px = int(round(pgm_x))
-    py = int(round(pgm_y))
-    if px < 0 or py < 0 or px >= info.width or py >= info.height:
+    radius_px = robot_radius / info.resolution
+    min_px = int(np.floor(pgm_x - radius_px))
+    max_px = int(np.ceil(pgm_x + radius_px))
+    min_py = int(np.floor(pgm_y - radius_px))
+    max_py = int(np.ceil(pgm_y + radius_px))
+    if min_px < 0 or min_py < 0 or max_px >= info.width or max_py >= info.height:
         return False
-    return int(pgm[py, px]) >= white_threshold
+
+    yy, xx = np.ogrid[min_py : max_py + 1, min_px : max_px + 1]
+    footprint_mask = (xx - pgm_x) ** 2 + (yy - pgm_y) ** 2 <= radius_px**2
+    footprint_cells = pgm[min_py : max_py + 1, min_px : max_px + 1][footprint_mask]
+    return bool(np.all(footprint_cells >= white_threshold))
 
 
 def compute_goal_pose(
@@ -129,12 +137,16 @@ def compute_goal_pose(
     info = load_map_info(Path(map_cfg["map_yaml"]))
     unity_origin = tuple(float(v) for v in map_cfg["unity_map_origin"])
     offset = float(map_cfg["offset"])
+    robot_radius = float(map_cfg["robot_radius"])
     white_th = int(map_cfg["white_threshold"])
 
     feasible_counts: dict[int, int] = {}
     feasible_best_by_group: dict[int, dict[str, float | np.ndarray | list[float] | bool | str]] = {}
     fallback_counts: dict[int, int] = {}
     fallback_best_by_group: dict[int, dict[str, float | np.ndarray | list[float] | bool | str]] = {}
+    map_feasible_mask: list[bool] = []
+    goal_unity_candidates: list[np.ndarray] = []
+    goal_ros_candidates: list[list[float]] = []
 
     def update_group_candidate(
         counts: dict[int, int],
@@ -177,6 +189,9 @@ def compute_goal_pose(
         approach = rotation[:, 2]
         norm = np.linalg.norm(approach)
         if norm == 0:
+            map_feasible_mask.append(False)
+            goal_unity_candidates.append(np.full(3, np.nan, dtype=float))
+            goal_ros_candidates.append([float("nan"), float("nan")])
             continue
 
         direction = approach / norm
@@ -184,7 +199,11 @@ def compute_goal_pose(
             direction = -direction
 
         candidate = world_pos + direction * offset
-        candidate_is_white = is_white(candidate, pgm, info, white_th, unity_origin)
+        candidate_is_white = is_footprint_white(candidate, pgm, info, white_th, unity_origin, robot_radius)
+        goal_ros = unity_to_map(float(candidate[0]), float(candidate[2]), unity_origin)
+        map_feasible_mask.append(bool(candidate_is_white))
+        goal_unity_candidates.append(np.asarray(candidate, dtype=float))
+        goal_ros_candidates.append([float(goal_ros[0]), float(goal_ros[1])])
 
         update_group_candidate(
             fallback_counts,
@@ -245,6 +264,9 @@ def compute_goal_pose(
 
     return {
         "group_ranking": group_ranking,
+        "map_feasible_mask": np.asarray(map_feasible_mask, dtype=bool),
+        "goal_unity_candidates": np.asarray(goal_unity_candidates, dtype=float),
+        "goal_ros_candidates": np.asarray(goal_ros_candidates, dtype=float),
         "used_map_fallback": bool(using_map_fallback),
         "using_map_fallback": bool(using_map_fallback),
     }

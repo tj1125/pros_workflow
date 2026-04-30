@@ -23,6 +23,7 @@ map:
   map_yaml: "../../../../tools/car_control/src/nav_goal_bridge_pkg/config/keepout_map.yaml"
   unity_map_origin: [3.0, 0.0, 6.0]
   offset: 0.5
+  robot_radius: 0.35
   white_threshold: 250
 
 runtime:
@@ -35,14 +36,14 @@ runtime:
   max_valid_height_m: 1.5
   sam_seed: 42
   grasp_threshold: -1.0
-  num_grasps: 200
-  topk_num_grasps: 100
+  num_grasps: 800
+  topk_num_grasps: 400
   num_sample_points: 3000
   robust_lower_percentile: 5.0
   robust_upper_percentile: 95.0
   axis_step_m: 0.05
   obstacle_point_budget: 1600
   obstacle_mode: "box"
-  collision_threshold: 0.02
+  collision_threshold: 0.002
   max_collision_scene_points: 8192
   num_collision_samples: 2000

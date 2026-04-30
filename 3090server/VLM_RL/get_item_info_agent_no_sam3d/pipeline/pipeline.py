@@ -1050,6 +1050,20 @@ def run_pipeline(
     if object_colors is not None:
         grasp_debug_npz["pc_object_raw_colors"] = np.asarray(object_colors, dtype=np.uint8)
 
+    goal_data = compute_goal_pose(target_center_world, grasps, confidences, cfg["map"])
+    map_feasible_mask = np.asarray(goal_data["map_feasible_mask"], dtype=bool)
+    map_feasible_grasps = np.asarray(grasps[map_feasible_mask], dtype=np.float32)
+    map_feasible_scores = np.asarray(confidences[map_feasible_mask], dtype=np.float32)
+    grasp_debug_npz["map_feasible_mask"] = map_feasible_mask
+    grasp_debug_npz["map_feasible_grasps"] = map_feasible_grasps
+    grasp_debug_npz["map_feasible_scores"] = map_feasible_scores
+    grasp_debug_npz["goal_unity_candidates"] = np.asarray(goal_data["goal_unity_candidates"], dtype=np.float32)
+    grasp_debug_npz["goal_ros_candidates"] = np.asarray(goal_data["goal_ros_candidates"], dtype=np.float32)
+    grasp_debug_npz["collision_free_grasps_before_map_filter"] = np.asarray(grasps, dtype=np.float32)
+    grasp_debug_npz["collision_free_scores_before_map_filter"] = np.asarray(confidences, dtype=np.float32)
+    grasp_debug_npz["collision_free_grasps"] = map_feasible_grasps
+    grasp_debug_npz["collision_free_scores"] = map_feasible_scores
+
     visualization_npz_path = _save_visualization_npz(
         center_world=target_center_world,
         debug_npz=grasp_debug_npz,
@@ -1057,8 +1071,6 @@ def run_pipeline(
         target_label=target_label,
         objects=object_reports,
     )
-
-    goal_data = compute_goal_pose(target_center_world, grasps, confidences, cfg["map"])
 
     goal_output = goal_output.expanduser().resolve()
     goal_output.parent.mkdir(parents=True, exist_ok=True)

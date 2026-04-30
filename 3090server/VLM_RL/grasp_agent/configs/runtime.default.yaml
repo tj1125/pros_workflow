@@ -20,11 +20,11 @@ runtime:
   object_voxel_size_m: 0.002
   scene_voxel_size_m: 0.01
   grasp_threshold: -1.0
-  num_grasps: 400
-  topk_num_grasps: 200
+  num_grasps: 800
+  topk_num_grasps: 400
   gripper_midpoint_camera_xyz: [0.0, -0.04, 0.11]
-  max_grasp_local_z: 0.0
-  max_grasp_pitch_deg: 30.0
-  collision_threshold: 0.02
+  max_grasp_local_z: 0.03
+  max_grasp_pitch_deg: 45.0
+  collision_threshold: 0.002
   max_collision_scene_points: 8192
   num_collision_samples: 2000
