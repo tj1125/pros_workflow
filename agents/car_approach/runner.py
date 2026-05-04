@@ -31,6 +31,14 @@ def run_base_approach_sync(
             ),
             grasp_json_path=_optional_path_param(params, "grasp_json_path", "grasp_json"),
             grasp_result_payload=grasp_payload,
+            initial_pose=_dict_param(
+                params,
+                "initial_pose",
+                "last_car_approach_amcl_pose",
+                "previous_nav_goal_pose",
+                "nav_goal_pose",
+            ),
+            initial_pose_source=_str_param(params, "initial_pose_source", default=""),
             allow_missing_amcl=_bool_param(params, "allow_missing_amcl", False),
             run_rule_navigation=_run_rule_navigation_from_params(params),
             show_gui=_bool_param(params, "show_gui", False),
@@ -84,6 +92,21 @@ def _optional_path_param(params: Dict[str, Any], *names: str) -> Path | None:
         if raw_value:
             return Path(str(raw_value)).expanduser()
     return None
+
+
+def _dict_param(params: Dict[str, Any], *names: str) -> dict[str, object] | None:
+    for name in names:
+        raw_value = params.get(name)
+        if isinstance(raw_value, dict) and raw_value:
+            return raw_value
+    return None
+
+
+def _str_param(params: Dict[str, Any], name: str, *, default: str = "") -> str:
+    raw_value = params.get(name)
+    if raw_value is None:
+        return default
+    return str(raw_value)
 
 
 def _run_rule_navigation_from_params(params: Dict[str, Any]) -> bool:

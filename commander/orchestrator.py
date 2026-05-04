@@ -970,28 +970,56 @@ class Orchestrator:
     async def _arm_grasp_node(self, state: CommanderState) -> Dict[str, Any]:
         return await self._do_grasp_logic(state, "arm_grasp_node")
 
+    @staticmethod
+    def _set_default_grasp_result(params: Dict[str, Any], latest_grasp: Dict[str, Any]) -> None:
+        if "grasp_result_payload" in params or "grasp_result" in params:
+            return
+        params["grasp_result"] = latest_grasp
+
     async def _car_approach_node(self, state: CommanderState) -> Dict[str, Any]:
         """Car Approach Agent Node."""
         from agents.car_approach_agent import CarApproachAgent
-        from commander.room_topics import get_amcl_pose
 
         params = dict(state.get("module_params", {}) or {})
         latest_grasp = state.get("latest_grasp_result", {}) or {}
+        latest_nav = state.get("latest_nav_result", {}) or {}
+        last_car_approach_amcl_pose = state.get("last_car_approach_amcl_pose", {}) or {}
+        previous_nav_goal_pose = (
+            state.get("nav_goal_pose")
+            or latest_nav.get("goal_pose")
+            or {}
+        )
+        initial_pose = {}
+        initial_pose_source = ""
 
-        # Fetch fresh amcl_pose now that grasp computation is done
-        print("\n📍 [car_approach_node] 取得最新 /amcl_pose...")
-        amcl_pose = await get_amcl_pose(timeout_sec=5.0)
-        if not amcl_pose:
-            logger.warning("[car_approach_node] /amcl_pose not available — proceeding without it.")
-            amcl_pose = {}
+        if last_car_approach_amcl_pose:
+            initial_pose = last_car_approach_amcl_pose
+            initial_pose_source = "last car_approach /amcl_pose"
+            print("\n📍 [car_approach_node] 使用上一次 car_approach 結束的 /amcl_pose 作為 /initialpose 來源...")
+            logger.info(
+                "[car_approach_node] last_car_approach_amcl_pose=%s",
+                last_car_approach_amcl_pose,
+            )
+        elif previous_nav_goal_pose:
+            initial_pose = previous_nav_goal_pose
+            initial_pose_source = "previous Nav2 /goal_pose"
+            print("\n📍 [car_approach_node] 第一次 car_approach，使用上一個 Nav2 /goal_pose 作為 /initialpose 來源...")
+            logger.info("[car_approach_node] previous_nav_goal_pose=%s", previous_nav_goal_pose)
         else:
-            logger.info("[car_approach_node] amcl_pose=%s", amcl_pose)
+            logger.warning(
+                "[car_approach_node] no previous car_approach AMCL pose or Nav2 goal_pose available; "
+                "car_approach will fall back to capture-time /amcl_pose if possible."
+            )
 
-        # Inject grasp result and robot pose into params
-        if "grasp_result" not in params and "grasp_result_payload" not in params:
-            params["grasp_result"] = latest_grasp
-        if amcl_pose and "amcl_pose" not in params:
-            params["amcl_pose"] = amcl_pose
+        # Inject grasp result and the pose that should be re-published as /initialpose.
+        self._set_default_grasp_result(params, latest_grasp)
+        if initial_pose:
+            params["initial_pose"] = initial_pose
+            params["initial_pose_source"] = initial_pose_source
+        if previous_nav_goal_pose:
+            params["previous_nav_goal_pose"] = previous_nav_goal_pose
+        if last_car_approach_amcl_pose:
+            params["last_car_approach_amcl_pose"] = last_car_approach_amcl_pose
 
         agent = CarApproachAgent()
         result = await self._run_agent(agent, state, has_http=False, params_override=params)
@@ -1014,8 +1042,7 @@ class Orchestrator:
         else:
             logger.info("[arm_approach_node] amcl_pose=%s", amcl_pose)
 
-        if "grasp_result" not in params and "grasp_result_payload" not in params:
-            params["grasp_result"] = latest_grasp
+        self._set_default_grasp_result(params, latest_grasp)
         if amcl_pose and "amcl_pose" not in params:
             params["amcl_pose"] = amcl_pose
 
@@ -1147,6 +1174,11 @@ class Orchestrator:
             phase = payload.get("phase", "")
             next_agent = payload.get("next_agent")
             message = payload.get("message") or payload.get("error") or result
+            nav_result = payload.get("nav_result") or {}
+            final_amcl_pose = {}
+            if isinstance(nav_result, dict):
+                final_amcl_pose = nav_result.get("final_amcl_pose") or {}
+            final_amcl_pose = payload.get("final_amcl_pose") or final_amcl_pose
             summary = f"{status_code}: {self._condense_text(message)}"
             if success and next_agent:
                 summary = f"{summary} next_agent={next_agent}"
@@ -1158,6 +1190,9 @@ class Orchestrator:
                 "nav_success": bool((payload.get("nav_result") or {}).get("success", False))
                 if isinstance(payload.get("nav_result"), dict)
                 else False,
+                "initial_pose_source": payload.get("initial_pose_source")
+                or (nav_result.get("initial_pose_source") if isinstance(nav_result, dict) else ""),
+                "final_amcl_pose_recorded": bool(final_amcl_pose),
                 "arm_success": bool((payload.get("arm_result") or {}).get("success", False))
                 if isinstance(payload.get("arm_result"), dict)
                 else False,
@@ -1232,6 +1267,11 @@ class Orchestrator:
                 or (default_success if success else default_fail)
             )
             latest_key = "latest_approach_result"
+            nav_result = payload.get("nav_result", {})
+            final_amcl_pose = {}
+            if isinstance(nav_result, dict):
+                final_amcl_pose = nav_result.get("final_amcl_pose") or {}
+            final_amcl_pose = payload.get("final_amcl_pose") or final_amcl_pose
             latest_value = {
                 "trace_id": trace_id,
                 "module": module,
@@ -1240,11 +1280,19 @@ class Orchestrator:
                 "status_code": status_code,
                 "phase": payload.get("phase", ""),
                 "next_agent": payload.get("next_agent"),
-                "nav_result": payload.get("nav_result", {}),
+                "initial_pose_source": payload.get("initial_pose_source")
+                or (nav_result.get("initial_pose_source") if isinstance(nav_result, dict) else ""),
+                "final_amcl_pose": final_amcl_pose,
+                "nav_result": nav_result,
                 "arm_result": payload.get("arm_result", {}),
                 "selected_solution": payload.get("selected_solution", {}),
             }
-            return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
+            latest_update = {latest_key: latest_value}
+            updated_keys = [latest_key]
+            if module == "car_approach_agent" and isinstance(final_amcl_pose, dict) and final_amcl_pose:
+                latest_update["last_car_approach_amcl_pose"] = final_amcl_pose
+                updated_keys.append("last_car_approach_amcl_pose")
+            return latest_update, {"updated_latest_keys": updated_keys}
 
         return {}, {}
 
@@ -1314,7 +1362,7 @@ class Orchestrator:
             return None, None
 
         target_map_x = 6.0 - float(center_world[2])
-        target_map_y = float(center_world[0]) - 3.314
+        target_map_y = float(center_world[0]) - 3.0
         return target_map_x, target_map_y
 
     def _goal_pose_for_rank(self, target_object: Dict[str, Any], rank: int) -> tuple[Dict[str, Any], str]:

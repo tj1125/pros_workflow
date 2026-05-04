@@ -40,7 +40,7 @@ if [ "$ARCH" = "aarch64" ]; then
         --network compose_cube_bridge_network \
         --runtime=nvidia \
         --env-file ./.env \
-        --env OLLAMA_URL="http://140.116.82.233:11434" \
+        --env OLLAMA_URL="http://192.168.75.24:11434" \
         $VOLUME_ARGS \
         registry.screamtrumpet.csie.ncku.edu.tw/unity_env/pros_rl_image:latest \
         bash -c "$DOCKER_CMD"
@@ -53,7 +53,7 @@ elif [ "$ARCH" = "x86_64" ] || ([ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]); 
         --network compose_cube_bridge_network \
         $GPU_FLAGS \
         --env-file ./.env \
-        --env OLLAMA_URL="http://140.116.82.233:11434" \
+        --env OLLAMA_URL="http://192.168.75.24:11434" \
         $VOLUME_ARGS \
         registry.screamtrumpet.csie.ncku.edu.tw/unity_env/pros_rl_image:latest \
         bash -c "$DOCKER_CMD"
@@ -63,7 +63,7 @@ elif [ "$ARCH" = "x86_64" ] || ([ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]); 
         docker run -it --rm \
             --network compose_cube_bridge_network \
             --env-file ./.env \
-            --env OLLAMA_URL="http://140.116.82.233:11434" \
+            --env OLLAMA_URL="http://192.168.75.24:11434" \
             $VOLUME_ARGS \
             registry.screamtrumpet.csie.ncku.edu.tw/unity_env/pros_rl_image:latest \
             bash -c "$DOCKER_CMD"

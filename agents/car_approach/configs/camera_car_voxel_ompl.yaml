@@ -15,7 +15,7 @@ output_root_dir: outputs/camera_car_voxel_ompl
 voxel_size_m: 0.0208008
 min_depth_m: 0.19
 # Only keep scene points within 1.0 m from the camera depth axis.
-max_depth_m: 1.0
+max_depth_m: 1.5
 flip_depth_vertical: true
 # Use every valid depth pixel so the voxel scene is as complete as possible.
 pixel_stride: 1

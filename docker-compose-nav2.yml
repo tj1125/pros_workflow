@@ -30,7 +30,7 @@ services:
     networks:
       - cube_bridge_network
       - compose_cube_bridge_network
-    command: "ros2 run unity_lidar_transformer lidar_transformer_node"
+    command: "ros2 run unity_lidar_transformer lidar_transformer_node --ros-args -r /scan:=/scan_raw"
     restart: "unless-stopped"
 
   # ------------------------------------

@@ -17,7 +17,7 @@ def load_ollama_model(model: str = None, base_url: str = None):
         dict 包含 base_url 與 model
     """
     return {
-        "base_url": base_url or os.getenv("OLLAMA_URL", "http://140.116.82.233:11434"),
+        "base_url": base_url or os.getenv("OLLAMA_URL", "http://192.168.75.24:11434"),
         "model": model
     }
 

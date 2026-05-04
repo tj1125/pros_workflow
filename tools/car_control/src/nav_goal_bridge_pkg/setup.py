@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "nav_goal_bridge_node = nav_goal_bridge_pkg.main:main",
+            "scan_throttle_node = nav_goal_bridge_pkg.scan_throttle:main",
         ],
     },
 )

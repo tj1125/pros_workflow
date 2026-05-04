@@ -37,6 +37,7 @@ class RuleNavigationConfig:
     initial_pose_publish_count: int = 5
     initial_pose_interval_sec: float = 0.1
     initial_pose_wait_for_subscribers_sec: float = 2.0
+    initial_pose_settle_sec: float = 2.0
     front_wheel_topic: str = DEFAULT_FRONT_WHEEL_TOPIC
     rear_wheel_topic: str = DEFAULT_REAR_WHEEL_TOPIC
     xy_tolerance_m: float = 0.03
@@ -249,6 +250,129 @@ def _wait_for_subscribers(node: Any, publisher: Any, topic: str, timeout_sec: fl
         print(f"[move_car] matched {subscriber_count} subscriber(s) on {topic}.", flush=True)
 
 
+def _make_initial_pose_stamped(node: Any, initial_pose_payload: dict[str, Any], frame_id: str) -> Any:
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+
+    msg = PoseWithCovarianceStamped()
+    msg.header.frame_id = frame_id
+    msg.header.stamp = node.get_clock().now().to_msg()
+    msg.pose.pose.position.x = float(initial_pose_payload["x"])
+    msg.pose.pose.position.y = float(initial_pose_payload["y"])
+    msg.pose.pose.position.z = float(initial_pose_payload["z"])
+    msg.pose.pose.orientation.x = float(initial_pose_payload["qx"])
+    msg.pose.pose.orientation.y = float(initial_pose_payload["qy"])
+    msg.pose.pose.orientation.z = float(initial_pose_payload["qz"])
+    msg.pose.pose.orientation.w = float(initial_pose_payload["qw"])
+    covariance = initial_pose_payload.get("covariance")
+    if covariance is not None and len(covariance) == 36:
+        msg.pose.covariance = [float(value) for value in covariance]
+    return msg
+
+
+def _publish_initial_pose_sequence(
+    *,
+    node: Any,
+    publisher: Any,
+    initial_pose_payload: dict[str, Any],
+    initial_pose_source: str,
+    config: RuleNavigationConfig,
+    log_prefix: str,
+) -> None:
+    import rclpy
+
+    _wait_for_subscribers(
+        node,
+        publisher,
+        config.initial_pose_topic,
+        config.initial_pose_wait_for_subscribers_sec,
+    )
+    initial_count = max(1, int(config.initial_pose_publish_count))
+    initial_interval = max(0.0, float(config.initial_pose_interval_sec))
+    for index in range(initial_count):
+        publisher.publish(
+            _make_initial_pose_stamped(
+                node,
+                initial_pose_payload,
+                config.initial_pose_frame_id,
+            )
+        )
+        published_count = index + 1
+        if published_count <= 3 or published_count % 10 == 0:
+            print(
+                f"[move_car] {log_prefix} {config.initial_pose_topic} #{published_count}: "
+                f"source={initial_pose_source} "
+                f"x={initial_pose_payload['x']:.3f} "
+                f"y={initial_pose_payload['y']:.3f} "
+                f"subscribers={publisher.get_subscription_count()}",
+                flush=True,
+            )
+        rclpy.spin_once(node, timeout_sec=0.01)
+        if index < initial_count - 1 and initial_interval > 0.0:
+            time.sleep(initial_interval)
+
+
+def _settle_after_initial_pose(node: Any, config: RuleNavigationConfig, next_phase: str) -> None:
+    import rclpy
+
+    settle_deadline = time.monotonic() + max(0.0, float(config.initial_pose_settle_sec))
+    if time.monotonic() < settle_deadline:
+        print(
+            f"[move_car] waiting {config.initial_pose_settle_sec:.1f}s after "
+            f"{config.initial_pose_topic} before {next_phase}.",
+            flush=True,
+        )
+    while rclpy.ok() and time.monotonic() < settle_deadline:
+        rclpy.spin_once(
+            node,
+            timeout_sec=min(0.05, max(0.0, settle_deadline - time.monotonic())),
+        )
+
+
+def publish_initial_pose(
+    initial_pose: Any,
+    *,
+    initial_pose_source: str = "initial_pose",
+    config: RuleNavigationConfig | None = None,
+) -> dict[str, Any]:
+    cfg = config or RuleNavigationConfig()
+    initial_pose_payload = _initial_pose_dict_from_any(initial_pose)
+
+    import rclpy
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+    from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+    owns_rclpy = False
+    node = None
+    try:
+        if not rclpy.ok():
+            rclpy.init(args=None)
+            owns_rclpy = True
+
+        node = Node("approach_agent_initial_pose_publisher")
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        initial_pose_publisher = node.create_publisher(PoseWithCovarianceStamped, cfg.initial_pose_topic, qos)
+        _publish_initial_pose_sequence(
+            node=node,
+            publisher=initial_pose_publisher,
+            initial_pose_payload=initial_pose_payload,
+            initial_pose_source=initial_pose_source,
+            config=cfg,
+            log_prefix="pre-published",
+        )
+        _settle_after_initial_pose(node, cfg, "subscribing /amcl_pose")
+        return initial_pose_payload
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if owns_rclpy and rclpy.ok():
+            rclpy.shutdown()
+
+
 def _pose_from_amcl_msg(amcl_msg: Any) -> GoalPose2D:
     pose = amcl_msg.pose.pose
     return GoalPose2D(
@@ -320,6 +444,7 @@ def drive_to_pose_by_rule(
     *,
     prefer_amcl_pose: bool = True,
     initial_pose: Any | None = None,
+    initial_pose_source: str = "initial_pose",
     config: RuleNavigationConfig | None = None,
 ) -> dict[str, Any]:
     cfg = config or RuleNavigationConfig()
@@ -377,23 +502,15 @@ def drive_to_pose_by_rule(
             10,
         )
 
-        def _make_initial_pose_stamped() -> PoseWithCovarianceStamped:
-            if initial_pose_payload is None:
-                raise RuntimeError("initial_pose_payload is not available.")
-            msg = PoseWithCovarianceStamped()
-            msg.header.frame_id = cfg.initial_pose_frame_id
-            msg.header.stamp = node.get_clock().now().to_msg()
-            msg.pose.pose.position.x = float(initial_pose_payload["x"])
-            msg.pose.pose.position.y = float(initial_pose_payload["y"])
-            msg.pose.pose.position.z = float(initial_pose_payload["z"])
-            msg.pose.pose.orientation.x = float(initial_pose_payload["qx"])
-            msg.pose.pose.orientation.y = float(initial_pose_payload["qy"])
-            msg.pose.pose.orientation.z = float(initial_pose_payload["qz"])
-            msg.pose.pose.orientation.w = float(initial_pose_payload["qw"])
-            covariance = initial_pose_payload.get("covariance")
-            if covariance is not None and len(covariance) == 36:
-                msg.pose.covariance = [float(value) for value in covariance]
-            return msg
+        def _latest_amcl_pose_payload() -> dict[str, Any]:
+            if latest_amcl_msg is None:
+                return {}
+            payload = _initial_pose_dict_from_any(latest_amcl_msg)
+            covariance = payload.get("covariance")
+            if covariance is not None:
+                payload["covariance"] = [float(value) for value in covariance]
+            payload["yaw"] = _pose_from_amcl_msg(latest_amcl_msg).yaw_rad
+            return payload
 
         def _wait_for_fresh_amcl(timeout_sec: float) -> GoalPose2D | None:
             deadline = time.monotonic() + max(0.0, float(timeout_sec))
@@ -470,31 +587,17 @@ def drive_to_pose_by_rule(
             flush=True,
         )
         if initial_pose_payload is None:
-            print("[move_car] /initialpose skipped: no capture-time /amcl_pose snapshot.", flush=True)
+            print(f"[move_car] /initialpose skipped: no {initial_pose_source}.", flush=True)
         elif initial_pose_publisher is not None:
-            _wait_for_subscribers(
-                node,
-                initial_pose_publisher,
-                cfg.initial_pose_topic,
-                cfg.initial_pose_wait_for_subscribers_sec,
+            _publish_initial_pose_sequence(
+                node=node,
+                publisher=initial_pose_publisher,
+                initial_pose_payload=initial_pose_payload,
+                initial_pose_source=initial_pose_source,
+                config=cfg,
+                log_prefix="published",
             )
-            initial_count = max(1, int(cfg.initial_pose_publish_count))
-            initial_interval = max(0.0, float(cfg.initial_pose_interval_sec))
-            for index in range(initial_count):
-                initial_pose_publisher.publish(_make_initial_pose_stamped())
-                published_count = index + 1
-                if published_count <= 3 or published_count % 10 == 0:
-                    print(
-                        f"[move_car] published {cfg.initial_pose_topic} #{published_count}: "
-                        "source=capture-time /amcl_pose "
-                        f"x={initial_pose_payload['x']:.3f} "
-                        f"y={initial_pose_payload['y']:.3f} "
-                        f"subscribers={initial_pose_publisher.get_subscription_count()}",
-                        flush=True,
-                    )
-                rclpy.spin_once(node, timeout_sec=0.01)
-                if index < initial_count - 1 and initial_interval > 0.0:
-                    time.sleep(initial_interval)
+            _settle_after_initial_pose(node, cfg, "moving")
 
         first_pose = _wait_for_fresh_amcl(cfg.amcl_wait_timeout_sec)
         if first_pose is None:
@@ -508,6 +611,7 @@ def drive_to_pose_by_rule(
                 "success": False,
                 "phase": "wait_amcl",
                 "target_pose": target_pose,
+                "final_amcl_pose": {},
                 "message": "No fresh /amcl_pose received for rule navigation.",
             }
 
@@ -533,6 +637,7 @@ def drive_to_pose_by_rule(
                 "success": False,
                 "phase": "face_target",
                 "target_pose": target_pose,
+                "final_amcl_pose": _latest_amcl_pose_payload(),
                 "message": "Rule navigation failed while facing the target point.",
             }
 
@@ -557,6 +662,7 @@ def drive_to_pose_by_rule(
                 "success": False,
                 "phase": "drive_to_target",
                 "target_pose": target_pose,
+                "final_amcl_pose": _latest_amcl_pose_payload(),
                 "message": "Rule navigation failed while driving to target position.",
             }
 
@@ -580,6 +686,7 @@ def drive_to_pose_by_rule(
                 "success": False,
                 "phase": "align_target_yaw",
                 "target_pose": target_pose,
+                "final_amcl_pose": _latest_amcl_pose_payload(),
                 "message": "Rule navigation failed while aligning target yaw.",
             }
 
@@ -600,6 +707,7 @@ def drive_to_pose_by_rule(
             "success": True,
             "phase": "done",
             "target_pose": target_pose,
+            "final_amcl_pose": _latest_amcl_pose_payload(),
             "final_distance_m": final_distance,
             "final_yaw_error_rad": final_yaw_error,
         }

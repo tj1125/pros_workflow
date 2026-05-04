@@ -22,7 +22,8 @@ target_approach_dir_unity_xz: null
 
 # ── Map (navigable region) ────────────────────────────────────────────────────
 # Path relative to REPO_ROOT (VLM_RL/); _resolve_input_path checks REPO_ROOT as a search root.
-map_yaml_path: tools/car_control/src/nav_goal_bridge_pkg/config/map01.yaml
+# keepout_map.yaml references keepout_map.pgm via its ROS map `image` field.
+map_yaml_path: tools/car_control/src/nav_goal_bridge_pkg/config/keepout_map.yaml
 
 # ── Planner ───────────────────────────────────────────────────────────────────
 planner_config_path: configs/pybullet_ompl.yaml

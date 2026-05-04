@@ -6,7 +6,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
-from action_interface.action import NavGoal, ArmGoal
+from action_interface.action import NavGoal
 from std_msgs.msg import String
 from car_control_pkg.car_action_server import NavigationActionServer
 from car_control_pkg.car_control_common import BaseCarControlNode
@@ -19,7 +19,6 @@ class AutoNavStarter(Node):
         super().__init__('auto_nav_starter')
         self.car_control_node = car_control_node
         self.nav_action_client = ActionClient(self, NavGoal, 'nav_action_server')
-        self.arm_action_client = ActionClient(self, ArmGoal, 'arm_action_server')
         self.nav_result_pub = self.create_publisher(String, "/auto_nav/result", 10)
         self.approach_stop_xy_tolerance_m = float(
             self.car_control_node.get_parameter("approach_stop_xy_tolerance_m").value
@@ -139,14 +138,6 @@ class AutoNavStarter(Node):
             self._publish_nav_result(False, "nav_action_server unavailable")
             self.navigating = False
             self._active_goal_key = None
-
-        # 確認並發送手臂目標
-        if self.arm_action_client.wait_for_server(timeout_sec=1.0):
-            arm_goal_msg = ArmGoal.Goal()
-            arm_goal_msg.mode = 'catch'
-            self.arm_action_client.send_goal_async(arm_goal_msg)
-        else:
-            self.get_logger().warn('arm_action_server 不可用 (不影響導航)')
 
     def nav_goal_response_callback(self, future):
         goal_handle = future.result()

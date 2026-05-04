@@ -81,6 +81,8 @@ class ApproachAgentRunConfig:
     camera_config_path: Path = Path("configs/camera_car_voxel_ompl.yaml")
     grasp_json_path: Path | None = None
     grasp_result_payload: dict[str, object] | None = None
+    initial_pose: dict[str, object] | None = None
+    initial_pose_source: str = ""
     allow_missing_amcl: bool = False
     run_rule_navigation: bool = True
     evaluate_current_pose_only: bool = False
@@ -98,6 +100,9 @@ BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
 VEHICLE_BASE_LENGTH_X_M = 0.30
 VEHICLE_BASE_LENGTH_Y_M = 0.32
+SYMMETRIC_JOINT_FOLD_PERIOD_DEG_BY_INDEX = {
+    3: 180.0,
+}
 
 
 PLANNING_CAMERA_TO_PB_LOCAL = np.asarray(
@@ -462,75 +467,64 @@ def _print_selected_base_link_ros_map_banner(
     )
 
 
+def _log_initial_pose_reference(initial_pose: object | None, initial_pose_source: str) -> None:
+    if initial_pose is None:
+        print(
+            f"[base_approach] initial pose reference unavailable: no {initial_pose_source}.",
+            flush=True,
+        )
+        return
+
+    try:
+        initial_pose_payload = move_car._initial_pose_dict_from_any(initial_pose)
+    except Exception as exc:
+        print(
+            f"[base_approach] initial pose reference invalid ({initial_pose_source}): {exc}",
+            flush=True,
+        )
+        return
+
+    initial_yaw = _yaw_from_quaternion_xyzw(
+        (
+            initial_pose_payload["qx"],
+            initial_pose_payload["qy"],
+            initial_pose_payload["qz"],
+            initial_pose_payload["qw"],
+        )
+    )
+    stamp = getattr(initial_pose, "stamp_sec", None)
+    stamp_text = "" if stamp is None else f" stamp={stamp}"
+    print(
+        f"[base_approach] initial pose reference={initial_pose_source}: "
+        f"x={initial_pose_payload['x']:.3f} "
+        f"y={initial_pose_payload['y']:.3f} "
+        f"yaw={initial_yaw:.3f}"
+        f"{stamp_text}. "
+        "/initialpose publish is disabled for car_approach.",
+        flush=True,
+    )
+
+
 def _run_rule_navigation_for_solution(
     solution: dict[str, object],
     *,
-    initial_pose: AmclPoseSnapshot | None,
+    initial_pose: object | None,
+    initial_pose_source: str,
 ) -> dict[str, object]:
     if not _env_flag("APPROACH_AGENT_RULE_NAV", True):
         print("[base_approach] rule navigation disabled by APPROACH_AGENT_RULE_NAV.", flush=True)
         return {"success": False, "skipped": True, "phase": "disabled_by_env"}
 
-    publish_initial_pose = _env_flag("APPROACH_AGENT_PUBLISH_INITIAL_POSE", True)
-    initial_pose_topic = os.getenv("APPROACH_AGENT_INITIAL_POSE_TOPIC", move_car.DEFAULT_INITIAL_POSE_TOPIC).strip()
-    initial_pose_topic = initial_pose_topic or move_car.DEFAULT_INITIAL_POSE_TOPIC
-    initial_pose_publish_count = int(os.getenv("APPROACH_AGENT_INITIAL_POSE_PUBLISH_COUNT", "5"))
-    initial_pose_interval_sec = float(os.getenv("APPROACH_AGENT_INITIAL_POSE_INTERVAL_SEC", "0.1"))
-    initial_pose_wait_for_subscribers_sec = float(
-        os.getenv("APPROACH_AGENT_INITIAL_POSE_WAIT_FOR_SUBSCRIBERS_SEC", "2.0")
-    )
-    rule_config = move_car.RuleNavigationConfig(
-        amcl_topic=os.getenv("APPROACH_AGENT_AMCL_TOPIC", move_car.DEFAULT_AMCL_TOPIC).strip()
-        or move_car.DEFAULT_AMCL_TOPIC,
-        initial_pose_topic=initial_pose_topic,
-        initial_pose_frame_id=move_car.DEFAULT_FRAME_ID,
-        initial_pose_publish_count=initial_pose_publish_count if publish_initial_pose else 0,
-        initial_pose_interval_sec=initial_pose_interval_sec,
-        initial_pose_wait_for_subscribers_sec=initial_pose_wait_for_subscribers_sec,
-        front_wheel_topic=os.getenv(
-            "APPROACH_AGENT_FRONT_WHEEL_TOPIC",
-            move_car.DEFAULT_FRONT_WHEEL_TOPIC,
-        ).strip()
-        or move_car.DEFAULT_FRONT_WHEEL_TOPIC,
-        rear_wheel_topic=os.getenv(
-            "APPROACH_AGENT_REAR_WHEEL_TOPIC",
-            move_car.DEFAULT_REAR_WHEEL_TOPIC,
-        ).strip()
-        or move_car.DEFAULT_REAR_WHEEL_TOPIC,
-        xy_tolerance_m=float(os.getenv("APPROACH_AGENT_RULE_XY_TOLERANCE_M", "0.03")),
-        face_target_yaw_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_FACE_YAW_TOLERANCE_RAD", "0.08")),
-        drive_heading_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_DRIVE_HEADING_TOLERANCE_RAD", "0.14")),
-        final_yaw_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_FINAL_YAW_TOLERANCE_RAD", "0.08")),
-        slow_approach_distance_m=float(os.getenv("APPROACH_AGENT_RULE_SLOW_DISTANCE_M", "0.12")),
-        command_period_sec=float(os.getenv("APPROACH_AGENT_RULE_COMMAND_PERIOD_SEC", "0.1")),
-        amcl_wait_timeout_sec=float(os.getenv("APPROACH_AGENT_RULE_AMCL_WAIT_TIMEOUT_SEC", "5.0")),
-        amcl_stale_timeout_sec=float(os.getenv("APPROACH_AGENT_RULE_AMCL_STALE_TIMEOUT_SEC", "1.0")),
-        max_duration_sec=float(os.getenv("APPROACH_AGENT_RULE_MAX_DURATION_SEC", "120.0")),
-        stop_repeat=int(os.getenv("APPROACH_AGENT_RULE_STOP_REPEAT", "5")),
-        stop_interval_sec=float(os.getenv("APPROACH_AGENT_RULE_STOP_INTERVAL_SEC", "0.03")),
-        log_interval_sec=float(os.getenv("APPROACH_AGENT_RULE_LOG_INTERVAL_SEC", "1.0")),
-    )
-    if initial_pose is None:
-        print(
-            "[base_approach] /initialpose source unavailable: no capture-time /amcl_pose.",
-            flush=True,
-        )
-    else:
-        initial_yaw = _yaw_from_quaternion_xyzw(initial_pose.orientation_xyzw)
-        print(
-            "[base_approach] /initialpose source=capture-time /amcl_pose: "
-            f"x={initial_pose.position_xyz[0]:.3f} "
-            f"y={initial_pose.position_xyz[1]:.3f} "
-            f"yaw={initial_yaw:.3f} "
-            f"stamp={initial_pose.stamp_sec}",
-            flush=True,
-        )
+    rule_config = _rule_navigation_config()
+    _log_initial_pose_reference(initial_pose, initial_pose_source)
     result = move_car.drive_to_pose_by_rule(
         solution,
-        initial_pose=initial_pose if publish_initial_pose else None,
+        initial_pose=None,
+        initial_pose_source="car_approach disabled /initialpose",
         config=rule_config,
         prefer_amcl_pose=True,
     )
+    result["initial_pose_source"] = initial_pose_source
     print(
         "[base_approach] rule navigation result = "
         f"{result}.",
@@ -808,12 +802,12 @@ def _capture_live_scene_voxels(
     if captured_amcl_pose is None:
         print(
             "[base_approach] RGBD capture had no simultaneous /amcl_pose; "
-            "/initialpose will be skipped before rule navigation.",
+            "continuing with the latest available localization pose.",
             flush=True,
         )
     else:
         print(
-            "[base_approach] recorded capture-time /amcl_pose for /initialpose: "
+            "[base_approach] recorded capture-time /amcl_pose reference: "
             f"x={captured_amcl_pose.position_xyz[0]:.3f} "
             f"y={captured_amcl_pose.position_xyz[1]:.3f} "
             f"stamp={captured_amcl_pose.stamp_sec}",
@@ -1115,18 +1109,41 @@ def _robot_collides_with_obstacles(
     return False
 
 
+def _fold_symmetric_joint_positions_rad(joint_positions_rad: np.ndarray) -> np.ndarray:
+    folded_rad = np.asarray(joint_positions_rad, dtype=np.float64).reshape(-1).copy()
+    for joint_index, period_deg in SYMMETRIC_JOINT_FOLD_PERIOD_DEG_BY_INDEX.items():
+        if 0 <= int(joint_index) < folded_rad.size:
+            folded_deg = float(math.degrees(float(folded_rad[int(joint_index)])) % float(period_deg))
+            folded_rad[int(joint_index)] = math.radians(folded_deg)
+    return folded_rad
+
+
+def _periodic_delta_rad(value_rad: float, reference_rad: float, period_rad: float) -> float:
+    half_period = float(period_rad) * 0.5
+    return float((float(value_rad) - float(reference_rad) + half_period) % float(period_rad) - half_period)
+
+
 def _joint_limit_metrics(
     joint_solution_rad: np.ndarray,
     planning_config,
 ) -> tuple[float, float, float]:
+    joint_solution_for_limits_rad = _fold_symmetric_joint_positions_rad(joint_solution_rad)
     lower_bounds_rad = np.radians([float(lower) for lower, _ in planning_config.joint_bounds_deg]).astype(np.float64)
     upper_bounds_rad = np.radians([float(upper) for _, upper in planning_config.joint_bounds_deg]).astype(np.float64)
     joint_span_rad = np.maximum(upper_bounds_rad - lower_bounds_rad, 1e-6)
-    margin_to_lower = joint_solution_rad - lower_bounds_rad
-    margin_to_upper = upper_bounds_rad - joint_solution_rad
+    margin_to_lower = joint_solution_for_limits_rad - lower_bounds_rad
+    margin_to_upper = upper_bounds_rad - joint_solution_for_limits_rad
     margin_ratio = np.minimum(margin_to_lower, margin_to_upper) / joint_span_rad
     reset_joint_rad = np.radians(np.asarray(planning_config.joint_reset_deg, dtype=np.float64))
-    reset_delta_norm = (joint_solution_rad - reset_joint_rad) / joint_span_rad
+    reset_delta_rad = joint_solution_for_limits_rad - reset_joint_rad
+    for joint_index, period_deg in SYMMETRIC_JOINT_FOLD_PERIOD_DEG_BY_INDEX.items():
+        if 0 <= int(joint_index) < reset_delta_rad.size:
+            reset_delta_rad[int(joint_index)] = _periodic_delta_rad(
+                joint_solution_for_limits_rad[int(joint_index)],
+                reset_joint_rad[int(joint_index)],
+                math.radians(float(period_deg)),
+            )
+    reset_delta_norm = reset_delta_rad / joint_span_rad
     return (
         float(np.min(margin_ratio)),
         float(np.mean(margin_ratio)),
@@ -1421,8 +1438,22 @@ def _attempt_ik_at_base_pose(
     joint_limit_margin_min_ratio = None
     joint_limit_margin_mean_ratio = None
     joint_reset_delta_norm_l2 = None
+    raw_joint_solution_rad = None
+    folded_joint_indices: list[int] = []
     if ik_joint_poses is not None:
-        joint_solution_rad = np.asarray(ik_joint_poses[: len(controllable_joint_ids)], dtype=np.float64)
+        raw_joint_solution_rad = np.asarray(ik_joint_poses[: len(controllable_joint_ids)], dtype=np.float64)
+        joint_solution_rad = _fold_symmetric_joint_positions_rad(raw_joint_solution_rad)
+        folded_joint_indices = [
+            int(joint_index)
+            for joint_index in SYMMETRIC_JOINT_FOLD_PERIOD_DEG_BY_INDEX
+            if 0 <= int(joint_index) < raw_joint_solution_rad.size
+            and not math.isclose(
+                float(raw_joint_solution_rad[int(joint_index)]),
+                float(joint_solution_rad[int(joint_index)]),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+        ]
         (
             joint_limit_margin_min_ratio,
             joint_limit_margin_mean_ratio,
@@ -1467,6 +1498,14 @@ def _attempt_ik_at_base_pose(
         "joint_limit_margin_mean_ratio": joint_limit_margin_mean_ratio,
         "joint_reset_delta_norm_l2": joint_reset_delta_norm_l2,
     }
+    if raw_joint_solution_rad is not None and folded_joint_indices:
+        result["ik_joint_solution_raw_rad"] = raw_joint_solution_rad
+        result["ik_joint_solution_raw_deg"] = np.degrees(raw_joint_solution_rad)
+        result["ik_joint_solution_folded_indices"] = folded_joint_indices
+        result["ik_joint_solution_fold_period_deg_by_index"] = {
+            int(index): float(period_deg)
+            for index, period_deg in SYMMETRIC_JOINT_FOLD_PERIOD_DEG_BY_INDEX.items()
+        }
     result.update(ompl_result)
     return result
 
@@ -1547,7 +1586,7 @@ def _make_sampled_ik_solution_record(
     ros_map_pose = sample_candidate["ros_map_pose"]
     ros_map_amcl_pose = sample_candidate.get("ros_map_amcl_pose")
 
-    return {
+    solution_record = {
         "sample_index": int(sample_candidate["sample_index"]),
         "sample_source": str(sample_candidate.get("sample_source", "ros_map")),
         "ros_map_sample_region_cell_count": int(sample_stats["region_cell_count"]),
@@ -1603,6 +1642,21 @@ def _make_sampled_ik_solution_record(
         "ompl_error": ik_attempt.get("ompl_error"),
         "refinement_applied": False,
     }
+    if "ik_joint_solution_raw_rad" in ik_attempt:
+        raw_joint_solution_rad = np.asarray(ik_attempt["ik_joint_solution_raw_rad"], dtype=np.float64)
+        solution_record["ik_joint_solution_raw_rad"] = raw_joint_solution_rad.astype(float).tolist()
+        solution_record["ik_joint_solution_raw_deg"] = np.degrees(raw_joint_solution_rad).astype(float).tolist()
+        solution_record["ik_joint_solution_folded_indices"] = [
+            int(index) for index in ik_attempt.get("ik_joint_solution_folded_indices", [])
+        ]
+        solution_record["ik_joint_solution_fold_period_deg_by_index"] = {
+            str(index): float(period_deg)
+            for index, period_deg in ik_attempt.get(
+                "ik_joint_solution_fold_period_deg_by_index",
+                {},
+            ).items()
+        }
+    return solution_record
 
 
 def _rank_rgba(rank: int) -> tuple[float, float, float, float]:
@@ -2507,6 +2561,45 @@ def _resolve_optional_path(path: Path | None) -> Path | None:
     return Path(path).expanduser().resolve()
 
 
+def _rule_navigation_config() -> move_car.RuleNavigationConfig:
+    initial_pose_topic = os.getenv("APPROACH_AGENT_INITIAL_POSE_TOPIC", move_car.DEFAULT_INITIAL_POSE_TOPIC).strip()
+    initial_pose_topic = initial_pose_topic or move_car.DEFAULT_INITIAL_POSE_TOPIC
+    return move_car.RuleNavigationConfig(
+        amcl_topic=os.getenv("APPROACH_AGENT_AMCL_TOPIC", move_car.DEFAULT_AMCL_TOPIC).strip()
+        or move_car.DEFAULT_AMCL_TOPIC,
+        initial_pose_topic=initial_pose_topic,
+        initial_pose_frame_id=move_car.DEFAULT_FRAME_ID,
+        initial_pose_publish_count=0,
+        initial_pose_interval_sec=float(os.getenv("APPROACH_AGENT_INITIAL_POSE_INTERVAL_SEC", "0.1")),
+        initial_pose_wait_for_subscribers_sec=float(
+            os.getenv("APPROACH_AGENT_INITIAL_POSE_WAIT_FOR_SUBSCRIBERS_SEC", "2.0")
+        ),
+        initial_pose_settle_sec=float(os.getenv("APPROACH_AGENT_INITIAL_POSE_SETTLE_SEC", "2.0")),
+        front_wheel_topic=os.getenv(
+            "APPROACH_AGENT_FRONT_WHEEL_TOPIC",
+            move_car.DEFAULT_FRONT_WHEEL_TOPIC,
+        ).strip()
+        or move_car.DEFAULT_FRONT_WHEEL_TOPIC,
+        rear_wheel_topic=os.getenv(
+            "APPROACH_AGENT_REAR_WHEEL_TOPIC",
+            move_car.DEFAULT_REAR_WHEEL_TOPIC,
+        ).strip()
+        or move_car.DEFAULT_REAR_WHEEL_TOPIC,
+        xy_tolerance_m=float(os.getenv("APPROACH_AGENT_RULE_XY_TOLERANCE_M", "0.03")),
+        face_target_yaw_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_FACE_YAW_TOLERANCE_RAD", "0.08")),
+        drive_heading_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_DRIVE_HEADING_TOLERANCE_RAD", "0.14")),
+        final_yaw_tolerance_rad=float(os.getenv("APPROACH_AGENT_RULE_FINAL_YAW_TOLERANCE_RAD", "0.08")),
+        slow_approach_distance_m=float(os.getenv("APPROACH_AGENT_RULE_SLOW_DISTANCE_M", "0.12")),
+        command_period_sec=float(os.getenv("APPROACH_AGENT_RULE_COMMAND_PERIOD_SEC", "0.1")),
+        amcl_wait_timeout_sec=float(os.getenv("APPROACH_AGENT_RULE_AMCL_WAIT_TIMEOUT_SEC", "5.0")),
+        amcl_stale_timeout_sec=float(os.getenv("APPROACH_AGENT_RULE_AMCL_STALE_TIMEOUT_SEC", "1.0")),
+        max_duration_sec=float(os.getenv("APPROACH_AGENT_RULE_MAX_DURATION_SEC", "120.0")),
+        stop_repeat=int(os.getenv("APPROACH_AGENT_RULE_STOP_REPEAT", "5")),
+        stop_interval_sec=float(os.getenv("APPROACH_AGENT_RULE_STOP_INTERVAL_SEC", "0.03")),
+        log_interval_sec=float(os.getenv("APPROACH_AGENT_RULE_LOG_INTERVAL_SEC", "1.0")),
+    )
+
+
 def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict[str, object]:
     run_config = run_config or ApproachAgentRunConfig()
     started_at = time.time()
@@ -2658,6 +2751,7 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
     }
     phase = "sampled"
     message = "Base approach target sampled."
+    initial_pose_source = ""
     if goal_pose_solution is None:
         phase = "no_target_pose"
         message = "No target pose solution available; rule navigation was not started."
@@ -2668,9 +2762,16 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         nav_result = {"success": False, "skipped": True, "phase": "disabled_by_caller"}
         print("[base_approach] rule navigation disabled by caller.", flush=True)
     else:
+        initial_pose = run_config.initial_pose or live_scene.captured_amcl_pose
+        initial_pose_source = (
+            run_config.initial_pose_source or "provided initial_pose"
+            if run_config.initial_pose
+            else "capture-time /amcl_pose"
+        )
         nav_result = _run_rule_navigation_for_solution(
             goal_pose_solution,
-            initial_pose=live_scene.captured_amcl_pose,
+            initial_pose=initial_pose,
+            initial_pose_source=initial_pose_source,
         )
         if bool(nav_result.get("success", False)):
             phase = "done"
@@ -2718,6 +2819,8 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         "phase": phase,
         "message": message,
         "next_agent": next_agent,
+        "initial_pose_source": nav_result.get("initial_pose_source", initial_pose_source),
+        "final_amcl_pose": nav_result.get("final_amcl_pose", {}),
         "grasp_source": grasp_source,
         "grasp_count": len(grasp_candidates),
         "total_grasp_count": total_grasp_count,

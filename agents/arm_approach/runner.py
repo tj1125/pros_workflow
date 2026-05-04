@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import time
 from pathlib import Path
 
@@ -26,7 +27,10 @@ from agents.arm_approach.move_arm import move_arm_for_solution
 
 logger = logging.getLogger(__name__)
 CAR_APPROACH_DIR = Path(__file__).resolve().parents[1] / "car_approach"
-ARM_APPROACH_ORIENTATION_TOLERANCE_DEG = 90.0
+ARM_APPROACH_POSITION_TOLERANCE_M = 0.05
+ARM_APPROACH_RPY_TOLERANCE_DEG = 30.0
+ARM_APPROACH_GRIPPER_OPEN_JOINT_INDEX = 4
+ARM_APPROACH_GRIPPER_OPEN_DEG = 80.0
 CURRENT_BASE_LINK_LOCAL_XY = (0.0, 0.0)
 CURRENT_BASE_LINK_LOCAL_YAW_RAD = 0.0
 
@@ -50,6 +54,91 @@ def _quat_xyzw_yaw(p_mod, quat_xyzw: np.ndarray, fallback_yaw_rad: float = 0.0) 
     except Exception:
         return float(fallback_yaw_rad)
     return float(euler_xyz[2])
+
+
+def _quat_xyzw_rpy_rad(p_mod, quat_xyzw: np.ndarray) -> np.ndarray:
+    return np.asarray(
+        p_mod.getEulerFromQuaternion(np.asarray(quat_xyzw, dtype=np.float64).reshape(4).tolist()),
+        dtype=np.float64,
+    )
+
+
+def _annotate_rpy_error(
+    ik_attempt: dict[str, object],
+    *,
+    p_mod,
+    target_quat_pb: np.ndarray,
+) -> dict[str, object]:
+    final_quat = np.asarray(ik_attempt["final_ee_orientation_xyzw"], dtype=np.float64).reshape(4)
+    target_quat = np.asarray(target_quat_pb, dtype=np.float64).reshape(4)
+    try:
+        final_rpy = _quat_xyzw_rpy_rad(p_mod, final_quat)
+        target_rpy = _quat_xyzw_rpy_rad(p_mod, target_quat)
+        error_rad = np.asarray(
+            [_wrap_angle_rad(final_value - target_value) for final_value, target_value in zip(final_rpy, target_rpy)],
+            dtype=np.float64,
+        )
+        error_deg = np.degrees(error_rad)
+        ik_attempt["ee_rpy_error_deg"] = {
+            "roll": float(error_deg[0]),
+            "pitch": float(error_deg[1]),
+            "yaw": float(error_deg[2]),
+        }
+        ik_attempt["ee_rpy_error_abs_deg"] = {
+            "roll": float(abs(error_deg[0])),
+            "pitch": float(abs(error_deg[1])),
+            "yaw": float(abs(error_deg[2])),
+        }
+        ik_attempt["ee_rpy_error_abs_max_deg"] = float(np.max(np.abs(error_deg)))
+    except Exception as exc:
+        ik_attempt["ee_rpy_error_deg"] = None
+        ik_attempt["ee_rpy_error_abs_deg"] = None
+        ik_attempt["ee_rpy_error_abs_max_deg"] = None
+        ik_attempt["ee_rpy_error_error"] = str(exc)
+    return ik_attempt
+
+
+def _arm_approach_ik_attempt_is_feasible(
+    ik_attempt: dict[str, object],
+    *,
+    position_tolerance_m: float,
+    rpy_tolerance_deg: float,
+) -> bool:
+    rpy_error_abs_max = ik_attempt.get("ee_rpy_error_abs_max_deg")
+    return (
+        ik_attempt.get("ik_joint_solution_rad") is not None
+        and bool(ik_attempt.get("collision_free", False))
+        and float(ik_attempt.get("ee_position_error_m", float("inf"))) <= float(position_tolerance_m)
+        and rpy_error_abs_max is not None
+        and float(rpy_error_abs_max) <= float(rpy_tolerance_deg)
+    )
+
+
+def _joint_reset_rad_from_planning_config(planning_config) -> list[float]:
+    return [math.radians(float(value)) for value in planning_config.joint_reset_deg]
+
+
+def _with_open_gripper_before_motion(
+    solution: dict[str, object],
+    planning_config,
+) -> tuple[dict[str, object], list[float]]:
+    gripper_index = int(ARM_APPROACH_GRIPPER_OPEN_JOINT_INDEX)
+    gripper_open_rad = math.radians(float(ARM_APPROACH_GRIPPER_OPEN_DEG))
+    goal_joint_positions = [float(value) for value in solution["ik_joint_solution_rad"]]
+    start_joint_positions = _joint_reset_rad_from_planning_config(planning_config)
+
+    if 0 <= gripper_index < len(goal_joint_positions):
+        goal_joint_positions[gripper_index] = gripper_open_rad
+    if 0 <= gripper_index < len(start_joint_positions):
+        start_joint_positions[gripper_index] = gripper_open_rad
+
+    adjusted_solution = dict(solution)
+    adjusted_solution["ik_joint_solution_rad"] = goal_joint_positions
+    adjusted_solution["ik_joint_solution_deg"] = [math.degrees(value) for value in goal_joint_positions]
+    adjusted_solution["preopened_gripper_joint_index"] = gripper_index
+    adjusted_solution["preopened_gripper_target_deg"] = float(ARM_APPROACH_GRIPPER_OPEN_DEG)
+    adjusted_solution["preopened_gripper_target_rad"] = gripper_open_rad
+    return adjusted_solution, start_joint_positions
 
 
 def _current_reset_ee_pose(
@@ -136,7 +225,9 @@ def _annotate_ik_attempt(
 
 
 def _best_effort_ik_sort_key(ik_attempt: dict[str, object]) -> tuple[float, float, float, int]:
-    orientation_error = ik_attempt.get("ee_orientation_error_deg")
+    orientation_error = ik_attempt.get("ee_rpy_error_abs_max_deg")
+    if orientation_error is None:
+        orientation_error = ik_attempt.get("ee_orientation_error_deg")
     return (
         float(ik_attempt.get("ee_position_error_m", float("inf"))),
         float("inf") if orientation_error is None else float(orientation_error),
@@ -152,11 +243,59 @@ def _ik_attempt_can_be_best_effort(ik_attempt: dict[str, object]) -> bool:
     )
 
 
+def _normalized_grasp_payload(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    nested_result = payload.get("result")
+    if isinstance(nested_result, dict):
+        return nested_result
+    raw_result = payload.get("raw_result")
+    if isinstance(raw_result, dict):
+        return raw_result
+    return payload
+
+
+def _grasp_payload_has_pose(payload: object) -> bool:
+    raw_payload = _normalized_grasp_payload(payload)
+    valid_grasps = raw_payload.get("valid_grasp_poses_camera")
+    if isinstance(valid_grasps, list) and any(isinstance(item, dict) for item in valid_grasps):
+        return True
+    best_grasp = raw_payload.get("best_grasp_pose_camera")
+    return isinstance(best_grasp, dict) and bool(best_grasp)
+
+
+def _select_grasp_payload(payload: dict[str, object]) -> dict[str, object] | None:
+    for key in ("grasp_result_payload", "grasp_result"):
+        if key in payload:
+            candidate = payload.get(key)
+            if _grasp_payload_has_pose(candidate):
+                return _normalized_grasp_payload(candidate)
+            return None
+    latest_grasp = payload.get("latest_grasp_result")
+    if _grasp_payload_has_pose(latest_grasp):
+        return _normalized_grasp_payload(latest_grasp)
+    if _grasp_payload_has_pose(payload):
+        return _normalized_grasp_payload(payload)
+    return None
+
+
 def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> dict[str, object]:
     """
     Evaluates the IK from the *current* amcl pose and moves the arm.
     """
     started_at = time.time()
+    grasp_payload = _select_grasp_payload(payload)
+    if grasp_payload is None:
+        return {
+            "success": False,
+            "status_code": "ARM_APPROACH_NO_GRASP",
+            "phase": "grasp_payload",
+            "message": "No GraspGen grasp pose data was provided to arm_approach.",
+            "graspgen_result_available": False,
+            "initialpose_published": False,
+            "next_agent": None,
+            "exec_latency": time.time() - started_at,
+        }
     
     # Load configs
     base_config_path = CAR_APPROACH_DIR / "configs" / "base_pose_sampling.yaml"
@@ -192,12 +331,24 @@ def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> d
     camera_position_pb = live_scene.camera_position_pb
 
     # Load grasp records
-    visualization_records, _grasp_candidates = sample_logic.load_grasp_visualization_records_from_payload(
-        payload.get("grasp_result", {}),
-        camera_to_pb_rotation=camera_to_pb_rotation,
-        camera_position_pb=camera_position_pb,
-        source_label="payload.grasp_result",
-    )
+    try:
+        visualization_records, _grasp_candidates = sample_logic.load_grasp_visualization_records_from_payload(
+            grasp_payload,
+            camera_to_pb_rotation=camera_to_pb_rotation,
+            camera_position_pb=camera_position_pb,
+            source_label="arm_approach.grasp_payload",
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return {
+            "success": False,
+            "status_code": "ARM_APPROACH_NO_GRASP",
+            "phase": "grasp_payload",
+            "message": f"Invalid GraspGen grasp pose data for arm_approach: {exc}",
+            "graspgen_result_available": False,
+            "initialpose_published": False,
+            "next_agent": None,
+            "exec_latency": time.time() - started_at,
+        }
     
     # Get current AMCL pose
     current_amcl_pose = _amcl_snapshot_to_ros_map_pose(live_scene.amcl_pose)
@@ -277,8 +428,15 @@ def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> d
         best_effort_solution = None
         best_effort_record = None
         attempted_count = 0
-        position_tolerance_m = float(cfg.get("position_tolerance_m", planning_config.position_tolerance_m))
-        orientation_tolerance_deg = ARM_APPROACH_ORIENTATION_TOLERANCE_DEG
+        position_tolerance_m = float(
+            os.getenv(
+                "APPROACH_AGENT_ARM_POSITION_TOLERANCE_M",
+                str(max(float(cfg.get("position_tolerance_m", planning_config.position_tolerance_m)), ARM_APPROACH_POSITION_TOLERANCE_M)),
+            )
+        )
+        rpy_tolerance_deg = float(
+            os.getenv("APPROACH_AGENT_ARM_RPY_TOLERANCE_DEG", str(ARM_APPROACH_RPY_TOLERANCE_DEG))
+        )
         for record in ranked_records:
             target_pb = np.asarray(record["target_pb"], dtype=np.float64)
             target_quat_pb = np.asarray(record["target_quat_pb"], dtype=np.float64)
@@ -301,15 +459,22 @@ def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> d
                 target_pb=target_pb,
                 target_quat_pb=target_quat_pb,
             )
+            _annotate_rpy_error(
+                ik_attempt,
+                p_mod=p_mod,
+                target_quat_pb=target_quat_pb,
+            )
             ik_attempt["current_amcl_pb_xyz"] = current_amcl_pb_xyz.astype(float).tolist()
             ik_attempt["current_amcl_pb_yaw_rad"] = float(current_pb_yaw)
             
-            feasible = sample_logic._ik_attempt_is_feasible(
+            feasible = _arm_approach_ik_attempt_is_feasible(
                 ik_attempt,
                 position_tolerance_m=position_tolerance_m,
-                orientation_tolerance_deg=orientation_tolerance_deg,
+                rpy_tolerance_deg=rpy_tolerance_deg,
             )
             ik_attempt["ik_reachable"] = bool(feasible)
+            ik_attempt["arm_approach_position_tolerance_m"] = float(position_tolerance_m)
+            ik_attempt["arm_approach_rpy_tolerance_deg"] = float(rpy_tolerance_deg)
             if _ik_attempt_can_be_best_effort(ik_attempt) and (
                 best_effort_solution is None
                 or _best_effort_ik_sort_key(ik_attempt) < _best_effort_ik_sort_key(best_effort_solution)
@@ -353,6 +518,7 @@ def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> d
                 "ik_solution_rad": best_effort_solution["ik_joint_solution_rad"],
                 "attempted_grasp_count": attempted_count,
                 "ranked_grasp_count": len(ranked_records),
+                "initialpose_published": False,
                 "next_agent": None,
                 "exec_latency": time.time() - started_at,
             }
@@ -364,10 +530,15 @@ def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> d
             "message": "No feasible or collision-free best-effort IK solution for the arm at the current base pose.",
             "attempted_grasp_count": attempted_count,
             "ranked_grasp_count": len(ranked_records),
+            "initialpose_published": False,
             "next_agent": None,
             "exec_latency": time.time() - started_at,
         }
 
+    selected_solution, start_joint_positions_rad = _with_open_gripper_before_motion(
+        selected_solution,
+        planning_config,
+    )
     # Extract joint rads and trigger move_arm
     joint_rads = selected_solution["ik_joint_solution_rad"]
     logger.info(f"Found feasible IK. Moving arm to joints: {joint_rads}")
@@ -377,6 +548,7 @@ def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> d
         selected_solution,
         planning_config=planning_config,
         planner_config_path=Path(cfg["planner_config_path"]),
+        start_joint_positions_rad=start_joint_positions_rad,
     )
     arm_success = bool(arm_result.get("success", False))
     
@@ -392,6 +564,7 @@ def run_arm_approach_sync(payload: dict[str, object], context_id: str = "") -> d
         "ranked_grasp_count": len(ranked_records),
         "arm_result": arm_result,
         "message": "Arm approach finished.",
+        "initialpose_published": False,
         "next_agent": None,
         "exec_latency": time.time() - started_at,
     }

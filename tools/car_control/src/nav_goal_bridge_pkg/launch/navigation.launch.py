@@ -11,6 +11,19 @@ def generate_launch_description() -> LaunchDescription:
     nav_goal_bridge_dir = get_package_share_directory("nav_goal_bridge_pkg")
     params_file = os.path.join(nav_goal_bridge_dir, "config", "mapper_params.yaml")
     keepout_map_file = os.path.join(nav_goal_bridge_dir, "config", "keepout_map.yaml")
+    scan_throttle_node = Node(
+        package="nav_goal_bridge_pkg",
+        executable="scan_throttle_node",
+        name="scan_throttle_node",
+        output="screen",
+        parameters=[
+            {
+                "input_topic": "/scan_raw",
+                "output_topic": "/scan",
+                "target_rate_hz": 10.0,
+            }
+        ],
+    )
     localization_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(nav_goal_bridge_dir, "launch", "localization_unity.xml")
@@ -69,6 +82,7 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
+            scan_throttle_node,
             localization_launch,
             keepout_filter_mask_server,
             keepout_costmap_filter_info_server,

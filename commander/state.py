@@ -87,6 +87,9 @@ class CommanderState(TypedDict):
     # Computed goal pose for navigation runner
     nav_goal_pose: Dict[str, Any]
 
+    # Last AMCL pose recorded after car_approach finished moving the base
+    last_car_approach_amcl_pose: Dict[str, Any]
+
     # nav_move execution flags
     nav_plan_ready: bool
     nav_arrived: bool
@@ -133,6 +136,7 @@ def create_initial_state(
         "current_goal_rank": 1,
         "nav_move_source": "",
         "nav_goal_pose": {},
+        "last_car_approach_amcl_pose": {},
         "nav_plan_ready": False,
         "nav_arrived": False,
         "nav_attempt": 0,
