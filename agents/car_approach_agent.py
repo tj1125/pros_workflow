@@ -3,7 +3,9 @@ agents/car_approach_agent.py - Car Approach Agent node.
 
 This adapter exposes agents.car_approach as a commander-compatible agent.
 It samples a reachable base pose from the latest grasp result and runs the
-rule-based car movement. Arm motion is intentionally left to Arm_Approach_Agent.
+rule-based car movement. By default, car_approach now also finishes the grasp
+by opening the gripper, moving the arm to the sampled target pose, and closing
+the gripper.
 """
 
 import asyncio
@@ -39,23 +41,35 @@ class CarApproachAgent:
 
     async def _mock_execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         await asyncio.sleep(0.2)
-        logger.info("[%s] Mock: base approach completed.", self.AGENT_NAME)
+        logger.info("[%s] Mock: base approach and arm finish completed.", self.AGENT_NAME)
         return {
             "result": {
                 "success": True,
                 "status_code": "APPROACH_SUCCESS",
                 "phase": "mock",
-                "message": "Mock base approach completed; arm motion is deferred.",
-                "next_agent": "Arm_Approach_Agent",
+                "message": "Mock base approach completed; arm/gripper finish sequence completed.",
+                "next_agent": None,
                 "nav_result": {
                     "success": True,
                     "skipped": True,
                     "phase": "mock",
                 },
-                "arm_base_alignment_result": {
+                "arm_result": {
                     "success": True,
                     "skipped": False,
                     "phase": "mock",
+                    "preopened_gripper_target_deg": 70.0,
+                    "gripper_close_deg": 10.0,
+                    "target_grasp_wrist_yaw_applied": True,
+                    "pre_close_ee_offset_enabled": True,
+                    "pre_close_ee_offset_sequence": ["down", "forward"],
+                    "pre_close_ee_forward_distance_m": 0.10,
+                    "pre_close_ee_down_distance_m": 0.10,
+                },
+                "arm_base_alignment_result": {
+                    "success": True,
+                    "skipped": False,
+                    "phase": "planned",
                     "joint_index": 0,
                     "command_joint_position_rad": 1.5707963267948966,
                     "command_joint_position_deg": 90.0,
@@ -65,7 +79,9 @@ class CarApproachAgent:
                 "arm_approach_start_base_joint_rad": 1.5707963267948966,
                 "arm_approach_start_base_joint_deg": 90.0,
                 "arm_approach_start_base_joint_source": "mock_car_approach_arm_base_alignment",
-                "arm_motion_skipped": True,
+                "arm_finish_requested": True,
+                "arm_finish_required": True,
+                "arm_motion_skipped": False,
             },
             "success": True,
         }

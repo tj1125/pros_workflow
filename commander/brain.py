@@ -189,13 +189,7 @@ class Brain:
             )
         elif count == 3:
             return BrainDecision(
-                reasoning="Base approach complete. Execute arm approach to reach the grasp target.",
-                call_module="arm_approach_agent",
-                module_params={"target_id": "apple"},
-            )
-        elif count == 4:
-            return BrainDecision(
-                reasoning="Arm approach complete. Adjust view for final confirmation.",
+                reasoning="Base and arm finish sequence complete. Adjust view for final confirmation.",
                 call_module="view_agent",
                 module_params={},
             )

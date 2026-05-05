@@ -14,6 +14,10 @@ from agents.arm_approach.move_arm import (
     publish_joint_trajectory,
 )
 
+from .arm_finish_sequence import (
+    car_arm_finish_enabled,
+    run_car_arm_finish_sequence,
+)
 from . import move_car, sample_logic
 from .scripts.run_base_pose_sampling import load_config
 from .src.camera_car_voxel_ompl import load_camera_car_voxel_ompl_config
@@ -105,8 +109,8 @@ MAX_GRASP_POSES_TO_EVALUATE = 10
 TARGET_OBJECT_POINTCLOUD_KEY = "object_pc_camera"
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
-VEHICLE_BASE_LENGTH_X_M = 0.30
-VEHICLE_BASE_LENGTH_Y_M = 0.32
+VEHICLE_BASE_LENGTH_X_M = 0.26
+VEHICLE_BASE_LENGTH_Y_M = 0.28
 ARM_BASE_ALIGNMENT_ENABLED = True
 ARM_BASE_ALIGNMENT_JOINT_INDEX = 0
 ARM_BASE_ALIGNMENT_CONTROL_TOPIC = "arm_control_signal"
@@ -2949,6 +2953,54 @@ def _publish_arm_base_alignment_command(
     }
 
 
+def _plan_arm_base_alignment_target_after_arrival(
+    solution: dict[str, object],
+    *,
+    arm_config: dict[str, object],
+    nav_result: dict[str, object] | None = None,
+    reference_amcl_pose: RosMapPose2D | None = None,
+) -> dict[str, object]:
+    joint_index = int(os.getenv("APPROACH_AGENT_CAR_ARM_BASE_JOINT_INDEX", str(ARM_BASE_ALIGNMENT_JOINT_INDEX)))
+    yaw_compensation = _arm_base_yaw_compensation_from_nav_result(
+        solution,
+        nav_result=nav_result,
+        reference_amcl_pose=reference_amcl_pose,
+    )
+    yaw_compensation_rad = (
+        float(yaw_compensation.get("joint_delta_rad", 0.0) or 0.0)
+        if bool(yaw_compensation.get("applied", False))
+        else 0.0
+    )
+    try:
+        target = _arm_base_alignment_target_from_solution(
+            solution,
+            arm_config=arm_config,
+            joint_index=joint_index,
+            yaw_compensation_rad=yaw_compensation_rad,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "skipped": False,
+            "phase": "target_unavailable",
+            "message": str(exc),
+            "joint_index": int(joint_index),
+            "yaw_compensation": yaw_compensation,
+        }
+
+    return {
+        **target,
+        "success": True,
+        "skipped": False,
+        "phase": "planned",
+        "source": ARM_BASE_ALIGNMENT_SOURCE,
+        "yaw_compensation": yaw_compensation,
+        "target_grasp_pose_direction_source": (
+            "selected solution IK plus final base_link yaw compensation"
+        ),
+    }
+
+
 def _align_arm_base_to_target_grasp_pose_after_arrival(
     solution: dict[str, object],
     *,
@@ -3243,6 +3295,14 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         "skipped": True,
         "phase": "not_started",
     }
+    arm_result: dict[str, object] = {
+        "success": False,
+        "skipped": True,
+        "phase": "not_started",
+        "message": "Arm finish sequence was not started.",
+    }
+    arm_base_alignment_published = False
+    arm_finish_requested = car_arm_finish_enabled()
     if goal_pose_solution is None:
         phase = "no_target_pose"
         message = "No target pose solution available; rule navigation was not started."
@@ -3265,20 +3325,57 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
             initial_pose_source=initial_pose_source,
         )
         if bool(nav_result.get("success", False)):
-            arm_base_alignment_result = _align_arm_base_to_target_grasp_pose_after_arrival(
-                goal_pose_solution,
-                planning_config=planning_config,
-                arm_config=arm_config,
-                nav_result=nav_result,
-                reference_amcl_pose=current_amcl_pose,
-            )
-            phase = "done"
-            message = "Base approach reached the selected pose; arm base was aligned and arm motion is deferred."
-            print(
-                "[base_approach] base approach complete. Full arm movement is intentionally "
-                "deferred to Arm_Approach_Agent.",
-                flush=True,
-            )
+            if arm_finish_requested:
+                arm_base_alignment_result = _plan_arm_base_alignment_target_after_arrival(
+                    goal_pose_solution,
+                    arm_config=arm_config,
+                    nav_result=nav_result,
+                    reference_amcl_pose=current_amcl_pose,
+                )
+                arm_result = run_car_arm_finish_sequence(
+                    goal_pose_solution,
+                    visualization_records=visualization_records,
+                    planning_config=planning_config,
+                    arm_config=arm_config,
+                    arm_base_target=arm_base_alignment_result,
+                    planner_config_path=Path(cfg["planner_config_path"]),
+                    p_mod=p_mod,
+                    pybullet_data=pybullet_data,
+                )
+                if bool(arm_result.get("success", False)):
+                    phase = "done"
+                    message = (
+                        "Base approach reached the selected pose; gripper opened, "
+                        "arm moved to the target pose, and gripper closed."
+                    )
+                    print(
+                        "[base_approach] base approach complete; car_approach executed "
+                        "the arm/gripper finish sequence directly.",
+                        flush=True,
+                    )
+                else:
+                    phase = "arm_finish_failed"
+                    message = (
+                        "Base approach reached the selected pose, but direct arm finish failed: "
+                        f"{arm_result.get('message', arm_result.get('phase', 'unknown'))}"
+                    )
+                    print(f"[base_approach] {message}", flush=True)
+            else:
+                arm_base_alignment_result = _align_arm_base_to_target_grasp_pose_after_arrival(
+                    goal_pose_solution,
+                    planning_config=planning_config,
+                    arm_config=arm_config,
+                    nav_result=nav_result,
+                    reference_amcl_pose=current_amcl_pose,
+                )
+                arm_base_alignment_published = bool(arm_base_alignment_result.get("success", False))
+                phase = "done"
+                message = "Base approach reached the selected pose; arm base was aligned and arm motion is deferred."
+                print(
+                    "[base_approach] base approach complete. Full arm movement is intentionally "
+                    "deferred to Arm_Approach_Agent.",
+                    flush=True,
+                )
         else:
             phase = "rule_navigation_failed"
             message = "Rule navigation did not reach the selected pose."
@@ -3308,9 +3405,11 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
             flush=True,
         )
 
-    success = bool(nav_result.get("success", False)) if run_config.run_rule_navigation else goal_pose_solution is not None
+    base_success = bool(nav_result.get("success", False)) if run_config.run_rule_navigation else goal_pose_solution is not None
+    arm_finish_required = bool(run_config.run_rule_navigation and arm_finish_requested and base_success)
+    success = bool(base_success and (not arm_finish_required or bool(arm_result.get("success", False))))
     status_code = "APPROACH_SUCCESS" if success else "APPROACH_FAIL"
-    next_agent = "Arm_Approach_Agent" if success else None
+    next_agent = None if (arm_finish_required and success) else "Arm_Approach_Agent" if success else None
     arm_approach_start_base_joint_index = arm_base_alignment_result.get("joint_index")
     arm_approach_start_base_joint_rad = arm_base_alignment_result.get("command_joint_position_rad")
     arm_approach_start_base_joint_deg = arm_base_alignment_result.get("command_joint_position_deg")
@@ -3338,8 +3437,11 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         "selected_solution": goal_pose_solution or {},
         "selected_ik_feasible": bool((goal_pose_solution or {}).get("ik_feasible", False)),
         "nav_result": nav_result,
+        "arm_result": arm_result,
+        "arm_finish_requested": bool(arm_finish_requested),
+        "arm_finish_required": bool(arm_finish_required),
         "arm_base_alignment_result": arm_base_alignment_result,
-        "arm_base_alignment_published": bool(arm_base_alignment_result.get("success", False)),
+        "arm_base_alignment_published": bool(arm_base_alignment_published),
         "arm_approach_start_base_joint_index": arm_approach_start_base_joint_index,
         "arm_approach_start_base_joint_rad": arm_approach_start_base_joint_rad,
         "arm_approach_start_base_joint_deg": arm_approach_start_base_joint_deg,
@@ -3348,7 +3450,7 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
             if arm_approach_start_base_joint_rad is not None
             else ""
         ),
-        "arm_motion_skipped": True,
+        "arm_motion_skipped": bool(arm_result.get("skipped", True)),
         "map_png_path": str(map_png_path) if run_config.write_map_png else "",
         "visualization_record_count": len(visualization_records),
         "elapsed_sec": time.time() - started_at,
