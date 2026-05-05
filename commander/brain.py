@@ -201,7 +201,10 @@ class Brain:
             )
         else:
             return BrainDecision(
-                reasoning="All steps completed. Task is done.",
+                reasoning=(
+                    "Arm approach succeeded and the target bear is visually confirmed "
+                    "inside the gripper. Task is done."
+                ),
                 call_module="DONE",
                 module_params={},
             )

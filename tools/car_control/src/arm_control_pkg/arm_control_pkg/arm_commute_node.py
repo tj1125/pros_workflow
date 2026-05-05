@@ -87,10 +87,12 @@ class ArmCummuteNode(Node):
     def publish_arm_angle(self):
         joint_positions = self.arm_angle_control.get_arm_angles()
         msg = JointTrajectoryPoint()
-        msg.positions = self.degrees_to_radians(joint_positions)
-        msg.velocities = []
-        msg.accelerations = []
-        msg.effort = []
+        positions = self.degrees_to_radians(joint_positions)
+        zero_vec = [0.0] * len(positions)
+        msg.positions = positions
+        msg.velocities = zero_vec
+        msg.accelerations = zero_vec
+        msg.effort = zero_vec
         msg.time_from_start.sec = 0
         msg.time_from_start.nanosec = 0
         self.arm_pub.publish(msg)

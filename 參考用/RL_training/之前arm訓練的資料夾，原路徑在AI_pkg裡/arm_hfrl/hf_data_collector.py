@@ -125,7 +125,7 @@ class HumanFeedbackCollector:
         
         try:
             # 取得當前狀態 (從環境或預設值)
-            current_angles = [90, 30, 160, 90, 10]  # 預設 T-pose 角度
+            current_angles = [90.0, 30.0, 160.0, 90.0, 10.0]  # 預設 T-pose 角度
             
             # 使用 LLM 生成角度回應
             response = self.llm_model.generate(command, current_angles)

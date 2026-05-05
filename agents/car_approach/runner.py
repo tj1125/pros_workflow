@@ -31,14 +31,12 @@ def run_base_approach_sync(
             ),
             grasp_json_path=_optional_path_param(params, "grasp_json_path", "grasp_json"),
             grasp_result_payload=grasp_payload,
-            initial_pose=_dict_param(
+            initial_pose=_dict_param(params, "initial_pose"),
+            initial_pose_source=_str_param(
                 params,
-                "initial_pose",
-                "last_car_approach_amcl_pose",
-                "previous_nav_goal_pose",
-                "nav_goal_pose",
+                "initial_pose_source",
+                default="",
             ),
-            initial_pose_source=_str_param(params, "initial_pose_source", default=""),
             allow_missing_amcl=_bool_param(params, "allow_missing_amcl", False),
             run_rule_navigation=_run_rule_navigation_from_params(params),
             show_gui=_bool_param(params, "show_gui", False),

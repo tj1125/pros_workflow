@@ -989,33 +989,23 @@ class Orchestrator:
             or latest_nav.get("goal_pose")
             or {}
         )
-        initial_pose = {}
-        initial_pose_source = ""
-
         if last_car_approach_amcl_pose:
-            initial_pose = last_car_approach_amcl_pose
-            initial_pose_source = "last car_approach /amcl_pose"
-            print("\n📍 [car_approach_node] 使用上一次 car_approach 結束的 /amcl_pose 作為 /initialpose 來源...")
+            print("\n📍 [car_approach_node] 偵測到上一次 car_approach 結束的 /amcl_pose，保留為狀態紀錄，不作為 /initialpose publish...")
             logger.info(
                 "[car_approach_node] last_car_approach_amcl_pose=%s",
                 last_car_approach_amcl_pose,
             )
         elif previous_nav_goal_pose:
-            initial_pose = previous_nav_goal_pose
-            initial_pose_source = "previous Nav2 /goal_pose"
-            print("\n📍 [car_approach_node] 第一次 car_approach，使用上一個 Nav2 /goal_pose 作為 /initialpose 來源...")
+            print("\n📍 [car_approach_node] 第一次 car_approach，偵測到上一個 Nav2 /goal_pose，但不會拿來 publish /initialpose...")
             logger.info("[car_approach_node] previous_nav_goal_pose=%s", previous_nav_goal_pose)
         else:
             logger.warning(
                 "[car_approach_node] no previous car_approach AMCL pose or Nav2 goal_pose available; "
-                "car_approach will fall back to capture-time /amcl_pose if possible."
+                "car_approach will use capture-time /amcl_pose only as an internal reference if available."
             )
 
-        # Inject grasp result and the pose that should be re-published as /initialpose.
+        # Inject grasp result and keep prior pose snapshots for internal reference only.
         self._set_default_grasp_result(params, latest_grasp)
-        if initial_pose:
-            params["initial_pose"] = initial_pose
-            params["initial_pose_source"] = initial_pose_source
         if previous_nav_goal_pose:
             params["previous_nav_goal_pose"] = previous_nav_goal_pose
         if last_car_approach_amcl_pose:
@@ -1033,6 +1023,8 @@ class Orchestrator:
 
         params = dict(state.get("module_params", {}) or {})
         latest_grasp = state.get("latest_grasp_result", {}) or {}
+        latest_approach = state.get("latest_approach_result", {}) or {}
+        last_arm_base_alignment = state.get("last_arm_base_alignment_result", {}) or {}
 
         print("\n📍 [arm_approach_node] 取得最新 /amcl_pose...")
         amcl_pose = await get_amcl_pose(timeout_sec=5.0)
@@ -1045,6 +1037,15 @@ class Orchestrator:
         self._set_default_grasp_result(params, latest_grasp)
         if amcl_pose and "amcl_pose" not in params:
             params["amcl_pose"] = amcl_pose
+        if "car_approach_arm_base_alignment_result" not in params:
+            if last_arm_base_alignment:
+                params["car_approach_arm_base_alignment_result"] = last_arm_base_alignment
+            elif (
+                isinstance(latest_approach, dict)
+                and latest_approach.get("module") == "car_approach_agent"
+                and isinstance(latest_approach.get("arm_base_alignment_result"), dict)
+            ):
+                params["car_approach_arm_base_alignment_result"] = latest_approach["arm_base_alignment_result"]
 
         agent = ArmApproachAgent()
         result = await self._run_agent(agent, state, has_http=False, params_override=params)
@@ -1268,6 +1269,9 @@ class Orchestrator:
             )
             latest_key = "latest_approach_result"
             nav_result = payload.get("nav_result", {})
+            arm_base_alignment_result = payload.get("arm_base_alignment_result", {})
+            if not isinstance(arm_base_alignment_result, dict):
+                arm_base_alignment_result = {}
             final_amcl_pose = {}
             if isinstance(nav_result, dict):
                 final_amcl_pose = nav_result.get("final_amcl_pose") or {}
@@ -1285,6 +1289,10 @@ class Orchestrator:
                 "final_amcl_pose": final_amcl_pose,
                 "nav_result": nav_result,
                 "arm_result": payload.get("arm_result", {}),
+                "arm_base_alignment_result": arm_base_alignment_result,
+                "arm_approach_start_base_joint_index": payload.get("arm_approach_start_base_joint_index"),
+                "arm_approach_start_base_joint_rad": payload.get("arm_approach_start_base_joint_rad"),
+                "arm_approach_start_base_joint_deg": payload.get("arm_approach_start_base_joint_deg"),
                 "selected_solution": payload.get("selected_solution", {}),
             }
             latest_update = {latest_key: latest_value}
@@ -1292,6 +1300,17 @@ class Orchestrator:
             if module == "car_approach_agent" and isinstance(final_amcl_pose, dict) and final_amcl_pose:
                 latest_update["last_car_approach_amcl_pose"] = final_amcl_pose
                 updated_keys.append("last_car_approach_amcl_pose")
+            if module == "car_approach_agent" and any(
+                arm_base_alignment_result.get(key) is not None
+                for key in (
+                    "command_joint_position_rad",
+                    "command_joint_position_deg",
+                    "target_joint_position_rad",
+                    "target_joint_position_deg",
+                )
+            ):
+                latest_update["last_arm_base_alignment_result"] = arm_base_alignment_result
+                updated_keys.append("last_arm_base_alignment_result")
             return latest_update, {"updated_latest_keys": updated_keys}
 
         return {}, {}

@@ -19,6 +19,14 @@ PLANNING_GRASP_TO_EE = np.asarray(
     ],
     dtype=np.float64,
 )
+CAMERA_X_MIRROR = np.asarray(
+    [
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ],
+    dtype=np.float64,
+)
 
 
 @dataclass(frozen=True)
@@ -174,14 +182,26 @@ def transform_camera_points_to_local_pb(
     *,
     camera_to_pb_rotation: np.ndarray,
     camera_position_pb: np.ndarray,
+    mirror_camera_x: bool = False,
 ) -> np.ndarray:
     points_camera_xyz = np.asarray(points_camera_xyz, dtype=np.float64).reshape(-1, 3)
     if len(points_camera_xyz) == 0:
         return points_camera_xyz
+    if mirror_camera_x:
+        points_camera_xyz = points_camera_xyz @ CAMERA_X_MIRROR.T
     return (points_camera_xyz @ np.asarray(camera_to_pb_rotation, dtype=np.float64).reshape(3, 3).T) + np.asarray(
         camera_position_pb,
         dtype=np.float64,
     ).reshape(1, 3)
+
+
+def mirror_grasp_pose_camera_x(
+    position_camera_xyz: np.ndarray,
+    rotation_camera: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    position = np.asarray(position_camera_xyz, dtype=np.float64).reshape(3)
+    rotation = np.asarray(rotation_camera, dtype=np.float64).reshape(3, 3)
+    return CAMERA_X_MIRROR @ position, CAMERA_X_MIRROR @ rotation @ CAMERA_X_MIRROR
 
 
 def transform_grasp_pose_camera_to_pybullet(
@@ -189,14 +209,22 @@ def transform_grasp_pose_camera_to_pybullet(
     *,
     camera_to_pb_rotation: np.ndarray,
     camera_position_pb: np.ndarray,
+    mirror_camera_x: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     camera_to_pb_rotation = np.asarray(camera_to_pb_rotation, dtype=np.float64).reshape(3, 3)
+    position_camera_xyz = grasp_candidate.position_camera_xyz
+    rotation_camera = grasp_candidate.rotation_camera
+    if mirror_camera_x:
+        position_camera_xyz, rotation_camera = mirror_grasp_pose_camera_x(
+            position_camera_xyz,
+            rotation_camera,
+        )
     target_pb = transform_camera_points_to_local_pb(
-        grasp_candidate.position_camera_xyz.reshape(1, 3),
+        position_camera_xyz.reshape(1, 3),
         camera_to_pb_rotation=camera_to_pb_rotation,
         camera_position_pb=camera_position_pb,
     ).reshape(3)
-    target_rot_pb = (camera_to_pb_rotation @ grasp_candidate.rotation_camera) @ PLANNING_GRASP_TO_EE
+    target_rot_pb = (camera_to_pb_rotation @ rotation_camera) @ PLANNING_GRASP_TO_EE
     target_quat_pb = st.Rotation.from_matrix(target_rot_pb).as_quat()
     return (
         np.asarray(target_pb, dtype=np.float64),
@@ -210,12 +238,14 @@ def load_grasp_visualization_records(
     *,
     camera_to_pb_rotation: np.ndarray,
     camera_position_pb: np.ndarray,
+    mirror_camera_x: bool = False,
 ) -> tuple[list[dict[str, object]], list[GraspPoseCandidate], Path]:
     grasp_candidates, _, json_path = load_grasp_candidates_from_result_json(grasp_result_json_path)
     visualization_records = build_grasp_visualization_records(
         grasp_candidates,
         camera_to_pb_rotation=camera_to_pb_rotation,
         camera_position_pb=camera_position_pb,
+        mirror_camera_x=mirror_camera_x,
     )
     return visualization_records, grasp_candidates, json_path
 
@@ -226,6 +256,7 @@ def load_grasp_visualization_records_from_payload(
     camera_to_pb_rotation: np.ndarray,
     camera_position_pb: np.ndarray,
     source_label: str = "grasp_result_payload",
+    mirror_camera_x: bool = False,
 ) -> tuple[list[dict[str, object]], list[GraspPoseCandidate]]:
     grasp_candidates, _ = load_grasp_candidates_from_result_payload(
         payload,
@@ -235,6 +266,7 @@ def load_grasp_visualization_records_from_payload(
         grasp_candidates,
         camera_to_pb_rotation=camera_to_pb_rotation,
         camera_position_pb=camera_position_pb,
+        mirror_camera_x=mirror_camera_x,
     )
     return visualization_records, grasp_candidates
 
@@ -244,37 +276,66 @@ def build_grasp_visualization_records(
     *,
     camera_to_pb_rotation: np.ndarray,
     camera_position_pb: np.ndarray,
+    mirror_camera_x: bool = False,
 ) -> list[dict[str, object]]:
     visualization_records: list[dict[str, object]] = []
     for grasp_candidate in grasp_candidates:
+        position_camera_xyz = grasp_candidate.position_camera_xyz
+        rotation_camera = grasp_candidate.rotation_camera
+        if mirror_camera_x:
+            position_camera_xyz, rotation_camera = mirror_grasp_pose_camera_x(
+                position_camera_xyz,
+                rotation_camera,
+            )
         target_pb, target_rot_pb, target_quat_pb = transform_grasp_pose_camera_to_pybullet(
             grasp_candidate,
             camera_to_pb_rotation=camera_to_pb_rotation,
             camera_position_pb=camera_position_pb,
+            mirror_camera_x=mirror_camera_x,
         )
-        visualization_records.append(
-            {
-                "rank": int(grasp_candidate.rank),
-                "grasp_confidence": float(grasp_candidate.grasp_confidence),
-                "grasp_distance_to_gripper_midpoint_m": float(
-                    grasp_candidate.grasp_distance_to_gripper_midpoint_m
-                ),
-                "grasp_distance_to_camera_m": float(grasp_candidate.grasp_distance_to_camera_m),
-                "position_camera_xyz": grasp_candidate.position_camera_xyz.astype(float).tolist(),
-                "rotation_camera": grasp_candidate.rotation_camera.astype(float).tolist(),
-                "target_pb": target_pb.astype(float).tolist(),
-                "target_rot_pb": target_rot_pb.astype(float).tolist(),
-                "target_quat_pb": target_quat_pb.astype(float).tolist(),
-                "feasible_solutions": [],
-                "closest_solution": None,
-            }
-        )
+        record = {
+            "rank": int(grasp_candidate.rank),
+            "grasp_confidence": float(grasp_candidate.grasp_confidence),
+            "grasp_distance_to_gripper_midpoint_m": float(
+                grasp_candidate.grasp_distance_to_gripper_midpoint_m
+            ),
+            "grasp_distance_to_camera_m": float(grasp_candidate.grasp_distance_to_camera_m),
+            "position_camera_xyz": grasp_candidate.position_camera_xyz.astype(float).tolist(),
+            "rotation_camera": grasp_candidate.rotation_camera.astype(float).tolist(),
+            "target_pb": target_pb.astype(float).tolist(),
+            "target_rot_pb": target_rot_pb.astype(float).tolist(),
+            "target_quat_pb": target_quat_pb.astype(float).tolist(),
+            "camera_x_mirrored": bool(mirror_camera_x),
+            "feasible_solutions": [],
+            "closest_solution": None,
+        }
+        if mirror_camera_x:
+            record["position_camera_xyz_mirrored"] = position_camera_xyz.astype(float).tolist()
+            record["rotation_camera_mirrored"] = rotation_camera.astype(float).tolist()
+        visualization_records.append(record)
 
     return visualization_records
 
 
 def _wrap_angle_rad(angle_rad: float) -> float:
     return float((float(angle_rad) + math.pi) % (2.0 * math.pi) - math.pi)
+
+
+def _nearest_half_turn_reference_and_delta_deg(angle_rad: float) -> tuple[float, float]:
+    angle_deg = float(math.degrees(float(angle_rad)) % 360.0)
+    reference_candidates_deg = (0.0, 180.0, 360.0)
+
+    def _sort_key(reference_deg: float) -> tuple[float, int, float]:
+        delta_deg = angle_deg - float(reference_deg)
+        return (abs(delta_deg), 1 if delta_deg < 0.0 else 0, float(reference_deg))
+
+    reference_deg = min(reference_candidates_deg, key=_sort_key)
+    return float(reference_deg), float(angle_deg - reference_deg)
+
+
+def _nearest_half_turn_reference_and_delta_rad(angle_rad: float) -> tuple[float, float]:
+    reference_deg, delta_deg = _nearest_half_turn_reference_and_delta_deg(angle_rad)
+    return math.radians(reference_deg), math.radians(delta_deg)
 
 
 def _abs_angle_delta_rad(angle_a_rad: float, angle_b_rad: float) -> float:
@@ -311,7 +372,6 @@ def rank_grasp_records_by_reset_ee_pose(
     reset_ee_orientation_xyzw: np.ndarray,
 ) -> list[dict[str, object]]:
     reset_ee_position = np.asarray(reset_ee_position_xyz, dtype=np.float64).reshape(3)
-    reset_ee_yaw = _quat_xyzw_yaw(reset_ee_orientation_xyzw)
     ranked_records = [dict(record) for record in visualization_records]
     if not ranked_records:
         return ranked_records
@@ -321,9 +381,11 @@ def rank_grasp_records_by_reset_ee_pose(
     for record in ranked_records:
         target_pb = np.asarray(record["target_pb"], dtype=np.float64).reshape(3)
         target_rot_pb = np.asarray(record["target_rot_pb"], dtype=np.float64).reshape(3, 3)
-        target_yaw = _axis_yaw_xy(target_rot_pb[:, 0], fallback_yaw_rad=reset_ee_yaw)
+        target_yaw = _axis_yaw_xy(target_rot_pb[:, 0], fallback_yaw_rad=0.0)
+        target_yaw_normalized_deg = float(math.degrees(target_yaw) % 360.0)
         distance_m = float(np.linalg.norm(target_pb - reset_ee_position))
-        yaw_error_rad = _abs_angle_delta_rad(target_yaw, reset_ee_yaw)
+        yaw_reference_rad, yaw_delta_from_reference_rad = _nearest_half_turn_reference_and_delta_rad(target_yaw)
+        yaw_error_rad = abs(yaw_delta_from_reference_rad)
         distances.append(distance_m)
         yaw_errors.append(yaw_error_rad)
         record["reset_ee_distance_m"] = distance_m
@@ -331,6 +393,12 @@ def rank_grasp_records_by_reset_ee_pose(
         record["reset_ee_yaw_error_deg"] = float(math.degrees(yaw_error_rad))
         record["target_yaw_rad"] = float(target_yaw)
         record["target_yaw_deg"] = float(math.degrees(target_yaw))
+        record["target_yaw_normalized_deg"] = target_yaw_normalized_deg
+        record["target_yaw_reference_period_deg"] = 180.0
+        record["target_yaw_nearest_reference_rad"] = float(yaw_reference_rad)
+        record["target_yaw_nearest_reference_deg"] = float(math.degrees(yaw_reference_rad) % 360.0)
+        record["target_yaw_delta_from_nearest_reference_rad"] = float(yaw_delta_from_reference_rad)
+        record["target_yaw_delta_from_nearest_reference_deg"] = float(math.degrees(yaw_delta_from_reference_rad))
 
     distance_ranks = _ordinal_ranks(np.asarray(distances, dtype=np.float64))
     yaw_ranks = _ordinal_ranks(np.asarray(yaw_errors, dtype=np.float64))
@@ -338,6 +406,7 @@ def rank_grasp_records_by_reset_ee_pose(
         average_rank = 0.5 * (float(distance_rank) + float(yaw_rank))
         record["reset_ee_distance_rank"] = int(distance_rank)
         record["reset_ee_yaw_rank"] = int(yaw_rank)
+        record["target_yaw_delta_from_nearest_reference_rank"] = int(yaw_rank)
         record["target_average_rank"] = float(average_rank)
 
     ranked_records.sort(

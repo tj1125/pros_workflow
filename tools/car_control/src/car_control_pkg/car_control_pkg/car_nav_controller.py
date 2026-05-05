@@ -148,17 +148,11 @@ class NavigationController:
                 return "COUNTERCLOCKWISE_ROTATION_SLOW"
             return "STOP"
 
-        if abs_diff < 4:
-            return "FORWARD"
         if abs_diff < 10:
-            return "FORWARD_SLOW"
-        if -25 < diff_angle <= -10:
-            return "CLOCKWISE_ROTATION_MEDIAN"
-        if 10 <= diff_angle < 25:
-            return "COUNTERCLOCKWISE_ROTATION_MEDIAN"
-        if -180 < diff_angle <= -25:
+            return "FORWARD"
+        if -180 < diff_angle <= -10:
             return "CLOCKWISE_ROTATION"
-        if 25 <= diff_angle < 180:
+        if 10 <= diff_angle < 180:
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
 

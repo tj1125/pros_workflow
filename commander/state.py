@@ -90,6 +90,9 @@ class CommanderState(TypedDict):
     # Last AMCL pose recorded after car_approach finished moving the base
     last_car_approach_amcl_pose: Dict[str, Any]
 
+    # Last arm base joint angle recorded after car_approach aligned the arm base
+    last_arm_base_alignment_result: Dict[str, Any]
+
     # nav_move execution flags
     nav_plan_ready: bool
     nav_arrived: bool
@@ -137,6 +140,7 @@ def create_initial_state(
         "nav_move_source": "",
         "nav_goal_pose": {},
         "last_car_approach_amcl_pose": {},
+        "last_arm_base_alignment_result": {},
         "nav_plan_ready": False,
         "nav_arrived": False,
         "nav_attempt": 0,

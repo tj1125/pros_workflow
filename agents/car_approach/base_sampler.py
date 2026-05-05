@@ -2,11 +2,17 @@ import argparse
 import math
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
 import scipy.spatial.transform as st
+
+from agents.arm_approach.move_arm import (
+    build_linear_joint_trajectory,
+    config_from_environment as arm_move_config_from_environment,
+    publish_joint_trajectory,
+)
 
 from . import move_car, sample_logic
 from .scripts.run_base_pose_sampling import load_config
@@ -52,6 +58,7 @@ class LiveSceneCapture:
     voxel_size_m: float
     camera_to_pb_rotation: np.ndarray
     camera_position_pb: np.ndarray
+    pointcloud_camera_x_mirrored: bool
     amcl_pose: AmclPoseSnapshot | None
     captured_amcl_pose: AmclPoseSnapshot | None
     valid_depth_point_count: int
@@ -100,6 +107,11 @@ BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
 VEHICLE_BASE_LENGTH_X_M = 0.30
 VEHICLE_BASE_LENGTH_Y_M = 0.32
+ARM_BASE_ALIGNMENT_ENABLED = True
+ARM_BASE_ALIGNMENT_JOINT_INDEX = 0
+ARM_BASE_ALIGNMENT_CONTROL_TOPIC = "arm_control_signal"
+ARM_BASE_ALIGNMENT_COMMAND = "set_joint_positions_rad"
+ARM_BASE_ALIGNMENT_SOURCE = "approach_agent_car_approach"
 SYMMETRIC_JOINT_FOLD_PERIOD_DEG_BY_INDEX = {
     3: 180.0,
 }
@@ -655,6 +667,13 @@ def _voxel_downsample_points(points_xyz: np.ndarray, voxel_size_m: float) -> np.
     return np.asarray(points_xyz[np.sort(keep_indices)], dtype=np.float32)
 
 
+def _mirror_camera_points_x(points_camera_xyz: np.ndarray) -> np.ndarray:
+    points = np.asarray(points_camera_xyz, dtype=np.float32).reshape(-1, 3).copy()
+    if len(points) > 0:
+        points[:, 0] *= -1.0
+    return points
+
+
 def _repo_relative_existing_path(path: Path) -> Path:
     path = path.expanduser()
     if path.exists():
@@ -785,6 +804,7 @@ def _capture_live_scene_voxels(
     camera_in_base_link_position: np.ndarray,
     base_link_z_pb: float,
     target_object_points_camera: np.ndarray | None = None,
+    mirror_camera_x: bool = False,
 ) -> LiveSceneCapture:
     camera_cfg = load_camera_car_voxel_ompl_config(camera_config_path)
     snapshot = capture_rgbd_snapshot(
@@ -827,6 +847,12 @@ def _capture_live_scene_voxels(
         max_depth_m=LIVE_VOXEL_MAX_DEPTH_M,
         stride=camera_cfg.pixel_stride,
     )
+    if mirror_camera_x:
+        points_camera = _mirror_camera_points_x(points_camera)
+        print(
+            "[base_approach] mirrored live camera point cloud on camera X axis before voxel/PB conversion.",
+            flush=True,
+        )
     points_camera = _voxel_downsample_points(points_camera, voxel_size_m=camera_cfg.voxel_size_m)
     if len(points_camera) == 0:
         raise RuntimeError("Live Camera_Car RGBD produced zero valid camera-frame points.")
@@ -840,6 +866,8 @@ def _capture_live_scene_voxels(
     target_excluded_point_count = 0
     if target_object_points_camera is not None and len(target_object_points_camera) > 0:
         target_object_points_camera = np.asarray(target_object_points_camera, dtype=np.float64).reshape(-1, 3)
+        if mirror_camera_x:
+            target_object_points_camera = _mirror_camera_points_x(target_object_points_camera)
         target_object_point_count = int(len(target_object_points_camera))
         target_points_pybullet = _transform_camera_points_to_local_pb(
             target_object_points_camera,
@@ -875,6 +903,7 @@ def _capture_live_scene_voxels(
         voxel_size_m=float(camera_cfg.voxel_size_m),
         camera_to_pb_rotation=np.asarray(camera_to_pb_rotation, dtype=np.float64),
         camera_position_pb=np.asarray(camera_position_pb, dtype=np.float64),
+        pointcloud_camera_x_mirrored=bool(mirror_camera_x),
         amcl_pose=amcl_pose,
         captured_amcl_pose=captured_amcl_pose,
         valid_depth_point_count=int(len(points_camera)),
@@ -1096,6 +1125,56 @@ def _ros_map_pose_to_dict(pose: RosMapPose2D) -> dict[str, float]:
         "yaw_rad": float(pose.yaw_rad),
         "yaw_deg": float(math.degrees(pose.yaw_rad)),
     }
+
+
+def _yaw_from_pose_payload(pose: object) -> float | None:
+    if not isinstance(pose, dict):
+        return None
+    try:
+        if "yaw_rad" in pose:
+            return _wrap_angle_rad(float(pose["yaw_rad"]))
+        if "yaw" in pose:
+            return _wrap_angle_rad(float(pose["yaw"]))
+        if "yaw_deg" in pose:
+            return _wrap_angle_rad(math.radians(float(pose["yaw_deg"])))
+        if {"qx", "qy", "qz", "qw"}.issubset(pose.keys()):
+            return _yaw_from_quaternion_xyzw(
+                (
+                    float(pose["qx"]),
+                    float(pose["qy"]),
+                    float(pose["qz"]),
+                    float(pose["qw"]),
+                )
+            )
+        if "orientation_xyzw" in pose:
+            orientation = pose["orientation_xyzw"]
+            return _yaw_from_quaternion_xyzw(
+                (
+                    float(orientation[0]),
+                    float(orientation[1]),
+                    float(orientation[2]),
+                    float(orientation[3]),
+                )
+            )
+    except Exception:
+        return None
+    return None
+
+
+def _ros_map_pose_from_payload(pose: object) -> RosMapPose2D | None:
+    if not isinstance(pose, dict):
+        return None
+    yaw_rad = _yaw_from_pose_payload(pose)
+    if yaw_rad is None:
+        return None
+    try:
+        return RosMapPose2D(
+            x=float(pose["x"]),
+            y=float(pose["y"]),
+            yaw_rad=float(yaw_rad),
+        )
+    except Exception:
+        return None
 
 
 def _robot_collides_with_obstacles(
@@ -2600,6 +2679,413 @@ def _rule_navigation_config() -> move_car.RuleNavigationConfig:
     )
 
 
+def _joint_limit_deg_from_arm_config(
+    arm_config: dict[str, object],
+    joint_index: int,
+) -> tuple[float | None, float | None]:
+    joints_config = arm_config.get("joints", {}) if isinstance(arm_config, dict) else {}
+    joint_config = {}
+    if isinstance(joints_config, dict):
+        joint_config = joints_config.get(int(joint_index), joints_config.get(str(int(joint_index)), {}))
+    if not isinstance(joint_config, dict):
+        return None, None
+
+    lower_deg = joint_config.get("min_angle")
+    upper_deg = joint_config.get("max_angle")
+    return (
+        None if lower_deg is None else float(lower_deg),
+        None if upper_deg is None else float(upper_deg),
+    )
+
+
+def _clamp_optional_deg(
+    value_deg: float,
+    lower_deg: float | None,
+    upper_deg: float | None,
+) -> float:
+    clamped = float(value_deg)
+    if lower_deg is not None:
+        clamped = max(clamped, float(lower_deg))
+    if upper_deg is not None:
+        clamped = min(clamped, float(upper_deg))
+    return clamped
+
+
+def _arm_base_yaw_compensation_from_nav_result(
+    solution: dict[str, object],
+    *,
+    nav_result: dict[str, object] | None,
+    reference_amcl_pose: RosMapPose2D | None,
+) -> dict[str, object]:
+    target_yaw_source = ""
+    target_yaw_rad: float | None = None
+    for key in (
+        "target_grasp_pose_yaw_rad",
+        "target_yaw_rad",
+        "desired_pb_base_link_yaw_rad",
+    ):
+        value = solution.get(key)
+        if value is None:
+            continue
+        try:
+            target_yaw_rad = _wrap_angle_rad(float(value))
+            target_yaw_source = key
+            break
+        except Exception:
+            continue
+
+    try:
+        planned_base_yaw_rad = _wrap_angle_rad(float(solution["pb_base_link_yaw_rad"]))
+    except Exception:
+        return {
+            "applied": False,
+            "phase": "planned_base_link_yaw_unavailable",
+            "message": "Selected solution has no usable planned pb_base_link_yaw_rad.",
+        }
+
+    final_amcl_pose = _ros_map_pose_from_payload(
+        (nav_result or {}).get("final_amcl_pose", {})
+    )
+    if final_amcl_pose is None:
+        return {
+            "applied": False,
+            "phase": "final_amcl_pose_unavailable",
+            "planned_base_link_yaw_rad": float(planned_base_yaw_rad),
+            "planned_base_link_yaw_deg": float(math.degrees(planned_base_yaw_rad)),
+            "message": "Navigation result has no usable final_amcl_pose for yaw compensation.",
+        }
+
+    final_base_link_ros_pose = _local_pb_base_pose_to_ros_map_pose(
+        (0.0, 0.0),
+        0.0,
+        final_amcl_pose,
+    )
+    _, final_base_link_yaw_rad = _ros_map_amcl_pose_to_local_pb_base_pose(
+        final_amcl_pose,
+        reference_amcl_pose,
+    )
+    final_base_link_yaw_rad = _wrap_angle_rad(final_base_link_yaw_rad)
+    vehicle_yaw_error_rad = _wrap_angle_rad(final_base_link_yaw_rad - planned_base_yaw_rad)
+    joint_delta_rad = _wrap_angle_rad(-vehicle_yaw_error_rad)
+
+    result: dict[str, object] = {
+        "applied": True,
+        "phase": "computed",
+        "source": "final_amcl_pose_base_link_yaw_vs_selected_solution_yaw",
+        "formula": "joint_delta = (target_yaw - final_base_link_yaw) - (target_yaw - planned_base_link_yaw)",
+        "planned_base_link_yaw_rad": float(planned_base_yaw_rad),
+        "planned_base_link_yaw_deg": float(math.degrees(planned_base_yaw_rad)),
+        "final_base_link_local_pb_yaw_rad": float(final_base_link_yaw_rad),
+        "final_base_link_local_pb_yaw_deg": float(math.degrees(final_base_link_yaw_rad)),
+        "vehicle_yaw_error_from_planned_rad": float(vehicle_yaw_error_rad),
+        "vehicle_yaw_error_from_planned_deg": float(math.degrees(vehicle_yaw_error_rad)),
+        "joint_delta_rad": float(joint_delta_rad),
+        "joint_delta_deg": float(math.degrees(joint_delta_rad)),
+        "final_amcl_pose": _ros_map_pose_to_dict(final_amcl_pose),
+        "final_arm_base_link_ros_map_pose": _ros_map_pose_to_dict(final_base_link_ros_pose),
+    }
+    if target_yaw_rad is not None:
+        planned_target_error_rad = _wrap_angle_rad(target_yaw_rad - planned_base_yaw_rad)
+        final_target_error_rad = _wrap_angle_rad(target_yaw_rad - final_base_link_yaw_rad)
+        joint_delta_from_target_error_rad = _wrap_angle_rad(
+            final_target_error_rad - planned_target_error_rad
+        )
+        result.update(
+            {
+                "target_grasp_pose_yaw_source": target_yaw_source,
+                "target_grasp_pose_yaw_rad": float(target_yaw_rad),
+                "target_grasp_pose_yaw_deg": float(math.degrees(target_yaw_rad)),
+                "planned_base_link_to_target_grasp_yaw_error_rad": float(planned_target_error_rad),
+                "planned_base_link_to_target_grasp_yaw_error_deg": float(math.degrees(planned_target_error_rad)),
+                "final_base_link_to_target_grasp_yaw_error_rad": float(final_target_error_rad),
+                "final_base_link_to_target_grasp_yaw_error_deg": float(math.degrees(final_target_error_rad)),
+                "joint_delta_from_target_yaw_error_rad": float(joint_delta_from_target_error_rad),
+                "joint_delta_from_target_yaw_error_deg": float(math.degrees(joint_delta_from_target_error_rad)),
+            }
+        )
+    else:
+        result.update(
+            {
+                "target_grasp_pose_yaw_source": "",
+                "message": "Target grasp pose yaw unavailable; used planned-vs-final base_link yaw delta.",
+            }
+        )
+    return result
+
+
+def _arm_base_alignment_target_from_solution(
+    solution: dict[str, object],
+    *,
+    arm_config: dict[str, object],
+    joint_index: int,
+    yaw_compensation_rad: float = 0.0,
+) -> dict[str, object]:
+    raw_positions_rad = solution.get("ik_joint_solution_rad")
+    raw_positions_deg = solution.get("ik_joint_solution_deg")
+    source_field = "ik_joint_solution_rad"
+    if isinstance(raw_positions_rad, list) and 0 <= int(joint_index) < len(raw_positions_rad):
+        target_rad = float(raw_positions_rad[int(joint_index)])
+    elif isinstance(raw_positions_deg, list) and 0 <= int(joint_index) < len(raw_positions_deg):
+        source_field = "ik_joint_solution_deg"
+        target_rad = math.radians(float(raw_positions_deg[int(joint_index)]))
+    else:
+        raise ValueError(
+            "Selected car approach solution has no IK value for arm base joint "
+            f"{int(joint_index)}."
+        )
+
+    if not math.isfinite(target_rad):
+        raise ValueError(f"Arm base joint target is not finite: {target_rad}")
+
+    yaw_compensation_rad = float(yaw_compensation_rad)
+    if not math.isfinite(yaw_compensation_rad):
+        yaw_compensation_rad = 0.0
+    compensated_target_rad = float(target_rad) + yaw_compensation_rad
+    target_deg = math.degrees(target_rad)
+    compensated_target_deg = math.degrees(compensated_target_rad)
+    lower_deg, upper_deg = _joint_limit_deg_from_arm_config(
+        arm_config,
+        int(joint_index),
+    )
+    uncompensated_command_deg = _clamp_optional_deg(target_deg, lower_deg, upper_deg)
+    command_deg = _clamp_optional_deg(compensated_target_deg, lower_deg, upper_deg)
+    command_rad = math.radians(command_deg)
+    return {
+        "joint_index": int(joint_index),
+        "source_field": source_field,
+        "target_joint_position_rad": float(target_rad),
+        "target_joint_position_deg": float(target_deg),
+        "yaw_compensation_joint_delta_rad": float(yaw_compensation_rad),
+        "yaw_compensation_joint_delta_deg": float(math.degrees(yaw_compensation_rad)),
+        "compensated_target_joint_position_rad": float(compensated_target_rad),
+        "compensated_target_joint_position_deg": float(compensated_target_deg),
+        "uncompensated_command_joint_position_rad": float(math.radians(uncompensated_command_deg)),
+        "uncompensated_command_joint_position_deg": float(uncompensated_command_deg),
+        "command_joint_position_rad": float(command_rad),
+        "command_joint_position_deg": float(command_deg),
+        "joint_limit_min_deg": lower_deg,
+        "joint_limit_max_deg": upper_deg,
+        "clamped": not math.isclose(
+            float(command_deg),
+            float(compensated_target_deg),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ),
+    }
+
+
+def _arm_base_alignment_joint_positions_rad(
+    *,
+    planning_config,
+    joint_index: int,
+    command_rad: float,
+) -> list[float]:
+    joint_positions_rad = [math.radians(float(value)) for value in planning_config.joint_reset_deg]
+    if not (0 <= int(joint_index) < len(joint_positions_rad)):
+        raise ValueError(
+            f"arm base joint index {int(joint_index)} is outside reset vector length "
+            f"{len(joint_positions_rad)}"
+        )
+    joint_positions_rad[int(joint_index)] = float(command_rad)
+    return joint_positions_rad
+
+
+def _publish_arm_base_alignment_command(
+    *,
+    control_topic: str,
+    planning_config,
+    start_joint_positions_rad: list[float],
+    joint_positions_rad: list[float],
+    wait_for_subscribers_sec: float,
+    publish_count: int,
+    publish_interval_sec: float,
+    post_publish_settle_sec: float,
+) -> dict[str, object]:
+    control_topic = str(control_topic).strip() or ARM_BASE_ALIGNMENT_CONTROL_TOPIC
+    base_config = arm_move_config_from_environment(
+        planning_config=planning_config,
+        control_topic=control_topic,
+    )
+    move_config = replace(
+        base_config,
+        node_name="approach_agent_car_arm_base_alignment",
+        close_gripper_on_arrival=False,
+        forward_before_gripper_close=False,
+        return_to_start_after_gripper_close=False,
+        wait_for_subscribers_sec=max(0.0, float(wait_for_subscribers_sec)),
+        hold_final_count=max(1, int(publish_count)),
+        hold_final_interval_sec=max(0.0, float(publish_interval_sec)),
+    )
+    trajectory_rad = build_linear_joint_trajectory(
+        start_joint_positions_rad,
+        joint_positions_rad,
+        interpolation_steps=move_config.interpolation_steps,
+        include_start=move_config.publish_start,
+    )
+
+    publish_result = publish_joint_trajectory(
+        trajectory_rad,
+        config=move_config,
+    )
+    if post_publish_settle_sec > 0.0:
+        time.sleep(max(0.0, float(post_publish_settle_sec)))
+
+    return {
+        **publish_result,
+        "success": bool(publish_result.get("success", False)),
+        "skipped": False,
+        "phase": "published",
+        "control_topic": publish_result.get("control_topic", control_topic),
+        "arm_command": publish_result.get("arm_command", ARM_BASE_ALIGNMENT_COMMAND),
+        "source": ARM_BASE_ALIGNMENT_SOURCE,
+        "execution_model": publish_result.get("execution_model", "agent_interpolates_tools_step_targets"),
+        "command_joint_positions_rad": [float(value) for value in joint_positions_rad],
+        "command_joint_positions_deg": [math.degrees(float(value)) for value in joint_positions_rad],
+        "start_joint_positions_rad": [float(value) for value in start_joint_positions_rad],
+        "start_joint_positions_deg": [math.degrees(float(value)) for value in start_joint_positions_rad],
+        "trajectory_point_count": int(publish_result.get("trajectory_point_count", len(trajectory_rad))),
+        "commands_published": int(publish_result.get("commands_published", 0) or 0),
+        "post_publish_settle_sec": float(post_publish_settle_sec),
+    }
+
+
+def _align_arm_base_to_target_grasp_pose_after_arrival(
+    solution: dict[str, object],
+    *,
+    planning_config,
+    arm_config: dict[str, object],
+    nav_result: dict[str, object] | None = None,
+    reference_amcl_pose: RosMapPose2D | None = None,
+) -> dict[str, object]:
+    if not _env_flag(
+        "APPROACH_AGENT_CAR_ALIGN_ARM_BASE_ON_ARRIVAL",
+        ARM_BASE_ALIGNMENT_ENABLED,
+    ):
+        return {
+            "success": False,
+            "skipped": True,
+            "phase": "disabled",
+            "message": "Arm base alignment after car approach is disabled.",
+        }
+
+    joint_index = int(os.getenv("APPROACH_AGENT_CAR_ARM_BASE_JOINT_INDEX", str(ARM_BASE_ALIGNMENT_JOINT_INDEX)))
+    yaw_compensation = _arm_base_yaw_compensation_from_nav_result(
+        solution,
+        nav_result=nav_result,
+        reference_amcl_pose=reference_amcl_pose,
+    )
+    yaw_compensation_rad = (
+        float(yaw_compensation.get("joint_delta_rad", 0.0) or 0.0)
+        if bool(yaw_compensation.get("applied", False))
+        else 0.0
+    )
+    try:
+        target = _arm_base_alignment_target_from_solution(
+            solution,
+            arm_config=arm_config,
+            joint_index=joint_index,
+            yaw_compensation_rad=yaw_compensation_rad,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "skipped": False,
+            "phase": "target_unavailable",
+            "message": str(exc),
+            "joint_index": int(joint_index),
+            "yaw_compensation": yaw_compensation,
+        }
+
+    try:
+        start_joint_positions_rad = [
+            math.radians(float(value))
+            for value in planning_config.joint_reset_deg
+        ]
+        joint_positions_rad = _arm_base_alignment_joint_positions_rad(
+            planning_config=planning_config,
+            joint_index=int(target["joint_index"]),
+            command_rad=float(target["command_joint_position_rad"]),
+        )
+    except Exception as exc:
+        return {
+            **target,
+            "success": False,
+            "skipped": False,
+            "phase": "joint_vector_unavailable",
+            "message": str(exc),
+            "yaw_compensation": yaw_compensation,
+        }
+
+    control_topic = os.getenv(
+        "APPROACH_AGENT_ARM_CONTROL_TOPIC",
+        ARM_BASE_ALIGNMENT_CONTROL_TOPIC,
+    ).strip() or ARM_BASE_ALIGNMENT_CONTROL_TOPIC
+    wait_for_subscribers_sec = float(
+        os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_WAIT_FOR_SUBSCRIBERS_SEC", "2.0")
+    )
+    publish_count = int(os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_PUBLISH_COUNT", "1"))
+    publish_interval_sec = float(os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_INTERVAL_SEC", "0.05"))
+    post_publish_settle_sec = float(
+        os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_POST_PUBLISH_SETTLE_SEC", "0.2")
+    )
+
+    reset_joint_rad = math.radians(float(planning_config.joint_reset_deg[int(target["joint_index"])]))
+    target = {
+        **target,
+        "reset_joint_position_rad": float(reset_joint_rad),
+        "reset_joint_position_deg": float(math.degrees(reset_joint_rad)),
+        "command_delta_from_reset_rad": float(float(target["command_joint_position_rad"]) - reset_joint_rad),
+        "command_delta_from_reset_deg": float(float(target["command_joint_position_deg"]) - math.degrees(reset_joint_rad)),
+    }
+
+    try:
+        publish_result = _publish_arm_base_alignment_command(
+            control_topic=control_topic,
+            planning_config=planning_config,
+            start_joint_positions_rad=start_joint_positions_rad,
+            joint_positions_rad=joint_positions_rad,
+            wait_for_subscribers_sec=wait_for_subscribers_sec,
+            publish_count=publish_count,
+            publish_interval_sec=publish_interval_sec,
+            post_publish_settle_sec=post_publish_settle_sec,
+        )
+    except Exception as exc:
+        publish_result = {
+            "success": False,
+            "skipped": False,
+            "phase": "publish_failed",
+            "message": str(exc),
+        }
+
+    result = {
+        **target,
+        **publish_result,
+        "yaw_compensation": yaw_compensation,
+        "target_grasp_pose_direction_source": (
+            "selected_solution IK plus final base_link yaw compensation"
+        ),
+    }
+    if bool(result.get("success", False)):
+        print(
+            "[base_approach] arm base aligned toward selected target grasp pose: "
+            f"joint={int(target['joint_index'])} "
+            f"target={float(target['target_joint_position_deg']):.2f}deg "
+            f"yaw_comp={float(target['yaw_compensation_joint_delta_deg']):.2f}deg "
+            f"command={float(target['command_joint_position_deg']):.2f}deg "
+            f"reset={float(target['reset_joint_position_deg']):.2f}deg "
+            f"delta={float(target['command_delta_from_reset_deg']):.2f}deg "
+            f"clamped={int(bool(target['clamped']))}",
+            flush=True,
+        )
+    else:
+        print(
+            "[base_approach] arm base alignment skipped/failed: "
+            f"{result.get('message', result.get('phase', 'unknown'))}",
+            flush=True,
+        )
+    return result
+
+
 def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict[str, object]:
     run_config = run_config or ApproachAgentRunConfig()
     started_at = time.time()
@@ -2752,6 +3238,11 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
     phase = "sampled"
     message = "Base approach target sampled."
     initial_pose_source = ""
+    arm_base_alignment_result: dict[str, object] = {
+        "success": False,
+        "skipped": True,
+        "phase": "not_started",
+    }
     if goal_pose_solution is None:
         phase = "no_target_pose"
         message = "No target pose solution available; rule navigation was not started."
@@ -2774,10 +3265,17 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
             initial_pose_source=initial_pose_source,
         )
         if bool(nav_result.get("success", False)):
+            arm_base_alignment_result = _align_arm_base_to_target_grasp_pose_after_arrival(
+                goal_pose_solution,
+                planning_config=planning_config,
+                arm_config=arm_config,
+                nav_result=nav_result,
+                reference_amcl_pose=current_amcl_pose,
+            )
             phase = "done"
-            message = "Base approach reached the selected pose; arm motion is deferred."
+            message = "Base approach reached the selected pose; arm base was aligned and arm motion is deferred."
             print(
-                "[base_approach] base approach complete. Arm movement is intentionally "
+                "[base_approach] base approach complete. Full arm movement is intentionally "
                 "deferred to Arm_Approach_Agent.",
                 flush=True,
             )
@@ -2813,6 +3311,9 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
     success = bool(nav_result.get("success", False)) if run_config.run_rule_navigation else goal_pose_solution is not None
     status_code = "APPROACH_SUCCESS" if success else "APPROACH_FAIL"
     next_agent = "Arm_Approach_Agent" if success else None
+    arm_approach_start_base_joint_index = arm_base_alignment_result.get("joint_index")
+    arm_approach_start_base_joint_rad = arm_base_alignment_result.get("command_joint_position_rad")
+    arm_approach_start_base_joint_deg = arm_base_alignment_result.get("command_joint_position_deg")
     return {
         "success": success,
         "status_code": status_code,
@@ -2831,11 +3332,22 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
             "obstacle_depth_point_count": int(live_scene.obstacle_depth_point_count),
             "target_object_point_count": int(live_scene.target_object_point_count),
             "target_excluded_depth_point_count": int(live_scene.target_excluded_depth_point_count),
+            "pointcloud_camera_x_mirrored": bool(live_scene.pointcloud_camera_x_mirrored),
             "amcl_available": current_amcl_pose is not None,
         },
         "selected_solution": goal_pose_solution or {},
         "selected_ik_feasible": bool((goal_pose_solution or {}).get("ik_feasible", False)),
         "nav_result": nav_result,
+        "arm_base_alignment_result": arm_base_alignment_result,
+        "arm_base_alignment_published": bool(arm_base_alignment_result.get("success", False)),
+        "arm_approach_start_base_joint_index": arm_approach_start_base_joint_index,
+        "arm_approach_start_base_joint_rad": arm_approach_start_base_joint_rad,
+        "arm_approach_start_base_joint_deg": arm_approach_start_base_joint_deg,
+        "arm_approach_start_base_joint_source": (
+            "car_approach_arm_base_alignment"
+            if arm_approach_start_base_joint_rad is not None
+            else ""
+        ),
         "arm_motion_skipped": True,
         "map_png_path": str(map_png_path) if run_config.write_map_png else "",
         "visualization_record_count": len(visualization_records),
