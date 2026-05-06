@@ -18,7 +18,7 @@ class CarActionClient(BaseActionClient):
             client_name="CarActionClient",
         )
 
-    def _create_goal_msg(self, mode):
+    def _create_goal_msg(self, mode, **_goal_kwargs):
         goal_msg = NavGoal.Goal()
         goal_msg.mode = mode
         return goal_msg

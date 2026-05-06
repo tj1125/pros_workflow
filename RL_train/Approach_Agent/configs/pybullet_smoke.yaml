@@ -1,7 +1,7 @@
 urdf_path: tools/car_control/src/robot_description/urdf/target.urdf
 initial_height: 0.195
 base_orientation_euler_deg: [0.0, 0.0, 90.0]
-joint_reset_deg: [90.0, 30.0, 160.0, 90.0, 10.0]
+joint_reset_deg: [90.0, 30.0, 150.0, 90.0, 10.0]
 test_target_position_base: [0.23, 0.0, 0.30]
 ee_link_index: 4
 obstacle_box_size: [0.08, 0.08, 0.08]

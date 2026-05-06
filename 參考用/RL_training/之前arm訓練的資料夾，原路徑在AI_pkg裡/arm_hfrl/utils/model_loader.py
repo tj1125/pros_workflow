@@ -42,7 +42,7 @@ Background:
   • Finger (4): Open (+15°) / Close (−15°)
 
 Initial T-pose angles:
-[Base, Shoulder, Elbow, Wrist, Finger] = [90.0, 30.0, 160.0, 90.0, 10.0]
+[Base, Shoulder, Elbow, Wrist, Finger] = [90.0, 30.0, 150.0, 90.0, 10.0]
 
 Angle limits:
 • Base: 0°–240°

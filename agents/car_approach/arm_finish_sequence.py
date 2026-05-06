@@ -4,36 +4,39 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 
-from agents.arm_approach.move_arm import (
-    config_from_environment as arm_move_config_from_environment,
-    move_arm_for_solution,
-)
-
-from .src.pybullet_ompl import (
-    _find_controllable_joints,
-    _set_joint_positions_direct,
-)
-
 
 CAR_ARM_FINISH_ENABLED = True
 CAR_ARM_FINISH_NODE_NAME = "approach_agent_car_arm_finish"
 CAR_ARM_FINISH_GRIPPER_JOINT_INDEX = 4
-CAR_ARM_FINISH_GRIPPER_OPEN_DEG = 70.0
+CAR_ARM_FINISH_GRIPPER_OPEN_DEG = 60.0
 CAR_ARM_FINISH_GRIPPER_CLOSE_DEG = 10.0
 CAR_ARM_FINISH_WRIST_JOINT_INDEX = 3
 CAR_ARM_FINISH_TARGET_GRASP_YAW_REFERENCE_PERIOD_DEG = 180.0
 CAR_ARM_FINISH_TARGET_GRASP_YAW_TO_WRIST_SIGN = 1.0
 CAR_ARM_FINISH_WRIST_YAW_MIN_DEG = 60.0
 CAR_ARM_FINISH_WRIST_YAW_MAX_DEG = 120.0
-CAR_ARM_FINISH_PRE_CLOSE_EE_OFFSET_ENABLED = True
-CAR_ARM_FINISH_PRE_CLOSE_FORWARD_DISTANCE_M = 0.07
-CAR_ARM_FINISH_PRE_CLOSE_DOWN_DISTANCE_M = 0
+CAR_ARM_FINISH_ARM_ACTION_SERVER_NAME = "arm_action_server"
+CAR_ARM_FINISH_ACTION_SERVER_WAIT_SEC = 5.0
+CAR_ARM_FINISH_ACTION_RESULT_TIMEOUT_SEC = 45.0
+CAR_ARM_FINISH_GRASP_TARGET_OFFSET_X_M = 0.06
+CAR_ARM_FINISH_GRASP_TARGET_OFFSET_Y_M = 0.8
+CAR_ARM_FINISH_GRASP_TARGET_OFFSET_Z_M = -0.13
+CAR_ARM_FINISH_GRASP_TARGET_HORIZONTAL_DEEPER_M = 0.0
+CAR_ARM_FINISH_GRASP_TARGET_TRAJECTORY_STEPS = 5
+CAR_ARM_FINISH_GRASP_TARGET_WAYPOINT_SLEEP_SEC = 0.1
+CAR_ARM_FINISH_GRASP_TARGET_TOLERANCE_M = 0.03
+CAR_ARM_FINISH_JOINT_STATE_WAIT_SEC = 5.0
+CAR_ARM_FINISH_JOINT_COMMAND_TIMEOUT_SEC = 5.0
+CAR_ARM_FINISH_JOINT_COMMAND_TOLERANCE_RAD = 0.08
+CAR_ARM_FINISH_JOINT_COMMAND_REPUBLISH_INTERVAL_SEC = 0.1
+CAR_ARM_FINISH_GRIPPER_CLOSE_DELAY_SEC = 3.0
+CAR_ARM_FINISH_AFTER_GRIPPER_CLOSE_INIT_POSE_DELAY_SEC = 1.0
+CAR_ARM_FINISH_ACTION_EXECUTION_MODEL = "tools_arm_action_server_car_grasp_sequence"
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -62,7 +65,7 @@ def run_car_arm_finish_sequence(
     p_mod: Any | None = None,
     pybullet_data: Any | None = None,
 ) -> dict[str, object]:
-    """Open the gripper, move the arm to the target pose, then close the gripper."""
+    """Open the gripper, reach the PB target offset, close, then call init_pose."""
 
     if not car_arm_finish_enabled():
         return {
@@ -77,7 +80,6 @@ def run_car_arm_finish_sequence(
             solution,
             visualization_records,
         )
-        start_joint_positions_rad = _joint_reset_rad(planning_config)
         motion_solution, metadata = _build_motion_solution(
             solution,
             target_record=target_record,
@@ -85,340 +87,723 @@ def run_car_arm_finish_sequence(
             arm_config=arm_config,
             arm_base_target=arm_base_target,
         )
-        pre_close_result = _with_pre_close_ee_down_then_forward(
-            motion_solution,
-            p_mod=p_mod,
-            pybullet_data=pybullet_data,
-            planning_config=planning_config,
-            arm_config=arm_config,
-            enabled=env_flag(
-                "APPROACH_AGENT_CAR_PRE_CLOSE_EE_OFFSET_ENABLED",
-                CAR_ARM_FINISH_PRE_CLOSE_EE_OFFSET_ENABLED,
-            ),
-        )
-        motion_solution = pre_close_result["solution"]
-        metadata.update(pre_close_result["metadata"])
         gripper_index = int(metadata["preopened_gripper_joint_index"])
         gripper_open_rad = float(metadata["preopened_gripper_target_rad"])
-        if 0 <= gripper_index < len(start_joint_positions_rad):
-            start_joint_positions_rad[gripper_index] = gripper_open_rad
-        locked_arm_base_joint_index = _optional_int(metadata.get("locked_arm_base_joint_index"))
-        locked_arm_base_joint_rad = _optional_float(metadata.get("locked_arm_base_joint_rad"))
-        if (
-            locked_arm_base_joint_index is not None
-            and locked_arm_base_joint_rad is not None
-            and 0 <= locked_arm_base_joint_index < len(start_joint_positions_rad)
-        ):
-            start_joint_positions_rad[locked_arm_base_joint_index] = locked_arm_base_joint_rad
-
-        base_config = arm_move_config_from_environment(planning_config=planning_config)
-        move_config = replace(
-            base_config,
-            node_name=CAR_ARM_FINISH_NODE_NAME,
-            publish_start=True,
-            close_gripper_on_arrival=True,
-            gripper_joint_index=gripper_index,
-            gripper_close_rad=math.radians(
-                float(
-                    os.getenv(
-                        "APPROACH_AGENT_CAR_GRIPPER_CLOSE_DEG",
-                        str(CAR_ARM_FINISH_GRIPPER_CLOSE_DEG),
-                    )
-                )
-            ),
-            forward_before_gripper_close=bool(metadata.get("pre_close_ee_offset_enabled", False)),
-            return_to_start_after_gripper_close=False,
-        )
-        publish_result = move_arm_for_solution(
+        wrist_index = int(metadata.get("target_grasp_wrist_joint_index", CAR_ARM_FINISH_WRIST_JOINT_INDEX))
+        wrist_target_rad = _wrist_target_rad_from_metadata(
+            metadata,
             motion_solution,
+            wrist_index=wrist_index,
+        )
+        gripper_close_rad = math.radians(
+            float(
+                os.getenv(
+                    "APPROACH_AGENT_CAR_GRIPPER_CLOSE_DEG",
+                    str(CAR_ARM_FINISH_GRIPPER_CLOSE_DEG),
+                )
+            )
+        )
+        (
+            grasp_target_base_position_xyz,
+            grasp_target_base_position_source,
+            grasp_target_frame_metadata,
+        ) = _grasp_target_base_position_xyz(
+            motion_solution,
+            target_record=target_record,
             planning_config=planning_config,
-            config=move_config,
-            planner_config_path=planner_config_path,
-            start_joint_positions_rad=start_joint_positions_rad,
+            arm_base_target=arm_base_target,
+        )
+        grasp_target_offset_xyz = _grasp_target_offset_xyz_from_environment()
+        car_grasp_target_position_xyz, offset_metadata = _apply_grasp_target_offset_xyz(
+            grasp_target_base_position_xyz,
+            grasp_target_offset_xyz,
+            motion_solution=motion_solution,
+            planning_config=planning_config,
+            arm_config=arm_config,
+            p_mod=p_mod,
+            pybullet_data=pybullet_data,
+        )
+        car_grasp_offset_position_xyz = car_grasp_target_position_xyz
+        horizontal_deeper_m = _grasp_target_horizontal_deeper_m_from_environment()
+        car_grasp_target_position_xyz, horizontal_depth_metadata = _apply_grasp_target_horizontal_depth_xyz(
+            car_grasp_offset_position_xyz,
+            horizontal_deeper_m,
+        )
+        metadata.update(
+            {
+                "pre_close_ee_offset_enabled": False,
+                "pre_close_ee_offset_skipped": True,
+                "pre_close_ee_offset_sequence": [],
+                "pre_close_ee_offset_replaced_by": "car_grasp_sequence_target_offset_xyz",
+                "car_grasp_sequence_base_position_source": grasp_target_base_position_source,
+                "car_grasp_sequence_base_position_xyz": grasp_target_base_position_xyz,
+                "car_grasp_sequence_offset_xyz": grasp_target_offset_xyz,
+                "car_grasp_sequence_offset_position_xyz": car_grasp_offset_position_xyz,
+                "car_grasp_sequence_target_position_xyz": car_grasp_target_position_xyz,
+                "return_to_start_after_gripper_close_requested": True,
+                "return_to_start_path_source": "arm_action_server.init_pose",
+                **grasp_target_frame_metadata,
+                **offset_metadata,
+                **horizontal_depth_metadata,
+            }
+        )
+        action_config = _action_finish_config_from_environment()
+        publish_result = _run_car_grasp_sequence_action(
+            car_grasp_target_position_xyz,
+            action_config=action_config,
+            gripper_joint_index=gripper_index,
+            gripper_open_rad=gripper_open_rad,
+            wrist_joint_index=wrist_index,
+            wrist_target_rad=wrist_target_rad,
+            gripper_close_rad=gripper_close_rad,
         )
     except Exception as exc:
         return {
             "success": False,
             "skipped": False,
-            "phase": "publish_failed",
+            "phase": "action_sequence_failed",
             "message": str(exc),
         }
+
+    execution_sequence = [
+        "calculate_car_grasp_sequence_target",
+        "open_gripper_60deg",
+        "rotate_wrist_to_target_grasp_yaw",
+        "send_car_grasp_sequence_action",
+        "close_gripper_10deg",
+        "return_to_init_pose",
+    ]
 
     result: dict[str, object] = {
         **metadata,
         **publish_result,
         "success": bool(publish_result.get("success", False)),
         "skipped": False,
-        "phase": "published" if bool(publish_result.get("success", False)) else "publish_failed",
+        "phase": "published" if bool(publish_result.get("success", False)) else "action_sequence_failed",
         "source": "approach_agent_car_approach_direct_arm_finish",
         "arm_motion_skipped": False,
-        "target_pose_source": "selected car_approach IK solution",
-        "execution_sequence": [
-            "open_gripper",
-            "lock_arm_base_joint",
-            "move_arm_joints_to_target_pose",
-            "move_ee_down",
-            "move_ee_forward",
-            "close_gripper",
-        ],
+        "target_pose_source": (
+            "selected car_approach grasp target plus car_grasp_sequence offset "
+            "and horizontal depth"
+        ),
+        "execution_sequence": execution_sequence,
     }
     if bool(result["success"]):
         print(
             "[base_approach] car_approach direct arm finish completed: "
             f"open_finger={float(metadata['preopened_gripper_target_deg']):.2f}deg "
             f"close_finger={float(result.get('gripper_close_deg', CAR_ARM_FINISH_GRIPPER_CLOSE_DEG)):.2f}deg "
-            f"wrist={float(metadata.get('target_grasp_wrist_target_deg', float('nan'))):.2f}deg",
+            f"wrist={float(metadata.get('target_grasp_wrist_target_deg', float('nan'))):.2f}deg "
+            f"car_grasp_target={result.get('car_grasp_sequence_target_position_xyz')} "
+            f"init_pose={bool(result.get('init_pose_success', False))}",
             flush=True,
         )
     return result
 
 
-def _with_pre_close_ee_down_then_forward(
+def _grasp_target_base_position_xyz(
     solution: dict[str, object],
     *,
-    p_mod: Any | None,
-    pybullet_data: Any | None,
+    target_record: dict[str, object] | None,
     planning_config: Any,
-    arm_config: dict[str, object] | None,
-    enabled: bool,
-) -> dict[str, object]:
+    arm_base_target: dict[str, object] | None,
+) -> tuple[list[float], str, dict[str, object]]:
+    planning_world_position: list[float] | None = None
+    planning_world_source = ""
+    if isinstance(target_record, dict) and target_record.get("target_pb") is not None:
+        planning_world_position = _float_xyz(target_record["target_pb"], label="target_record.target_pb")
+        planning_world_source = "target_record.target_pb"
+    else:
+        for key in (
+            "target_pb",
+            "target_position_pybullet_xyz",
+            "final_ee_position_xyz",
+        ):
+            if solution.get(key) is not None:
+                planning_world_position = _float_xyz(solution[key], label=f"solution.{key}")
+                planning_world_source = f"solution.{key}"
+                break
+
+    if planning_world_position is None:
+        raise KeyError("grasp_target needs target_record.target_pb or solution.final_ee_position_xyz.")
+
+    base_pose = _grasp_target_base_pose_for_action(
+        solution,
+        planning_config=planning_config,
+        arm_base_target=arm_base_target,
+    )
+    if base_pose is None:
+        return (
+            planning_world_position,
+            planning_world_source,
+            {
+                "car_grasp_sequence_coordinate_frame": "car_approach_planning_pb_world_untransformed",
+                "car_grasp_sequence_planning_world_position_xyz": planning_world_position,
+                "car_grasp_sequence_planning_world_position_source": planning_world_source,
+                "car_grasp_sequence_selected_base_transform_applied": False,
+            },
+        )
+
+    base_xyz, base_yaw_rad, base_pose_source, base_pose_metadata = base_pose
+    action_position = _planning_pb_world_position_to_tools_base_local_pb(
+        planning_world_position,
+        base_xyz=base_xyz,
+        base_yaw_rad=base_yaw_rad,
+        planning_config=planning_config,
+    )
+    return (
+        action_position,
+        f"{planning_world_source}->{base_pose_source}",
+        {
+            "car_grasp_sequence_coordinate_frame": "tools_pb_world_aligned_to_arrived_arm_base",
+            "car_grasp_sequence_planning_world_position_xyz": planning_world_position,
+            "car_grasp_sequence_planning_world_position_source": planning_world_source,
+            "car_grasp_sequence_base_pose_source": base_pose_source,
+            "car_grasp_sequence_selected_base_transform_applied": True,
+            "car_grasp_sequence_base_xyz": base_xyz,
+            "car_grasp_sequence_base_yaw_rad": float(base_yaw_rad),
+            "car_grasp_sequence_base_yaw_deg": math.degrees(float(base_yaw_rad)),
+            **base_pose_metadata,
+        },
+    )
+
+
+def _grasp_target_base_pose_for_action(
+    solution: dict[str, object],
+    *,
+    planning_config: Any,
+    arm_base_target: dict[str, object] | None,
+) -> tuple[list[float], float, str, dict[str, object]] | None:
+    yaw_compensation = (
+        arm_base_target.get("yaw_compensation")
+        if isinstance(arm_base_target, dict)
+        else None
+    )
+    if isinstance(yaw_compensation, dict) and bool(yaw_compensation.get("applied", False)):
+        final_xyz_raw = yaw_compensation.get("final_base_link_local_pb_xyz")
+        final_yaw_rad = _optional_float(yaw_compensation.get("final_base_link_local_pb_yaw_rad"))
+        if final_xyz_raw is not None and final_yaw_rad is not None:
+            final_xyz = _float_xyz(
+                final_xyz_raw,
+                label="arm_base_target.yaw_compensation.final_base_link_local_pb_xyz",
+            )
+            return (
+                final_xyz,
+                float(final_yaw_rad),
+                "nav_result.final_amcl_pose_actual_base_local_pb",
+                {
+                    "car_grasp_sequence_nav_error_compensation_applied": True,
+                    "car_grasp_sequence_planned_base_xyz": yaw_compensation.get("planned_base_link_local_pb_xyz"),
+                    "car_grasp_sequence_final_base_xyz": final_xyz,
+                    "car_grasp_sequence_vehicle_position_error_xyz_m": yaw_compensation.get(
+                        "vehicle_position_error_from_planned_xyz_m"
+                    ),
+                    "car_grasp_sequence_vehicle_position_error_xy_m": yaw_compensation.get(
+                        "vehicle_position_error_from_planned_xy_m"
+                    ),
+                    "car_grasp_sequence_vehicle_position_error_norm_m": yaw_compensation.get(
+                        "vehicle_position_error_from_planned_norm_m"
+                    ),
+                    "car_grasp_sequence_vehicle_yaw_error_rad": yaw_compensation.get(
+                        "vehicle_yaw_error_from_planned_rad"
+                    ),
+                    "car_grasp_sequence_vehicle_yaw_error_deg": yaw_compensation.get(
+                        "vehicle_yaw_error_from_planned_deg"
+                    ),
+                },
+            )
+
+    base_xyz_raw = solution.get("pb_base_link_xyz")
+    base_yaw_rad = _optional_float(solution.get("pb_base_link_yaw_rad"))
+    if base_xyz_raw is None or base_yaw_rad is None:
+        return None
+
+    base_xyz = _float_xyz(base_xyz_raw, label="solution.pb_base_link_xyz")
+    try:
+        base_xyz[2] = float(planning_config.initial_height)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return (
+        base_xyz,
+        float(base_yaw_rad),
+        "selected_solution.planned_base_local_pb",
+        {
+            "car_grasp_sequence_nav_error_compensation_applied": False,
+            "car_grasp_sequence_planned_base_xyz": base_xyz,
+            "car_grasp_sequence_final_base_xyz": None,
+        },
+    )
+
+
+def _planning_pb_world_position_to_tools_base_local_pb(
+    position_xyz: Sequence[Any],
+    *,
+    base_xyz: Sequence[Any],
+    base_yaw_rad: float,
+    planning_config: Any,
+) -> list[float]:
+    position = np.asarray(_float_xyz(position_xyz, label="position_xyz"), dtype=np.float64)
+    base = np.asarray(_float_xyz(base_xyz, label="base_xyz"), dtype=np.float64)
+    delta = position - base
+    cos_yaw = math.cos(-float(base_yaw_rad))
+    sin_yaw = math.sin(-float(base_yaw_rad))
+    local_x = (cos_yaw * float(delta[0])) - (sin_yaw * float(delta[1]))
+    local_y = (sin_yaw * float(delta[0])) + (cos_yaw * float(delta[1]))
+    try:
+        base_height = float(planning_config.initial_height)
+    except (AttributeError, TypeError, ValueError):
+        base_height = float(base[2])
+    return [
+        float(local_x),
+        float(local_y),
+        float(base_height + float(delta[2])),
+    ]
+
+
+def _grasp_target_offset_xyz_from_environment() -> list[float]:
+    return [
+        float(os.getenv("APPROACH_AGENT_CAR_GRASP_TARGET_OFFSET_X_M", str(CAR_ARM_FINISH_GRASP_TARGET_OFFSET_X_M))),
+        float(os.getenv("APPROACH_AGENT_CAR_GRASP_TARGET_OFFSET_Y_M", str(CAR_ARM_FINISH_GRASP_TARGET_OFFSET_Y_M))),
+        float(os.getenv("APPROACH_AGENT_CAR_GRASP_TARGET_OFFSET_Z_M", str(CAR_ARM_FINISH_GRASP_TARGET_OFFSET_Z_M))),
+    ]
+
+
+def _grasp_target_offset_frame_from_environment() -> str:
+    return (
+        os.getenv("APPROACH_AGENT_CAR_GRASP_TARGET_OFFSET_FRAME", "base_local").strip().lower()
+        or "base_local"
+    )
+
+
+def _grasp_target_horizontal_deeper_m_from_environment() -> float:
+    return float(
+        os.getenv(
+            "APPROACH_AGENT_CAR_GRASP_TARGET_HORIZONTAL_DEEPER_M",
+            str(CAR_ARM_FINISH_GRASP_TARGET_HORIZONTAL_DEEPER_M),
+        )
+    )
+
+
+def _apply_grasp_target_horizontal_depth_xyz(
+    target_position_xyz: Sequence[Any],
+    depth_m: float,
+) -> tuple[list[float], dict[str, object]]:
+    target_position = np.asarray(
+        _float_xyz(target_position_xyz, label="target_position_xyz"),
+        dtype=np.float64,
+    )
+    depth = float(depth_m)
+    if not math.isfinite(depth):
+        raise ValueError("horizontal grasp target depth must be finite.")
+
     metadata: dict[str, object] = {
-        "pre_close_ee_offset_enabled": bool(enabled),
-        "pre_close_ee_offset_sequence": ["down", "forward"],
-        "pre_close_ee_forward_distance_m": float(
-            os.getenv(
-                "APPROACH_AGENT_CAR_PRE_CLOSE_FORWARD_DISTANCE_M",
-                str(CAR_ARM_FINISH_PRE_CLOSE_FORWARD_DISTANCE_M),
-            )
-        ),
-        "pre_close_ee_down_distance_m": float(
-            os.getenv(
-                "APPROACH_AGENT_CAR_PRE_CLOSE_DOWN_DISTANCE_M",
-                os.getenv(
-                    "APPROACH_AGENT_CAR_PRE_CLOSE_UP_DISTANCE_M",
-                    str(CAR_ARM_FINISH_PRE_CLOSE_DOWN_DISTANCE_M),
-                ),
-            )
+        "car_grasp_sequence_horizontal_depth_offset_m": float(depth),
+        "car_grasp_sequence_target_position_before_horizontal_depth_xyz": (
+            target_position.astype(float).tolist()
         ),
     }
-    if not enabled:
-        metadata["pre_close_ee_offset_skipped"] = True
-        return {"solution": solution, "metadata": metadata}
-    if p_mod is None or pybullet_data is None:
-        raise ValueError("PyBullet modules are required for pre-close EE down/forward IK.")
-    if arm_config is None:
-        raise ValueError("arm_config is required for pre-close EE down/forward IK.")
-
-    goal_joint_positions = _goal_joint_rad_from_solution(solution)
-    forward_distance_m = float(metadata["pre_close_ee_forward_distance_m"])
-    down_distance_m = float(metadata["pre_close_ee_down_distance_m"])
-    gripper_index = int(solution.get("preopened_gripper_joint_index", CAR_ARM_FINISH_GRIPPER_JOINT_INDEX))
-    locked_arm_base_joint_index = _optional_int(solution.get("locked_arm_base_joint_index"))
-    locked_arm_base_joint_rad = _optional_float(solution.get("locked_arm_base_joint_rad"))
-    if (
-        locked_arm_base_joint_index is not None
-        and locked_arm_base_joint_rad is not None
-        and 0 <= locked_arm_base_joint_index < len(goal_joint_positions)
-    ):
-        goal_joint_positions[locked_arm_base_joint_index] = locked_arm_base_joint_rad
-        metadata["pre_close_ee_arm_base_joint_locked"] = True
-        metadata["pre_close_ee_locked_arm_base_joint_index"] = int(locked_arm_base_joint_index)
-        metadata["pre_close_ee_locked_arm_base_joint_rad"] = float(locked_arm_base_joint_rad)
-        metadata["pre_close_ee_locked_arm_base_joint_deg"] = math.degrees(float(locked_arm_base_joint_rad))
-    else:
-        metadata["pre_close_ee_arm_base_joint_locked"] = False
-
-    client_id = p_mod.connect(p_mod.DIRECT)
-    if client_id < 0:
-        raise RuntimeError("PyBullet DIRECT unavailable for pre-close EE down/forward IK.")
-
-    try:
-        p_mod.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p_mod.resetSimulation()
-        p_mod.setGravity(0.0, 0.0, -9.8)
-        p_mod.loadURDF("plane.urdf")
-
-        base_orientation_rad = [math.radians(float(value)) for value in planning_config.base_orientation_euler_deg]
-        robot_id = p_mod.loadURDF(
-            planning_config.urdf_path,
-            useFixedBase=True,
-            basePosition=[0.0, 0.0, float(planning_config.initial_height)],
-            baseOrientation=p_mod.getQuaternionFromEuler(base_orientation_rad),
-        )
-        expected_joint_count = int(arm_config["pybullet"]["controllable_joints"])
-        controllable_joint_ids, controllable_joint_names = _find_controllable_joints(
-            p_mod,
-            robot_id,
-            expected_joint_count,
-        )
-        if len(controllable_joint_ids) != expected_joint_count:
-            raise RuntimeError(
-                "Controllable joint count mismatch during pre-close EE IK: "
-                f"expected={expected_joint_count} actual={len(controllable_joint_ids)} "
-                f"names={controllable_joint_names}"
-            )
-        if len(goal_joint_positions) != len(controllable_joint_ids):
-            raise ValueError(
-                "Goal joint vector length does not match controllable joints during pre-close EE IK: "
-                f"{len(goal_joint_positions)} != {len(controllable_joint_ids)}"
-            )
-
-        _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, goal_joint_positions)
-        p_mod.performCollisionDetection()
-        ee_state = p_mod.getLinkState(
-            robot_id,
-            int(planning_config.ee_link_index),
-            computeForwardKinematics=True,
-        )
-        ee_position = np.asarray(ee_state[4], dtype=np.float64).reshape(3)
-        ee_orientation = np.asarray(ee_state[5], dtype=np.float64).reshape(4)
-        ee_rotation = np.asarray(p_mod.getMatrixFromQuaternion(ee_orientation.tolist()), dtype=np.float64).reshape(3, 3)
-        forward_axis = ee_rotation[:, 0]
-
-        down_target_position = ee_position + np.asarray([0.0, 0.0, -down_distance_m], dtype=np.float64)
-        down_joint_positions, down_ee_position, down_error_m = _solve_pre_close_target_position(
-            p_mod,
-            robot_id=robot_id,
-            controllable_joint_ids=controllable_joint_ids,
-            planning_config=planning_config,
-            arm_config=arm_config,
-            target_position=down_target_position,
-            target_orientation=ee_orientation,
-            seed_joint_positions=goal_joint_positions,
-            gripper_index=gripper_index,
-            gripper_position_rad=goal_joint_positions[gripper_index] if 0 <= gripper_index < len(goal_joint_positions) else None,
-            locked_joint_index=locked_arm_base_joint_index,
-            locked_joint_position_rad=locked_arm_base_joint_rad,
-            stage_name="down",
-        )
-
-        forward_target_position = down_target_position + (forward_axis * forward_distance_m)
-        forward_joint_positions, forward_ee_position, forward_error_m = _solve_pre_close_target_position(
-            p_mod,
-            robot_id=robot_id,
-            controllable_joint_ids=controllable_joint_ids,
-            planning_config=planning_config,
-            arm_config=arm_config,
-            target_position=forward_target_position,
-            target_orientation=ee_orientation,
-            seed_joint_positions=down_joint_positions,
-            gripper_index=gripper_index,
-            gripper_position_rad=goal_joint_positions[gripper_index] if 0 <= gripper_index < len(goal_joint_positions) else None,
-            locked_joint_index=locked_arm_base_joint_index,
-            locked_joint_position_rad=locked_arm_base_joint_rad,
-            stage_name="forward",
-        )
-    finally:
-        try:
-            p_mod.disconnect(client_id)
-        except Exception:
-            pass
-
-    adjusted_solution = dict(solution)
-    adjusted_solution["post_arrival_joint_positions_sequence_rad"] = [
-        [float(value) for value in down_joint_positions],
-        [float(value) for value in forward_joint_positions],
-    ]
-    adjusted_solution["post_arrival_joint_positions_sequence_deg"] = [
-        [math.degrees(float(value)) for value in down_joint_positions],
-        [math.degrees(float(value)) for value in forward_joint_positions],
-    ]
-    adjusted_solution["post_arrival_joint_positions_sequence_labels"] = ["down", "forward"]
-
-    metadata.update(
-        {
-            "pre_close_ee_offset_skipped": False,
-            "pre_close_ee_offset_ik_success": True,
-            "pre_close_ee_start_position_xyz": ee_position.astype(float).tolist(),
-            "pre_close_ee_forward_axis_xyz": forward_axis.astype(float).tolist(),
-            "pre_close_ee_down_target_position_xyz": down_target_position.astype(float).tolist(),
-            "pre_close_ee_down_achieved_position_xyz": down_ee_position.astype(float).tolist(),
-            "pre_close_ee_down_target_error_m": float(down_error_m),
-            "pre_close_ee_forward_target_position_xyz": forward_target_position.astype(float).tolist(),
-            "pre_close_ee_forward_achieved_position_xyz": forward_ee_position.astype(float).tolist(),
-            "pre_close_ee_forward_target_error_m": float(forward_error_m),
-            "pre_close_ee_joint_positions_sequence_rad": adjusted_solution["post_arrival_joint_positions_sequence_rad"],
-            "pre_close_ee_joint_positions_sequence_deg": adjusted_solution["post_arrival_joint_positions_sequence_deg"],
-            "pre_close_ee_joint_positions_sequence_labels": ["down", "forward"],
+    if depth == 0.0:
+        return target_position.astype(float).tolist(), {
+            **metadata,
+            "car_grasp_sequence_horizontal_depth_offset_applied": False,
+            "car_grasp_sequence_horizontal_depth_offset_vector_xyz": [0.0, 0.0, 0.0],
         }
+
+    horizontal_xy = target_position[:2]
+    horizontal_norm = float(np.linalg.norm(horizontal_xy))
+    if horizontal_norm <= 1e-9:
+        return target_position.astype(float).tolist(), {
+            **metadata,
+            "car_grasp_sequence_horizontal_depth_offset_applied": False,
+            "car_grasp_sequence_horizontal_depth_offset_skip_reason": "target_xy_norm_is_zero",
+            "car_grasp_sequence_horizontal_depth_offset_vector_xyz": [0.0, 0.0, 0.0],
+        }
+
+    horizontal_axis = np.asarray(
+        [
+            float(horizontal_xy[0]) / horizontal_norm,
+            float(horizontal_xy[1]) / horizontal_norm,
+            0.0,
+        ],
+        dtype=np.float64,
     )
-    return {"solution": adjusted_solution, "metadata": metadata}
+    offset_vector = horizontal_axis * depth
+    return (target_position + offset_vector).astype(float).tolist(), {
+        **metadata,
+        "car_grasp_sequence_horizontal_depth_offset_applied": True,
+        "car_grasp_sequence_horizontal_depth_axis_xyz": horizontal_axis.astype(float).tolist(),
+        "car_grasp_sequence_horizontal_depth_offset_vector_xyz": offset_vector.astype(float).tolist(),
+    }
 
 
-def _solve_pre_close_target_position(
-    p_mod: Any,
+def _apply_grasp_target_offset_xyz(
+    target_position_xyz: Sequence[Any],
+    offset_xyz: Sequence[Any],
     *,
-    robot_id: int,
-    controllable_joint_ids: list[int],
+    motion_solution: dict[str, object],
     planning_config: Any,
-    arm_config: dict[str, object],
-    target_position: np.ndarray,
-    target_orientation: np.ndarray,
-    seed_joint_positions: Sequence[float],
-    gripper_index: int,
-    gripper_position_rad: float | None,
-    locked_joint_index: int | None,
-    locked_joint_position_rad: float | None,
-    stage_name: str,
-) -> tuple[list[float], np.ndarray, float]:
-    seed = [float(value) for value in seed_joint_positions]
-    if (
-        locked_joint_index is not None
-        and locked_joint_position_rad is not None
-        and 0 <= int(locked_joint_index) < len(seed)
-    ):
-        seed[int(locked_joint_index)] = float(locked_joint_position_rad)
-    _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, seed)
-    raw_solution = p_mod.calculateInverseKinematics(
-        robot_id,
-        int(planning_config.ee_link_index),
-        targetPosition=np.asarray(target_position, dtype=np.float64).reshape(3).astype(float).tolist(),
-        targetOrientation=np.asarray(target_orientation, dtype=np.float64).reshape(4).astype(float).tolist(),
+    arm_config: dict[str, object] | None,
+    p_mod: Any | None,
+    pybullet_data: Any | None,
+) -> tuple[list[float], dict[str, object]]:
+    target_position = np.asarray(
+        _float_xyz(target_position_xyz, label="target_position_xyz"),
+        dtype=np.float64,
     )
-    joint_positions = [float(value) for value in raw_solution[: len(controllable_joint_ids)]]
-    if len(joint_positions) != len(controllable_joint_ids):
-        raise RuntimeError(
-            f"{stage_name} IK returned unexpected joint count: "
-            f"{len(joint_positions)} != {len(controllable_joint_ids)}"
+    offset = np.asarray(_float_xyz(offset_xyz, label="offset_xyz"), dtype=np.float64)
+    offset_frame = _grasp_target_offset_frame_from_environment()
+    metadata: dict[str, object] = {
+        "car_grasp_sequence_offset_frame": offset_frame,
+    }
+
+    if not np.any(np.abs(offset) > 0.0):
+        return target_position.astype(float).tolist(), {
+            **metadata,
+            "car_grasp_sequence_offset_vector_xyz": [0.0, 0.0, 0.0],
+        }
+
+    if offset_frame not in {"base", "base_local", "tools_pb_world", "world"}:
+        raise ValueError(
+            "APPROACH_AGENT_CAR_GRASP_TARGET_OFFSET_FRAME must be one of "
+            "base, base_local, tools_pb_world, or world."
         )
 
-    joint_deg = [math.degrees(value) for value in joint_positions]
-    for joint_index, joint_value_deg in enumerate(joint_deg):
-        lower_deg, upper_deg = _joint_limit_deg_from_configs(
-            joint_index=joint_index,
-            planning_config=planning_config,
-            arm_config=arm_config,
-        )
-        joint_deg[joint_index] = _clamp_deg(joint_value_deg, lower_deg, upper_deg)
-    joint_positions = [math.radians(value) for value in joint_deg]
-    if (
-        locked_joint_index is not None
-        and locked_joint_position_rad is not None
-        and 0 <= int(locked_joint_index) < len(joint_positions)
-    ):
-        joint_positions[int(locked_joint_index)] = float(locked_joint_position_rad)
-    if gripper_position_rad is not None and 0 <= int(gripper_index) < len(joint_positions):
-        joint_positions[int(gripper_index)] = float(gripper_position_rad)
+    offset_vector = offset
+    return (target_position + offset_vector).astype(float).tolist(), {
+        **metadata,
+        "car_grasp_sequence_offset_vector_xyz": offset_vector.astype(float).tolist(),
+    }
 
-    _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, joint_positions)
-    p_mod.performCollisionDetection()
-    ee_state = p_mod.getLinkState(
-        robot_id,
-        int(planning_config.ee_link_index),
-        computeForwardKinematics=True,
+
+def _wrist_target_rad_from_metadata(
+    metadata: dict[str, object],
+    motion_solution: dict[str, object],
+    *,
+    wrist_index: int,
+) -> float:
+    metadata_target = _optional_float(metadata.get("target_grasp_wrist_target_rad"))
+    if metadata_target is not None:
+        return float(metadata_target)
+
+    joint_positions = _goal_joint_rad_from_solution(motion_solution)
+    if 0 <= int(wrist_index) < len(joint_positions):
+        return float(joint_positions[int(wrist_index)])
+
+    raise ValueError(
+        f"Cannot command wrist joint {int(wrist_index)}; "
+        f"goal vector length is {len(joint_positions)}."
     )
-    achieved_position = np.asarray(ee_state[4], dtype=np.float64).reshape(3)
-    target_error_m = float(np.linalg.norm(achieved_position - np.asarray(target_position, dtype=np.float64).reshape(3)))
-    return joint_positions, achieved_position, target_error_m
 
 
-def _joint_reset_rad(planning_config: Any) -> list[float]:
-    joint_reset_deg = getattr(planning_config, "joint_reset_deg", None)
-    if joint_reset_deg is None and isinstance(planning_config, dict):
-        joint_reset_deg = planning_config.get("joint_reset_deg")
-    if joint_reset_deg is None:
-        raise ValueError("planning_config.joint_reset_deg is required.")
-    return [math.radians(float(value)) for value in joint_reset_deg]
+def _action_finish_config_from_environment() -> dict[str, object]:
+    tolerance_rad = _joint_command_tolerance_rad_from_environment()
+    return {
+        "joint_state_wait_sec": max(
+            0.0,
+            float(
+                os.getenv(
+                    "APPROACH_AGENT_CAR_JOINT_STATE_WAIT_SEC",
+                    str(CAR_ARM_FINISH_JOINT_STATE_WAIT_SEC),
+                )
+            ),
+        ),
+        "joint_command_timeout_sec": max(
+            0.0,
+            float(
+                os.getenv(
+                    "APPROACH_AGENT_CAR_JOINT_COMMAND_TIMEOUT_SEC",
+                    str(CAR_ARM_FINISH_JOINT_COMMAND_TIMEOUT_SEC),
+                )
+            ),
+        ),
+        "joint_command_tolerance_rad": max(0.0, float(tolerance_rad)),
+        "joint_command_republish_interval_sec": max(
+            0.0,
+            float(
+                os.getenv(
+                    "APPROACH_AGENT_CAR_JOINT_COMMAND_REPUBLISH_INTERVAL_SEC",
+                    str(CAR_ARM_FINISH_JOINT_COMMAND_REPUBLISH_INTERVAL_SEC),
+                )
+            ),
+        ),
+        "gripper_close_delay_sec": max(
+            0.0,
+            float(
+                os.getenv(
+                    "APPROACH_AGENT_ARM_GRIPPER_CLOSE_DELAY_SEC",
+                    str(CAR_ARM_FINISH_GRIPPER_CLOSE_DELAY_SEC),
+                )
+            ),
+        ),
+        "init_pose_delay_sec": max(
+            0.0,
+            float(
+                os.getenv(
+                    "APPROACH_AGENT_CAR_AFTER_GRIPPER_CLOSE_INIT_POSE_DELAY_SEC",
+                    str(CAR_ARM_FINISH_AFTER_GRIPPER_CLOSE_INIT_POSE_DELAY_SEC),
+                )
+            ),
+        ),
+    }
+
+
+def _joint_command_tolerance_rad_from_environment() -> float:
+    tolerance_deg = os.getenv("APPROACH_AGENT_CAR_JOINT_COMMAND_TOLERANCE_DEG")
+    if tolerance_deg is not None and tolerance_deg.strip():
+        return math.radians(float(tolerance_deg))
+    return float(
+        os.getenv(
+            "APPROACH_AGENT_CAR_JOINT_COMMAND_TOLERANCE_RAD",
+            str(CAR_ARM_FINISH_JOINT_COMMAND_TOLERANCE_RAD),
+        )
+    )
+
+
+def _run_car_grasp_sequence_action(
+    target_position_xyz: Sequence[Any],
+    *,
+    action_config: dict[str, object],
+    gripper_joint_index: int,
+    gripper_open_rad: float,
+    wrist_joint_index: int,
+    wrist_target_rad: float,
+    gripper_close_rad: float,
+) -> dict[str, object]:
+    import rclpy
+    from action_interface.action import ArmGoal
+    from rclpy.action import ActionClient
+    from rclpy.node import Node
+
+    target_position = _float_xyz(
+        target_position_xyz,
+        label="car_grasp_sequence target_position_xyz",
+    )
+    action_name = (
+        os.getenv("APPROACH_AGENT_CAR_ARM_ACTION_SERVER_NAME", CAR_ARM_FINISH_ARM_ACTION_SERVER_NAME).strip()
+        or CAR_ARM_FINISH_ARM_ACTION_SERVER_NAME
+    )
+    server_wait_sec = float(
+        os.getenv(
+            "APPROACH_AGENT_CAR_ARM_ACTION_SERVER_WAIT_SEC",
+            str(CAR_ARM_FINISH_ACTION_SERVER_WAIT_SEC),
+        )
+    )
+    action_timeout_sec = float(
+        os.getenv(
+            "APPROACH_AGENT_CAR_ARM_ACTION_RESULT_TIMEOUT_SEC",
+            str(CAR_ARM_FINISH_ACTION_RESULT_TIMEOUT_SEC),
+        )
+    )
+    trajectory_steps = int(
+        os.getenv(
+            "APPROACH_AGENT_CAR_GRASP_TARGET_TRAJECTORY_STEPS",
+            str(CAR_ARM_FINISH_GRASP_TARGET_TRAJECTORY_STEPS),
+        )
+    )
+    waypoint_sleep_sec = float(
+        os.getenv(
+            "APPROACH_AGENT_CAR_GRASP_TARGET_WAYPOINT_SLEEP_SEC",
+            str(CAR_ARM_FINISH_GRASP_TARGET_WAYPOINT_SLEEP_SEC),
+        )
+    )
+    goal_tolerance_m = float(
+        os.getenv(
+            "APPROACH_AGENT_CAR_GRASP_TARGET_TOLERANCE_M",
+            str(CAR_ARM_FINISH_GRASP_TARGET_TOLERANCE_M),
+        )
+    )
+    joint_state_wait_sec = max(0.0, float(action_config["joint_state_wait_sec"]))
+    joint_command_timeout_sec = max(0.0, float(action_config["joint_command_timeout_sec"]))
+    joint_command_tolerance_rad = max(0.0, float(action_config["joint_command_tolerance_rad"]))
+    joint_command_republish_interval_sec = max(
+        0.0,
+        float(action_config["joint_command_republish_interval_sec"]),
+    )
+    close_delay_sec = max(0.0, float(action_config["gripper_close_delay_sec"]))
+    init_pose_delay_sec = max(0.0, float(action_config["init_pose_delay_sec"]))
+
+    owns_rclpy = False
+    node = None
+    try:
+        if not rclpy.ok():
+            rclpy.init(args=None)
+            owns_rclpy = True
+
+        node = Node(CAR_ARM_FINISH_NODE_NAME)
+        action_client = ActionClient(node, ArmGoal, action_name)
+
+        if not action_client.wait_for_server(timeout_sec=max(0.0, server_wait_sec)):
+            return {
+                "success": False,
+                "execution_model": CAR_ARM_FINISH_ACTION_EXECUTION_MODEL,
+                "action_server": action_name,
+                "car_grasp_sequence_target_position_xyz": target_position,
+                "message": f"Arm action server '{action_name}' was not available.",
+            }
+
+        print(
+            "[base_approach] car arm finish: sending car_grasp_sequence action "
+            f"target={target_position} wrist={math.degrees(float(wrist_target_rad)):.2f}deg",
+            flush=True,
+        )
+        sequence_result = _send_arm_action_goal(
+            rclpy,
+            node,
+            action_client,
+            ArmGoal,
+            mode="car_grasp_sequence",
+            target_position=target_position,
+            trajectory_steps=max(1, trajectory_steps),
+            waypoint_sleep_sec=max(0.0, waypoint_sleep_sec),
+            goal_tolerance_m=max(0.0, goal_tolerance_m),
+            wrist_joint_index=int(wrist_joint_index),
+            wrist_target_rad=float(wrist_target_rad),
+            gripper_joint_index=int(gripper_joint_index),
+            gripper_open_rad=float(gripper_open_rad),
+            gripper_close_rad=float(gripper_close_rad),
+            joint_state_wait_sec=float(joint_state_wait_sec),
+            joint_command_timeout_sec=float(joint_command_timeout_sec),
+            joint_command_tolerance_rad=float(joint_command_tolerance_rad),
+            joint_command_republish_interval_sec=float(joint_command_republish_interval_sec),
+            gripper_close_delay_sec=float(close_delay_sec),
+            init_pose_delay_sec=float(init_pose_delay_sec),
+            timeout_sec=max(0.0, action_timeout_sec),
+        )
+        success = bool(sequence_result.get("success", False))
+        return {
+            "success": success,
+            "execution_model": CAR_ARM_FINISH_ACTION_EXECUTION_MODEL,
+            "action_server": action_name,
+            "car_grasp_sequence_success": success,
+            "car_grasp_sequence_result": sequence_result,
+            "joint_command_timeout_sec": float(joint_command_timeout_sec),
+            "joint_command_tolerance_rad": float(joint_command_tolerance_rad),
+            "joint_command_tolerance_deg": math.degrees(float(joint_command_tolerance_rad)),
+            "joint_command_republish_interval_sec": float(joint_command_republish_interval_sec),
+            "joint_state_wait_sec": float(joint_state_wait_sec),
+            "car_grasp_sequence_target_position_xyz": target_position,
+            "car_grasp_sequence_trajectory_steps": max(1, trajectory_steps),
+            "car_grasp_sequence_waypoint_sleep_sec": max(0.0, waypoint_sleep_sec),
+            "car_grasp_sequence_tolerance_m": max(0.0, goal_tolerance_m),
+            "target_move_success": success,
+            "gripper_open_success": success,
+            "wrist_success": success,
+            "wrist_joint_index": int(wrist_joint_index),
+            "wrist_target_rad": float(wrist_target_rad),
+            "wrist_target_deg": math.degrees(float(wrist_target_rad)),
+            "gripper_close_success": success,
+            "gripper_joint_index": int(gripper_joint_index),
+            "gripper_open_rad": float(gripper_open_rad),
+            "gripper_open_deg": math.degrees(float(gripper_open_rad)),
+            "gripper_close_rad": float(gripper_close_rad),
+            "gripper_close_deg": math.degrees(float(gripper_close_rad)),
+            "gripper_close_delay_sec": float(close_delay_sec),
+            "init_pose_delay_sec": float(init_pose_delay_sec),
+            "init_pose_success": success,
+            "return_to_start_published": success,
+            "message": str(sequence_result.get("message", "")),
+        }
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if owns_rclpy and rclpy.ok():
+            rclpy.shutdown()
+
+
+def _send_arm_action_goal(
+    rclpy_module: Any,
+    node: Any,
+    action_client: Any,
+    arm_goal_type: Any,
+    *,
+    mode: str,
+    target_position: Sequence[Any] | None = None,
+    trajectory_steps: int = 0,
+    waypoint_sleep_sec: float = 0.0,
+    goal_tolerance_m: float = 0.0,
+    wrist_joint_index: int | None = None,
+    wrist_target_rad: float | None = None,
+    gripper_joint_index: int | None = None,
+    gripper_open_rad: float | None = None,
+    gripper_close_rad: float | None = None,
+    joint_state_wait_sec: float = 0.0,
+    joint_command_timeout_sec: float = 0.0,
+    joint_command_tolerance_rad: float = 0.0,
+    joint_command_republish_interval_sec: float = 0.0,
+    gripper_close_delay_sec: float = 0.0,
+    init_pose_delay_sec: float = 0.0,
+    timeout_sec: float,
+) -> dict[str, object]:
+    goal_msg = arm_goal_type.Goal()
+    goal_msg.mode = str(mode)
+    if target_position is not None:
+        goal_msg.target_position = _float_xyz(target_position, label=f"{mode}.target_position")
+    goal_msg.trajectory_steps = int(trajectory_steps)
+    goal_msg.waypoint_sleep_sec = float(waypoint_sleep_sec)
+    goal_msg.goal_tolerance_m = float(goal_tolerance_m)
+    if wrist_joint_index is not None:
+        goal_msg.wrist_joint_index = int(wrist_joint_index)
+    if wrist_target_rad is not None:
+        goal_msg.wrist_target_rad = float(wrist_target_rad)
+    if gripper_joint_index is not None:
+        goal_msg.gripper_joint_index = int(gripper_joint_index)
+    if gripper_open_rad is not None:
+        goal_msg.gripper_open_rad = float(gripper_open_rad)
+    if gripper_close_rad is not None:
+        goal_msg.gripper_close_rad = float(gripper_close_rad)
+    goal_msg.joint_state_wait_sec = float(joint_state_wait_sec)
+    goal_msg.joint_command_timeout_sec = float(joint_command_timeout_sec)
+    goal_msg.joint_command_tolerance_rad = float(joint_command_tolerance_rad)
+    goal_msg.joint_command_republish_interval_sec = float(joint_command_republish_interval_sec)
+    goal_msg.gripper_close_delay_sec = float(gripper_close_delay_sec)
+    goal_msg.init_pose_delay_sec = float(init_pose_delay_sec)
+
+    send_future = action_client.send_goal_async(goal_msg)
+    rclpy_module.spin_until_future_complete(node, send_future, timeout_sec=timeout_sec)
+    if not send_future.done():
+        return {
+            "success": False,
+            "accepted": False,
+            "mode": str(mode),
+            "message": f"Timed out while sending {mode} goal.",
+        }
+
+    goal_handle = send_future.result()
+    if goal_handle is None:
+        return {
+            "success": False,
+            "accepted": False,
+            "mode": str(mode),
+            "message": f"{mode} goal returned no handle.",
+        }
+    if not bool(goal_handle.accepted):
+        return {
+            "success": False,
+            "accepted": False,
+            "mode": str(mode),
+            "message": f"{mode} goal was rejected.",
+        }
+
+    result_future = goal_handle.get_result_async()
+    rclpy_module.spin_until_future_complete(node, result_future, timeout_sec=timeout_sec)
+    if not result_future.done():
+        return {
+            "success": False,
+            "accepted": True,
+            "mode": str(mode),
+            "message": f"Timed out waiting for {mode} result.",
+        }
+
+    result_response = result_future.result()
+    result = getattr(result_response, "result", None)
+    status = getattr(result_response, "status", None)
+    return {
+        "success": bool(getattr(result, "success", False)),
+        "accepted": True,
+        "mode": str(mode),
+        "status": None if status is None else int(status),
+        "message": str(getattr(result, "message", "")),
+    }
 
 
 def _goal_joint_rad_from_solution(solution: dict[str, object]) -> list[float]:
@@ -429,6 +814,18 @@ def _goal_joint_rad_from_solution(solution: dict[str, object]) -> list[float]:
     if isinstance(raw_deg, list):
         return [math.radians(value) for value in _float_sequence(raw_deg, label="solution.ik_joint_solution_deg")]
     raise KeyError("solution needs ik_joint_solution_rad or ik_joint_solution_deg.")
+
+
+def _float_xyz(values: Any, *, label: str) -> list[float]:
+    try:
+        result = [float(value) for value in values]
+    except TypeError as exc:
+        raise ValueError(f"{label} must be a numeric [x, y, z] sequence.") from exc
+    if len(result) != 3:
+        raise ValueError(f"{label} must contain exactly 3 values.")
+    if not all(math.isfinite(value) for value in result):
+        raise ValueError(f"{label} must contain only finite values.")
+    return result
 
 
 def _float_sequence(values: Sequence[Any], *, label: str) -> list[float]:

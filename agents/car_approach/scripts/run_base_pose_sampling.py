@@ -45,4 +45,8 @@ def load_config(config_path: Path) -> dict[str, Any]:
         ),
         "position_tolerance_m": float(payload.get("position_tolerance_m", 0.03)),
         "orientation_tolerance_deg": float(payload.get("orientation_tolerance_deg", 12.0)),
+        "render_width": int(payload.get("render_width", 960)),
+        "render_height": int(payload.get("render_height", 720)),
+        "render_yaw_deg": float(payload.get("render_yaw_deg", 45.0)),
+        "render_pitch_deg": float(payload.get("render_pitch_deg", -30.0)),
     }

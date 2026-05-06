@@ -42,6 +42,8 @@ def run_base_approach_sync(
             show_gui=_bool_param(params, "show_gui", False),
             write_map_png=_bool_param(params, "write_map_png", True),
             map_png_path=_optional_path_param(params, "map_png_path"),
+            write_debug_views=_bool_param(params, "write_debug_views", True),
+            debug_render_path=_optional_path_param(params, "debug_render_path"),
         )
         result = base_sampler.run_approach_agent(config)
         return {

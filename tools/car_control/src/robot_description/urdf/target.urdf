@@ -287,7 +287,7 @@
     <parent link="link3_v1_1"/>
     <child link="link4_v1_1"/>
     <axis xyz="-0.0 -1.0 0.0"/>
-    <limit upper="2.617994" lower="0.0" effort="100" velocity="100"/>
+    <limit upper="3.141593" lower="0.0" effort="100" velocity="100"/>
   </joint>
   <joint name="Revolute 4" type="revolute">
     <origin xyz="0.230283 0.0 0.042126" rpy="0 0 0"/>

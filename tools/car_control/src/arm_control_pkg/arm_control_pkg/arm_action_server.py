@@ -30,7 +30,7 @@ class ArmActionServer(Node):
     def execute_callback(self, goal_handle):
         mode = goal_handle.request.mode
         self.get_logger().info(f"Executing arm action in mode: {mode}")
-        arm_auto_method = self._select_arm_auto_method(mode)
+        arm_auto_method = self._select_arm_auto_method(goal_handle.request)
 
         if arm_auto_method is None:
             result = ArmGoal.Result()
@@ -53,12 +53,15 @@ class ArmActionServer(Node):
         goal_handle.publish_feedback(feedback)
 
         if result.success:
+            self.get_logger().info(f"Arm action {mode} succeeded: {result.message}")
             goal_handle.succeed()
         else:
+            self.get_logger().error(f"Arm action {mode} failed: {result.message}")
             goal_handle.abort()
         return result
 
-    def _select_arm_auto_method(self, mode: str):
+    def _select_arm_auto_method(self, goal_request):
+        mode = str(goal_request.mode)
         if mode == "wave":
             return self.arm_auto_controller.arm_wave
         if mode == "catch":
@@ -71,6 +74,44 @@ class ArmActionServer(Node):
             return self.arm_auto_controller.look_up
         if mode == "init_pose":
             return self.arm_auto_controller.init_pose
+        if mode == "open_gripper":
+            return self.arm_auto_controller.open_gripper
+        if mode == "close_gripper":
+            return self.arm_auto_controller.close_gripper
+        if mode == "set_joint_position":
+            return functools.partial(
+                self.arm_auto_controller.set_joint_position_rad,
+                joint_index=int(getattr(goal_request, "joint_index", 0)),
+                position_rad=float(getattr(goal_request, "joint_position_rad", 0.0)),
+                settle_sec=max(0.0, float(getattr(goal_request, "joint_settle_sec", 0.0))),
+            )
+        if mode == "car_grasp_sequence":
+            return functools.partial(
+                self.arm_auto_controller.car_grasp_sequence,
+                target_position=list(getattr(goal_request, "target_position", [])),
+                wrist_target_rad=float(getattr(goal_request, "wrist_target_rad", 0.0)),
+                wrist_joint_index=int(getattr(goal_request, "wrist_joint_index", 3)),
+                gripper_joint_index=int(getattr(goal_request, "gripper_joint_index", 4)),
+                gripper_open_rad=float(getattr(goal_request, "gripper_open_rad", 0.0)),
+                gripper_close_rad=float(getattr(goal_request, "gripper_close_rad", 0.0)),
+                steps=int(getattr(goal_request, "trajectory_steps", 0)),
+                waypoint_sleep_sec=float(getattr(goal_request, "waypoint_sleep_sec", 0.0)),
+                goal_tolerance_m=float(getattr(goal_request, "goal_tolerance_m", 0.0)),
+                joint_state_wait_sec=float(getattr(goal_request, "joint_state_wait_sec", 0.0)),
+                joint_command_timeout_sec=float(
+                    getattr(goal_request, "joint_command_timeout_sec", 0.0)
+                ),
+                joint_command_tolerance_rad=float(
+                    getattr(goal_request, "joint_command_tolerance_rad", 0.0)
+                ),
+                joint_command_republish_interval_sec=float(
+                    getattr(goal_request, "joint_command_republish_interval_sec", 0.0)
+                ),
+                gripper_close_delay_sec=float(
+                    getattr(goal_request, "gripper_close_delay_sec", 0.0)
+                ),
+                init_pose_delay_sec=float(getattr(goal_request, "init_pose_delay_sec", 0.0)),
+            )
         if mode in ["up", "down", "right", "left"]:
             return functools.partial(
                 self.arm_auto_controller.move_end_effector_direction, direction=mode

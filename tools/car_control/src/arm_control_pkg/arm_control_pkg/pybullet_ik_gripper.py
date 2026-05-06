@@ -30,9 +30,16 @@ class PybulletRobotController:
         self.controllable_joints = []
         self.end_eff_indices = self.arm_params["pybullet"]["end_eff_index"]
         self.end_eff_index = self.end_eff_indices[0]
+        self.ik_max_num_iterations = int(
+            self.arm_params["pybullet"].get("ik_max_num_iterations", 200)
+        )
+        self.ik_residual_threshold = float(
+            self.arm_params["pybullet"].get("ik_residual_threshold", 1e-5)
+        )
         self.time_step = float(self.arm_params["pybullet"]["time_step"])
         self.previous_ee_position = None
         self.initial_height = float(self.arm_params["pybullet"]["initial_height"])
+        self.base_orientation_euler_deg = self._base_orientation_euler_deg_from_config()
         self.mimic_pairs = {}
         self.marker_ids = []
         self.transformed_object_marker_ids = []
@@ -66,6 +73,19 @@ class PybulletRobotController:
                 return str(candidate)
 
         raise FileNotFoundError(f"Unable to locate robot description URDF: {urdf_name}")
+
+    def _base_orientation_euler_deg_from_config(self) -> list[float]:
+        raw_orientation = self.arm_params["pybullet"].get(
+            "base_orientation_euler_deg",
+            [0.0, 0.0, 0.0],
+        )
+        try:
+            orientation = [float(value) for value in raw_orientation]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("pybullet.base_orientation_euler_deg must be numeric [roll, pitch, yaw].") from exc
+        if len(orientation) != 3:
+            raise ValueError("pybullet.base_orientation_euler_deg must contain exactly three values.")
+        return orientation
 
     def _get_urdf_search_paths(self) -> list[str]:
         urdf_dir = Path(self.urdf_path).resolve().parent
@@ -371,9 +391,15 @@ class PybulletRobotController:
                 self.end_eff_index,
                 targetPosition=end_eff_pose[0:3],
                 targetOrientation=p.getQuaternionFromEuler(end_eff_pose[3:6]),
+                maxNumIterations=self.ik_max_num_iterations,
+                residualThreshold=self.ik_residual_threshold,
             )
         return p.calculateInverseKinematics(
-            self.robot_id, self.end_eff_index, targetPosition=end_eff_pose[0:3]
+            self.robot_id,
+            self.end_eff_index,
+            targetPosition=end_eff_pose[0:3],
+            maxNumIterations=self.ik_max_num_iterations,
+            residualThreshold=self.ik_residual_threshold,
         )
 
     def set_initial_joint_positions(self):
@@ -501,7 +527,9 @@ class PybulletRobotController:
         for search_path in self._get_urdf_search_paths():
             p.setAdditionalSearchPath(search_path)
 
-        rotation = R.from_euler("z", 90, degrees=True).as_quat()
+        rotation = p.getQuaternionFromEuler(
+            [math.radians(value) for value in self.base_orientation_euler_deg]
+        )
         self.robot_id = p.loadURDF(
             self.urdf_path,
             useFixedBase=True,

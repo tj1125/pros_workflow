@@ -1,6 +1,13 @@
 global:
   joints_count: 5.0
   arm_topic: /robot_arm
+  joint_state_topic: /joint_states
+  joint_state_names:
+    - base_link2_v2_1
+    - link3_v1_1
+    - link4_v1_1
+    - robot_ver7_link_4_v1_1
+    - [robot_ver7_grap1_2_v1_1, robot_ver7_grap2_2_v1_1]
   imu_receive_topic: /imu/data_raw
   yolo_object_offset_receive_topic: /yolo/object/offset
   angle_step: 15.0
@@ -8,9 +15,12 @@ pybullet:
   urdf_name: target.urdf
   gui: false
   view_world: false
-  initial_height: 0.195
+  initial_height: 0.18
+  base_orientation_euler_deg: [0.0, 0.0, 0.0]
   controllable_joints: 5
   end_eff_index: [4, 8]
+  ik_max_num_iterations: 200
+  ik_residual_threshold: 1e-5
   time_step: 1e-3
 joints:
   0:
@@ -21,9 +31,9 @@ joints:
     max_angle: 240.0
   2:
     min_angle: 0.0
-    max_angle: 150.0
+    max_angle: 180.0
   3:
-    min_angle: 50.0
+    min_angle: 0.0
     max_angle: 180.0
   4:
     min_angle: 10.0
@@ -31,6 +41,6 @@ joints:
 joints_reset:
   0: 90.0
   1: 30.0
-  2: 160.0
+  2: 150.0
   3: 90.0
   4: 10.0

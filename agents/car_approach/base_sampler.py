@@ -2,17 +2,11 @@ import argparse
 import math
 import os
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import scipy.spatial.transform as st
-
-from agents.arm_approach.move_arm import (
-    build_linear_joint_trajectory,
-    config_from_environment as arm_move_config_from_environment,
-    publish_joint_trajectory,
-)
 
 from .arm_finish_sequence import (
     car_arm_finish_enabled,
@@ -37,8 +31,11 @@ from .src.pybullet_ompl import (
 )
 from .src.pybullet_smoke import (
     _degrees_to_radians,
+    _derive_side_output_path,
+    _derive_topdown_output_path,
     _load_arm_config,
     _load_python_dependencies,
+    _render_debug_ppm,
 )
 
 
@@ -100,6 +97,8 @@ class ApproachAgentRunConfig:
     show_gui: bool = False
     write_map_png: bool = True
     map_png_path: Path | None = None
+    write_debug_views: bool = True
+    debug_render_path: Path | None = None
 
 
 APPROACH_AGENT_DIR = Path(__file__).resolve().parent
@@ -109,12 +108,9 @@ MAX_GRASP_POSES_TO_EVALUATE = 10
 TARGET_OBJECT_POINTCLOUD_KEY = "object_pc_camera"
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
-VEHICLE_BASE_LENGTH_X_M = 0.26
-VEHICLE_BASE_LENGTH_Y_M = 0.28
-ARM_BASE_ALIGNMENT_ENABLED = True
+VEHICLE_BASE_LENGTH_X_M = 0.36
+VEHICLE_BASE_LENGTH_Y_M = 0.38
 ARM_BASE_ALIGNMENT_JOINT_INDEX = 0
-ARM_BASE_ALIGNMENT_CONTROL_TOPIC = "arm_control_signal"
-ARM_BASE_ALIGNMENT_COMMAND = "set_joint_positions_rad"
 ARM_BASE_ALIGNMENT_SOURCE = "approach_agent_car_approach"
 SYMMETRIC_JOINT_FOLD_PERIOD_DEG_BY_INDEX = {
     3: 180.0,
@@ -2429,6 +2425,218 @@ def _visualize_feasible_ik_results_in_gui(
                 pass
 
 
+def _write_base_sampler_debug_views(
+    *,
+    p_mod,
+    pybullet_data,
+    cfg: dict[str, object],
+    planning_config,
+    arm_config,
+    voxels_pb: np.ndarray,
+    voxel_size_m: float,
+    visualization_records: list[dict[str, object]],
+    output_path: Path,
+) -> dict[str, object]:
+    output_path = Path(output_path).expanduser().resolve()
+    topdown_output_path = _derive_topdown_output_path(output_path)
+    side_output_path = _derive_side_output_path(output_path)
+    render_width = int(cfg.get("render_width", getattr(planning_config, "debug_render_width", 960)))
+    render_height = int(cfg.get("render_height", getattr(planning_config, "debug_render_height", 720)))
+    main_yaw_deg = float(cfg.get("render_yaw_deg", getattr(planning_config, "debug_render_yaw_deg", 45.0)))
+    main_pitch_deg = float(cfg.get("render_pitch_deg", getattr(planning_config, "debug_render_pitch_deg", -30.0)))
+    topdown_yaw_deg = float(os.getenv("BASE_SAMPLER_DEBUG_TOPDOWN_YAW_DEG", "0.0"))
+    topdown_pitch_deg = float(os.getenv("BASE_SAMPLER_DEBUG_TOPDOWN_PITCH_DEG", "-89.0"))
+    side_yaw_deg = float(os.getenv("BASE_SAMPLER_DEBUG_SIDE_YAW_DEG", "90.0"))
+    side_pitch_deg = float(os.getenv("BASE_SAMPLER_DEBUG_SIDE_PITCH_DEG", "-12.0"))
+    expected_joint_count = int(arm_config["pybullet"]["controllable_joints"])
+    client_id: int | None = None
+
+    try:
+        client_id = p_mod.connect(p_mod.DIRECT)
+        if client_id < 0:
+            raise RuntimeError("PyBullet DIRECT unavailable for base sampler debug rendering.")
+
+        p_mod.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p_mod.resetSimulation()
+        p_mod.setGravity(0.0, 0.0, -9.8)
+        p_mod.loadURDF("plane.urdf")
+
+        voxel_size = float(voxel_size_m)
+        half_extents = [voxel_size / 2.0] * 3
+        voxel_collision_shape = p_mod.createCollisionShape(
+            p_mod.GEOM_BOX,
+            halfExtents=half_extents,
+        )
+        voxel_visual_shape = p_mod.createVisualShape(
+            p_mod.GEOM_BOX,
+            halfExtents=half_extents,
+            rgbaColor=[0.8, 0.2, 0.2, 0.8],
+        )
+        for voxel_center in np.asarray(voxels_pb, dtype=np.float64).reshape(-1, 3):
+            p_mod.createMultiBody(
+                baseMass=0.0,
+                baseCollisionShapeIndex=voxel_collision_shape,
+                baseVisualShapeIndex=voxel_visual_shape,
+                basePosition=voxel_center.astype(float).tolist(),
+            )
+
+        base_orientation_rad = [math.radians(v) for v in planning_config.base_orientation_euler_deg]
+        base_orientation_xyzw = p_mod.getQuaternionFromEuler(base_orientation_rad)
+        robot_id = p_mod.loadURDF(
+            planning_config.urdf_path,
+            useFixedBase=True,
+            basePosition=[0.0, 0.0, planning_config.initial_height],
+            baseOrientation=base_orientation_xyzw,
+        )
+        controllable_joint_ids, _ = _find_controllable_joints(p_mod, robot_id, expected_joint_count)
+        joint_reset_rad = _degrees_to_radians(planning_config.joint_reset_deg)
+        _set_joint_positions_direct(p_mod, robot_id, controllable_joint_ids, joint_reset_rad)
+
+        best_view_record, best_view_solution = _select_gui_display_solution(
+            visualization_records,
+            planning_config=planning_config,
+        )
+        if best_view_record is not None:
+            target_pb = np.asarray(best_view_record["target_pb"], dtype=float)
+            target_visual_shape = p_mod.createVisualShape(
+                p_mod.GEOM_SPHERE,
+                radius=0.03,
+                rgbaColor=[1.0, 0.8, 0.0, 1.0],
+            )
+            p_mod.createMultiBody(
+                baseMass=0.0,
+                baseVisualShapeIndex=target_visual_shape,
+                basePosition=target_pb.astype(float).tolist(),
+            )
+
+        if best_view_solution is not None:
+            base_xyz = [float(v) for v in best_view_solution["pb_base_link_xyz"]]
+            base_yaw_rad = float(best_view_solution["pb_base_link_yaw_rad"])
+            raw_joint_solution = best_view_solution.get("ik_joint_solution_rad")
+            joint_solution_rad = (
+                None
+                if raw_joint_solution is None
+                else [float(v) for v in raw_joint_solution]
+            )
+            p_mod.resetBasePositionAndOrientation(
+                robot_id,
+                base_xyz,
+                p_mod.getQuaternionFromEuler([0.0, 0.0, base_yaw_rad]),
+            )
+            _set_joint_positions_direct(
+                p_mod,
+                robot_id,
+                controllable_joint_ids,
+                joint_solution_rad if joint_solution_rad is not None else joint_reset_rad,
+            )
+            _add_arm_base_link_debug_axes(
+                p_mod,
+                base_xyz=base_xyz,
+                base_yaw_rad=base_yaw_rad,
+            )
+            _add_vehicle_base_visual(
+                p_mod,
+                base_xyz=base_xyz,
+                base_yaw_rad=base_yaw_rad,
+            )
+        else:
+            reset_base_xyz = np.asarray(
+                [0.0, 0.0, float(planning_config.initial_height)],
+                dtype=np.float64,
+            )
+            _add_arm_base_link_debug_axes(
+                p_mod,
+                base_xyz=reset_base_xyz,
+                orientation_xyzw=base_orientation_xyzw,
+                label="reset arm base_link",
+            )
+
+        p_mod.performCollisionDetection()
+        camera_records = [best_view_record] if best_view_record is not None else []
+        if camera_records:
+            camera_target, camera_distance, _, _ = _compute_gui_camera_view(
+                planning_config=planning_config,
+                visualization_records=camera_records,
+                best_view_solution=best_view_solution,
+            )
+        else:
+            scene_points = [
+                np.asarray(
+                    [0.0, 0.0, float(planning_config.initial_height)],
+                    dtype=np.float64,
+                ).reshape(1, 3)
+            ]
+            voxel_points = np.asarray(voxels_pb, dtype=np.float64).reshape(-1, 3)
+            if len(voxel_points) > 0:
+                finite_voxels = voxel_points[np.all(np.isfinite(voxel_points), axis=1)]
+                if len(finite_voxels) > 0:
+                    scene_points.append(finite_voxels)
+            point_arr = np.vstack(scene_points)
+            lower = np.min(point_arr, axis=0)
+            upper = np.max(point_arr, axis=0)
+            camera_target = (0.5 * (lower + upper)).astype(float).tolist()
+            scene_extent = float(np.max(upper - lower))
+            camera_distance = max(0.9, scene_extent * 1.8 + 0.45)
+
+        _render_debug_ppm(
+            p_mod,
+            np,
+            output_path,
+            width=render_width,
+            height=render_height,
+            camera_target_position=camera_target,
+            camera_distance=camera_distance,
+            camera_yaw_deg=main_yaw_deg,
+            camera_pitch_deg=main_pitch_deg,
+        )
+        _render_debug_ppm(
+            p_mod,
+            np,
+            topdown_output_path,
+            width=render_width,
+            height=render_height,
+            camera_target_position=camera_target,
+            camera_distance=max(0.55, float(camera_distance) * 0.85),
+            camera_yaw_deg=topdown_yaw_deg,
+            camera_pitch_deg=topdown_pitch_deg,
+        )
+        _render_debug_ppm(
+            p_mod,
+            np,
+            side_output_path,
+            width=render_width,
+            height=render_height,
+            camera_target_position=camera_target,
+            camera_distance=max(0.55, float(camera_distance) * 0.9),
+            camera_yaw_deg=side_yaw_deg,
+            camera_pitch_deg=side_pitch_deg,
+        )
+        print(
+            "[base_approach] saved PyBullet debug views: "
+            f"side={side_output_path} topdown={topdown_output_path}",
+            flush=True,
+        )
+        return {
+            "debug_render_output_path": str(output_path),
+            "debug_render_topdown_output_path": str(topdown_output_path),
+            "debug_render_side_output_path": str(side_output_path),
+        }
+    except Exception as exc:
+        print(f"[base_approach] PyBullet debug view render failed: {exc}", flush=True)
+        return {
+            "debug_render_output_path": str(output_path),
+            "debug_render_topdown_output_path": str(topdown_output_path),
+            "debug_render_side_output_path": str(side_output_path),
+            "debug_render_error": str(exc),
+        }
+    finally:
+        if client_id is not None:
+            try:
+                p_mod.disconnect(client_id)
+            except Exception:
+                pass
+
+
 def _run_simple_sample_logic_for_gui(
     *,
     p_mod,
@@ -2764,13 +2972,24 @@ def _arm_base_yaw_compensation_from_nav_result(
         0.0,
         final_amcl_pose,
     )
-    _, final_base_link_yaw_rad = _ros_map_amcl_pose_to_local_pb_base_pose(
+    final_base_link_local_pb_xy, final_base_link_yaw_rad = _ros_map_amcl_pose_to_local_pb_base_pose(
         final_amcl_pose,
         reference_amcl_pose,
     )
     final_base_link_yaw_rad = _wrap_angle_rad(final_base_link_yaw_rad)
     vehicle_yaw_error_rad = _wrap_angle_rad(final_base_link_yaw_rad - planned_base_yaw_rad)
     joint_delta_rad = _wrap_angle_rad(-vehicle_yaw_error_rad)
+    try:
+        planned_base_link_xyz = np.asarray(solution["pb_base_link_xyz"], dtype=np.float64).reshape(3)
+        base_link_z_pb = float(planned_base_link_xyz[2])
+    except Exception:
+        planned_base_link_xyz = None
+        base_link_z_pb = 0.0
+    final_base_link_local_pb_xyz = [
+        float(final_base_link_local_pb_xy[0]),
+        float(final_base_link_local_pb_xy[1]),
+        base_link_z_pb,
+    ]
 
     result: dict[str, object] = {
         "applied": True,
@@ -2779,6 +2998,11 @@ def _arm_base_yaw_compensation_from_nav_result(
         "formula": "joint_delta = (target_yaw - final_base_link_yaw) - (target_yaw - planned_base_link_yaw)",
         "planned_base_link_yaw_rad": float(planned_base_yaw_rad),
         "planned_base_link_yaw_deg": float(math.degrees(planned_base_yaw_rad)),
+        "final_base_link_local_pb_xy": [
+            float(final_base_link_local_pb_xy[0]),
+            float(final_base_link_local_pb_xy[1]),
+        ],
+        "final_base_link_local_pb_xyz": final_base_link_local_pb_xyz,
         "final_base_link_local_pb_yaw_rad": float(final_base_link_yaw_rad),
         "final_base_link_local_pb_yaw_deg": float(math.degrees(final_base_link_yaw_rad)),
         "vehicle_yaw_error_from_planned_rad": float(vehicle_yaw_error_rad),
@@ -2788,6 +3012,21 @@ def _arm_base_yaw_compensation_from_nav_result(
         "final_amcl_pose": _ros_map_pose_to_dict(final_amcl_pose),
         "final_arm_base_link_ros_map_pose": _ros_map_pose_to_dict(final_base_link_ros_pose),
     }
+    try:
+        if planned_base_link_xyz is None:
+            raise ValueError("planned base link xyz unavailable")
+        final_base_link_xyz = np.asarray(final_base_link_local_pb_xyz, dtype=np.float64).reshape(3)
+        base_position_error_xyz = final_base_link_xyz - planned_base_link_xyz
+        result.update(
+            {
+                "planned_base_link_local_pb_xyz": planned_base_link_xyz.astype(float).tolist(),
+                "vehicle_position_error_from_planned_xyz_m": base_position_error_xyz.astype(float).tolist(),
+                "vehicle_position_error_from_planned_xy_m": base_position_error_xyz[:2].astype(float).tolist(),
+                "vehicle_position_error_from_planned_norm_m": float(np.linalg.norm(base_position_error_xyz[:2])),
+            }
+        )
+    except Exception:
+        pass
     if target_yaw_rad is not None:
         planned_target_error_rad = _wrap_angle_rad(target_yaw_rad - planned_base_yaw_rad)
         final_target_error_rad = _wrap_angle_rad(target_yaw_rad - final_base_link_yaw_rad)
@@ -2878,81 +3117,6 @@ def _arm_base_alignment_target_from_solution(
     }
 
 
-def _arm_base_alignment_joint_positions_rad(
-    *,
-    planning_config,
-    joint_index: int,
-    command_rad: float,
-) -> list[float]:
-    joint_positions_rad = [math.radians(float(value)) for value in planning_config.joint_reset_deg]
-    if not (0 <= int(joint_index) < len(joint_positions_rad)):
-        raise ValueError(
-            f"arm base joint index {int(joint_index)} is outside reset vector length "
-            f"{len(joint_positions_rad)}"
-        )
-    joint_positions_rad[int(joint_index)] = float(command_rad)
-    return joint_positions_rad
-
-
-def _publish_arm_base_alignment_command(
-    *,
-    control_topic: str,
-    planning_config,
-    start_joint_positions_rad: list[float],
-    joint_positions_rad: list[float],
-    wait_for_subscribers_sec: float,
-    publish_count: int,
-    publish_interval_sec: float,
-    post_publish_settle_sec: float,
-) -> dict[str, object]:
-    control_topic = str(control_topic).strip() or ARM_BASE_ALIGNMENT_CONTROL_TOPIC
-    base_config = arm_move_config_from_environment(
-        planning_config=planning_config,
-        control_topic=control_topic,
-    )
-    move_config = replace(
-        base_config,
-        node_name="approach_agent_car_arm_base_alignment",
-        close_gripper_on_arrival=False,
-        forward_before_gripper_close=False,
-        return_to_start_after_gripper_close=False,
-        wait_for_subscribers_sec=max(0.0, float(wait_for_subscribers_sec)),
-        hold_final_count=max(1, int(publish_count)),
-        hold_final_interval_sec=max(0.0, float(publish_interval_sec)),
-    )
-    trajectory_rad = build_linear_joint_trajectory(
-        start_joint_positions_rad,
-        joint_positions_rad,
-        interpolation_steps=move_config.interpolation_steps,
-        include_start=move_config.publish_start,
-    )
-
-    publish_result = publish_joint_trajectory(
-        trajectory_rad,
-        config=move_config,
-    )
-    if post_publish_settle_sec > 0.0:
-        time.sleep(max(0.0, float(post_publish_settle_sec)))
-
-    return {
-        **publish_result,
-        "success": bool(publish_result.get("success", False)),
-        "skipped": False,
-        "phase": "published",
-        "control_topic": publish_result.get("control_topic", control_topic),
-        "arm_command": publish_result.get("arm_command", ARM_BASE_ALIGNMENT_COMMAND),
-        "source": ARM_BASE_ALIGNMENT_SOURCE,
-        "execution_model": publish_result.get("execution_model", "agent_interpolates_tools_step_targets"),
-        "command_joint_positions_rad": [float(value) for value in joint_positions_rad],
-        "command_joint_positions_deg": [math.degrees(float(value)) for value in joint_positions_rad],
-        "start_joint_positions_rad": [float(value) for value in start_joint_positions_rad],
-        "start_joint_positions_deg": [math.degrees(float(value)) for value in start_joint_positions_rad],
-        "trajectory_point_count": int(publish_result.get("trajectory_point_count", len(trajectory_rad))),
-        "commands_published": int(publish_result.get("commands_published", 0) or 0),
-        "post_publish_settle_sec": float(post_publish_settle_sec),
-    }
-
-
 def _plan_arm_base_alignment_target_after_arrival(
     solution: dict[str, object],
     *,
@@ -2999,143 +3163,6 @@ def _plan_arm_base_alignment_target_after_arrival(
             "selected solution IK plus final base_link yaw compensation"
         ),
     }
-
-
-def _align_arm_base_to_target_grasp_pose_after_arrival(
-    solution: dict[str, object],
-    *,
-    planning_config,
-    arm_config: dict[str, object],
-    nav_result: dict[str, object] | None = None,
-    reference_amcl_pose: RosMapPose2D | None = None,
-) -> dict[str, object]:
-    if not _env_flag(
-        "APPROACH_AGENT_CAR_ALIGN_ARM_BASE_ON_ARRIVAL",
-        ARM_BASE_ALIGNMENT_ENABLED,
-    ):
-        return {
-            "success": False,
-            "skipped": True,
-            "phase": "disabled",
-            "message": "Arm base alignment after car approach is disabled.",
-        }
-
-    joint_index = int(os.getenv("APPROACH_AGENT_CAR_ARM_BASE_JOINT_INDEX", str(ARM_BASE_ALIGNMENT_JOINT_INDEX)))
-    yaw_compensation = _arm_base_yaw_compensation_from_nav_result(
-        solution,
-        nav_result=nav_result,
-        reference_amcl_pose=reference_amcl_pose,
-    )
-    yaw_compensation_rad = (
-        float(yaw_compensation.get("joint_delta_rad", 0.0) or 0.0)
-        if bool(yaw_compensation.get("applied", False))
-        else 0.0
-    )
-    try:
-        target = _arm_base_alignment_target_from_solution(
-            solution,
-            arm_config=arm_config,
-            joint_index=joint_index,
-            yaw_compensation_rad=yaw_compensation_rad,
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "skipped": False,
-            "phase": "target_unavailable",
-            "message": str(exc),
-            "joint_index": int(joint_index),
-            "yaw_compensation": yaw_compensation,
-        }
-
-    try:
-        start_joint_positions_rad = [
-            math.radians(float(value))
-            for value in planning_config.joint_reset_deg
-        ]
-        joint_positions_rad = _arm_base_alignment_joint_positions_rad(
-            planning_config=planning_config,
-            joint_index=int(target["joint_index"]),
-            command_rad=float(target["command_joint_position_rad"]),
-        )
-    except Exception as exc:
-        return {
-            **target,
-            "success": False,
-            "skipped": False,
-            "phase": "joint_vector_unavailable",
-            "message": str(exc),
-            "yaw_compensation": yaw_compensation,
-        }
-
-    control_topic = os.getenv(
-        "APPROACH_AGENT_ARM_CONTROL_TOPIC",
-        ARM_BASE_ALIGNMENT_CONTROL_TOPIC,
-    ).strip() or ARM_BASE_ALIGNMENT_CONTROL_TOPIC
-    wait_for_subscribers_sec = float(
-        os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_WAIT_FOR_SUBSCRIBERS_SEC", "2.0")
-    )
-    publish_count = int(os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_PUBLISH_COUNT", "1"))
-    publish_interval_sec = float(os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_INTERVAL_SEC", "0.05"))
-    post_publish_settle_sec = float(
-        os.getenv("APPROACH_AGENT_CAR_ARM_BASE_ALIGN_POST_PUBLISH_SETTLE_SEC", "0.2")
-    )
-
-    reset_joint_rad = math.radians(float(planning_config.joint_reset_deg[int(target["joint_index"])]))
-    target = {
-        **target,
-        "reset_joint_position_rad": float(reset_joint_rad),
-        "reset_joint_position_deg": float(math.degrees(reset_joint_rad)),
-        "command_delta_from_reset_rad": float(float(target["command_joint_position_rad"]) - reset_joint_rad),
-        "command_delta_from_reset_deg": float(float(target["command_joint_position_deg"]) - math.degrees(reset_joint_rad)),
-    }
-
-    try:
-        publish_result = _publish_arm_base_alignment_command(
-            control_topic=control_topic,
-            planning_config=planning_config,
-            start_joint_positions_rad=start_joint_positions_rad,
-            joint_positions_rad=joint_positions_rad,
-            wait_for_subscribers_sec=wait_for_subscribers_sec,
-            publish_count=publish_count,
-            publish_interval_sec=publish_interval_sec,
-            post_publish_settle_sec=post_publish_settle_sec,
-        )
-    except Exception as exc:
-        publish_result = {
-            "success": False,
-            "skipped": False,
-            "phase": "publish_failed",
-            "message": str(exc),
-        }
-
-    result = {
-        **target,
-        **publish_result,
-        "yaw_compensation": yaw_compensation,
-        "target_grasp_pose_direction_source": (
-            "selected_solution IK plus final base_link yaw compensation"
-        ),
-    }
-    if bool(result.get("success", False)):
-        print(
-            "[base_approach] arm base aligned toward selected target grasp pose: "
-            f"joint={int(target['joint_index'])} "
-            f"target={float(target['target_joint_position_deg']):.2f}deg "
-            f"yaw_comp={float(target['yaw_compensation_joint_delta_deg']):.2f}deg "
-            f"command={float(target['command_joint_position_deg']):.2f}deg "
-            f"reset={float(target['reset_joint_position_deg']):.2f}deg "
-            f"delta={float(target['command_delta_from_reset_deg']):.2f}deg "
-            f"clamped={int(bool(target['clamped']))}",
-            flush=True,
-        )
-    else:
-        print(
-            "[base_approach] arm base alignment skipped/failed: "
-            f"{result.get('message', result.get('phase', 'unknown'))}",
-            flush=True,
-        )
-    return result
 
 
 def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict[str, object]:
@@ -3282,6 +3309,28 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
                 flush=True,
             )
 
+    debug_render_path = run_config.debug_render_path or (
+        APPROACH_AGENT_DIR / "outputs" / "base_sampler_debug.ppm"
+    )
+    debug_render_result: dict[str, object] = {
+        "debug_render_output_path": str(debug_render_path),
+        "debug_render_topdown_output_path": str(_derive_topdown_output_path(debug_render_path)),
+        "debug_render_side_output_path": str(_derive_side_output_path(debug_render_path)),
+        "debug_render_skipped": True,
+    }
+    if run_config.write_debug_views:
+        debug_render_result = _write_base_sampler_debug_views(
+            p_mod=p_mod,
+            pybullet_data=pybullet_data,
+            cfg=cfg,
+            planning_config=planning_config,
+            arm_config=arm_config,
+            voxels_pb=voxels_pb,
+            voxel_size_m=live_scene.voxel_size_m,
+            visualization_records=visualization_records,
+            output_path=debug_render_path,
+        )
+
     nav_result: dict[str, object] = {
         "success": False,
         "skipped": True,
@@ -3361,19 +3410,20 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
                     )
                     print(f"[base_approach] {message}", flush=True)
             else:
-                arm_base_alignment_result = _align_arm_base_to_target_grasp_pose_after_arrival(
-                    goal_pose_solution,
-                    planning_config=planning_config,
-                    arm_config=arm_config,
-                    nav_result=nav_result,
-                    reference_amcl_pose=current_amcl_pose,
-                )
-                arm_base_alignment_published = bool(arm_base_alignment_result.get("success", False))
+                arm_base_alignment_result = {
+                    "success": False,
+                    "skipped": True,
+                    "phase": "car_grasp_sequence_disabled",
+                    "message": (
+                        "car_approach no longer publishes legacy arm joint trajectories; "
+                        "enable car arm finish to use car_grasp_sequence."
+                    ),
+                }
+                arm_base_alignment_published = False
                 phase = "done"
-                message = "Base approach reached the selected pose; arm base was aligned and arm motion is deferred."
+                message = "Base approach reached the selected pose; arm motion is deferred."
                 print(
-                    "[base_approach] base approach complete. Full arm movement is intentionally "
-                    "deferred to Arm_Approach_Agent.",
+                    "[base_approach] base approach complete; legacy arm joint publishing is disabled.",
                     flush=True,
                 )
         else:
@@ -3452,6 +3502,13 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         ),
         "arm_motion_skipped": bool(arm_result.get("skipped", True)),
         "map_png_path": str(map_png_path) if run_config.write_map_png else "",
+        "debug_render_output_path": str(debug_render_result.get("debug_render_output_path", "")),
+        "debug_render_topdown_output_path": str(
+            debug_render_result.get("debug_render_topdown_output_path", "")
+        ),
+        "debug_render_side_output_path": str(debug_render_result.get("debug_render_side_output_path", "")),
+        "debug_render_error": str(debug_render_result.get("debug_render_error", "")),
+        "debug_render_skipped": bool(debug_render_result.get("debug_render_skipped", False)),
         "visualization_record_count": len(visualization_records),
         "elapsed_sec": time.time() - started_at,
     }
@@ -3516,6 +3573,19 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not run rule-based car movement after sampling.",
     )
+    parser.add_argument(
+        "--debug-render-path",
+        type=Path,
+        default=None,
+        help="Base PPM path for PyBullet debug renders. Side/top-down paths are derived from it.",
+    )
+    parser.add_argument(
+        "--no-debug-views",
+        dest="write_debug_views",
+        action="store_false",
+        default=None,
+        help="Skip saving PyBullet side/top-down debug renders.",
+    )
     return parser.parse_args()
 
 
@@ -3532,9 +3602,16 @@ def _should_show_gui(args: argparse.Namespace) -> bool:
     return _env_flag("BASE_SAMPLER_SHOW_GUI", False)
 
 
+def _should_write_debug_views(args: argparse.Namespace) -> bool:
+    if args.write_debug_views is not None:
+        return bool(args.write_debug_views)
+    return _env_flag("BASE_SAMPLER_WRITE_DEBUG_VIEWS", True)
+
+
 def main():
     args = _parse_args()
     show_gui = _should_show_gui(args)
+    write_debug_views = _should_write_debug_views(args)
     result = run_approach_agent(
         ApproachAgentRunConfig(
             base_config_path=args.base_config,
@@ -3543,6 +3620,8 @@ def main():
             allow_missing_amcl=args.allow_missing_amcl,
             run_rule_navigation=not args.no_publish_goal_pose,
             show_gui=show_gui,
+            write_debug_views=write_debug_views,
+            debug_render_path=args.debug_render_path,
         )
     )
     print(

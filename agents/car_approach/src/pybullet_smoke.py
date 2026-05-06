@@ -306,7 +306,7 @@ def _write_ppm_image(path: Path, width: int, height: int, rgb_data: Any, np: Any
     elif rgba.ndim != 3:
         raise ValueError(f"Unexpected RGB buffer shape: {rgba.shape}")
 
-    rgb = np.flipud(rgba[:, :, :3])
+    rgb = rgba[:, :, :3]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
         header = f"P6\n{width} {height}\n255\n".encode("ascii")

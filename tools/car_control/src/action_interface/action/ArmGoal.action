@@ -1,5 +1,37 @@
 # Mode
 string mode
+
+# Used by mode="car_grasp_sequence". Coordinates are PyBullet/world-frame
+# [x, y, z] meters for the grasp target.
+float64[3] target_position
+
+# Optional runtime tuning for the PyBullet interpolated arm move inside
+# car_grasp_sequence. Defaults are applied when values are <= 0.
+int32 trajectory_steps
+float64 waypoint_sleep_sec
+float64 goal_tolerance_m
+
+# Used by mode="car_grasp_sequence". The sequence opens the gripper, rotates
+# the wrist, moves to target_position, closes the gripper, then returns init pose.
+int32 wrist_joint_index
+float64 wrist_target_rad
+int32 gripper_joint_index
+float64 gripper_open_rad
+float64 gripper_close_rad
+float64 joint_state_wait_sec
+float64 joint_command_timeout_sec
+float64 joint_command_tolerance_rad
+float64 joint_command_republish_interval_sec
+# For close_gripper, publish the close command and sleep this long instead of
+# waiting for finger joint tolerance.
+float64 gripper_close_delay_sec
+float64 init_pose_delay_sec
+
+# Used by mode="set_joint_position". The action server publishes and waits
+# joint_settle_sec before reporting success.
+int32 joint_index
+float64 joint_position_rad
+float64 joint_settle_sec
 ---
 # Result
 bool success

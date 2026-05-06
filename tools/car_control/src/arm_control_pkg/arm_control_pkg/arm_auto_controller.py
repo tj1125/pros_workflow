@@ -79,6 +79,531 @@ class ArmAutoController:
         except TypeError:
             return []
 
+    def _gripper_joint_index(self):
+        return 4
+
+    def _wrist_joint_index(self):
+        return 3
+
+    def _expected_joint_count(self):
+        return int(self.arm_params["global"]["joints_count"])
+
+    def _current_joint_positions_rad(self):
+        expected_count = self._expected_joint_count()
+        latest_joint_positions = self.arm_commute_node.get_latest_joint_positions_rad(
+            min_joint_count=expected_count
+        )
+        if latest_joint_positions:
+            return [float(value) for value in latest_joint_positions[:expected_count]]
+        return [
+            math.radians(float(joint_angle))
+            for joint_angle in self.arm_agnle_control.get_arm_angles()
+        ]
+
+    def _with_preserved_grasp_joints(self, radian):
+        joint_positions = list(radian)
+        current_joint_positions = self._current_joint_positions_rad()
+        for joint_index in (self._wrist_joint_index(), self._gripper_joint_index()):
+            if (
+                0 <= joint_index < len(joint_positions)
+                and joint_index < len(current_joint_positions)
+            ):
+                joint_positions[joint_index] = current_joint_positions[joint_index]
+        return joint_positions
+
+    def _sync_virtual_robot_to_current_joint_positions(self):
+        current_joint_positions = self._current_joint_positions_rad()
+        joint_count = len(self.pybullet_robot_controller.controllable_joints)
+        if len(current_joint_positions) >= joint_count:
+            self.pybullet_robot_controller.setJointPosition(
+                position=current_joint_positions[:joint_count]
+            )
+
+    def _joint_reset_positions_rad(self):
+        return [
+            math.radians(float(self.arm_params["joints_reset"][index]))
+            for index in range(self._expected_joint_count())
+        ]
+
+    def _wait_for_joint_state_positions(self, *, min_joint_count, timeout_sec):
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        expected_count = self._expected_joint_count()
+        while time.monotonic() < deadline:
+            positions = self.arm_commute_node.get_latest_joint_positions_rad(
+                min_joint_count=int(min_joint_count)
+            )
+            if positions:
+                return [float(value) for value in positions[:expected_count]]
+            time.sleep(0.02)
+        return None
+
+    def _publish_joint_positions_rad(self, positions_rad):
+        positions = [float(value) for value in positions_rad[: self._expected_joint_count()]]
+        joint_count = len(self.pybullet_robot_controller.controllable_joints)
+        if len(positions) >= joint_count:
+            self.pybullet_robot_controller.setJointPosition(position=positions[:joint_count])
+        self.arm_agnle_control.joint_positions = self.radians_to_degrees(positions)
+        self._publish_robot_arm_positions_rad(positions)
+
+    def _publish_robot_arm_positions_rad(self, positions_rad):
+        from trajectory_msgs.msg import JointTrajectoryPoint
+
+        positions = [float(value) for value in positions_rad]
+        zero_vec = [0.0] * len(positions)
+        message = JointTrajectoryPoint()
+        message.positions = positions
+        message.velocities = zero_vec
+        message.accelerations = zero_vec
+        message.effort = zero_vec
+        message.time_from_start.sec = 0
+        message.time_from_start.nanosec = 0
+        self.arm_commute_node.arm_pub.publish(message)
+
+    def _joint_angle_error_rad(self, current_rad, target_rad):
+        error = abs(float(current_rad) - float(target_rad))
+        wrapped_error = abs((error + math.pi) % (2.0 * math.pi) - math.pi)
+        return min(error, wrapped_error)
+
+    def _joint_command_errors_rad(self, current_positions, target_positions, tracked_indices):
+        max_errors = {}
+        group_errors = {}
+        for joint_index in tracked_indices:
+            group_positions = self.arm_commute_node.get_latest_joint_group_positions_rad(
+                joint_index
+            )
+            if group_positions:
+                errors = [
+                    self._joint_angle_error_rad(position, target_positions[joint_index])
+                    for position in group_positions
+                ]
+                group_errors[joint_index] = errors
+                max_errors[joint_index] = max(errors)
+            else:
+                error = self._joint_angle_error_rad(
+                    current_positions[joint_index],
+                    target_positions[joint_index],
+                )
+                group_errors[joint_index] = [error]
+                max_errors[joint_index] = error
+        return max_errors, group_errors
+
+    def _publish_joint_updates_and_wait(
+        self,
+        *,
+        phase,
+        joint_updates_rad,
+        min_joint_count,
+        tolerance_rad,
+        timeout_sec,
+        republish_interval_sec,
+    ):
+        current_positions = self._wait_for_joint_state_positions(
+            min_joint_count=min_joint_count,
+            timeout_sec=timeout_sec,
+        )
+        if current_positions is None:
+            return {
+                "success": False,
+                "phase": str(phase),
+                "message": "joint state was not available before publishing command",
+            }
+
+        target_positions = list(current_positions)
+        for raw_index, raw_position in joint_updates_rad.items():
+            joint_index = int(raw_index)
+            if joint_index < 0 or joint_index >= len(target_positions):
+                return {
+                    "success": False,
+                    "phase": str(phase),
+                    "message": f"joint index {joint_index} is outside joint count {len(target_positions)}",
+                }
+            target_positions[joint_index] = float(raw_position)
+
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        tracked_indices = sorted(int(index) for index in joint_updates_rad.keys())
+        published_count = 0
+        last_publish_time_sec = -float("inf")
+        last_errors = {}
+
+        while True:
+            now = time.monotonic()
+            if (
+                published_count == 0
+                or (
+                    republish_interval_sec > 0.0
+                    and now - last_publish_time_sec >= float(republish_interval_sec)
+                )
+            ):
+                self._publish_joint_positions_rad(target_positions)
+                published_count += 1
+                last_publish_time_sec = now
+
+            current_positions = self.arm_commute_node.get_latest_joint_positions_rad(
+                min_joint_count=len(target_positions)
+            )
+            if current_positions:
+                current_positions = [float(value) for value in current_positions[: len(target_positions)]]
+                last_errors, group_errors = self._joint_command_errors_rad(
+                    current_positions, target_positions, tracked_indices
+                )
+                if all(error <= float(tolerance_rad) for error in last_errors.values()):
+                    return {
+                        "success": True,
+                        "phase": str(phase),
+                        "published_count": int(published_count),
+                        "joint_errors_rad": last_errors,
+                        "joint_group_errors_rad": group_errors,
+                        "max_error_rad": max(last_errors.values()) if last_errors else 0.0,
+                        "message": "joint command reached tolerance",
+                    }
+
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.02)
+
+        return {
+            "success": False,
+            "phase": str(phase),
+            "published_count": int(published_count),
+            "joint_errors_rad": last_errors,
+            "max_error_rad": max(last_errors.values()) if last_errors else None,
+            "message": (
+                f"timed out waiting for {phase} to reach "
+                f"{float(tolerance_rad):.4f} rad tolerance"
+            ),
+        }
+
+    def set_joint_position_rad(self, joint_index, position_rad, settle_sec=0.2):
+        try:
+            joint_index = int(joint_index)
+            position_rad = float(position_rad)
+        except (TypeError, ValueError):
+            return ArmGoal.Result(
+                success=False,
+                message="set_joint_position needs numeric joint_index and position_rad",
+            )
+
+        expected_count = int(self.arm_params["global"]["joints_count"])
+        if joint_index < 0 or joint_index >= expected_count:
+            return ArmGoal.Result(
+                success=False,
+                message=(
+                    f"set_joint_position joint_index {joint_index} is outside "
+                    f"[0, {expected_count - 1}]"
+                ),
+            )
+        if not math.isfinite(position_rad):
+            return ArmGoal.Result(
+                success=False,
+                message="set_joint_position position_rad must be finite",
+            )
+
+        position_deg = math.degrees(position_rad)
+        self.arm_agnle_control.arm_index_change(joint_index, position_deg)
+        current_positions_rad = [
+            math.radians(float(joint_angle))
+            for joint_angle in self.arm_agnle_control.get_arm_angles()
+        ]
+        self.pybullet_robot_controller.setJointPosition(position=current_positions_rad)
+        self.arm_commute_node.publish_arm_angle()
+
+        if settle_sec > 0.0:
+            time.sleep(max(0.0, float(settle_sec)))
+
+        actual_position_deg = self.arm_agnle_control.get_arm_angles()[joint_index]
+        return ArmGoal.Result(
+            success=True,
+            message=(
+                f"set_joint_position success: joint {joint_index}="
+                f"{float(actual_position_deg):.2f}deg"
+            ),
+        )
+
+    def open_gripper(self):
+        return self.set_joint_position_rad(
+            self._gripper_joint_index(),
+            math.radians(60.0),
+            settle_sec=0.2,
+        )
+
+    def close_gripper(self):
+        return self.set_joint_position_rad(
+            self._gripper_joint_index(),
+            math.radians(10.0),
+            settle_sec=0.2,
+        )
+
+    def _move_to_target_position(
+        self,
+        target,
+        *,
+        steps,
+        waypoint_sleep_sec,
+        goal_tolerance_m,
+        joint_command_timeout_sec,
+        joint_command_tolerance_rad,
+        joint_command_republish_interval_sec,
+    ):
+        step_count = max(1, int(steps)) if int(steps) > 0 else 50
+        sleep_sec = (
+            max(0.0, float(waypoint_sleep_sec))
+            if waypoint_sleep_sec > 0
+            else 0.1
+        )
+        tolerance = (
+            max(0.0, float(goal_tolerance_m)) if goal_tolerance_m > 0 else 0.03
+        )
+
+        self._sync_virtual_robot_to_current_joint_positions()
+        trajectory = self.pybullet_robot_controller.generateInterpolatedTrajectory(
+            target_position=target,
+            steps=step_count,
+        )
+        if not trajectory:
+            return ArmGoal.Result(
+                success=False,
+                message=f"PB could not generate IK trajectory to {target}",
+            )
+
+        expected_count = self._expected_joint_count()
+        final_target_positions = None
+        for waypoint_index, joint_positions in enumerate(trajectory, start=1):
+            target_positions = self._with_preserved_grasp_joints(joint_positions)
+            if len(target_positions) < expected_count:
+                return ArmGoal.Result(
+                    success=False,
+                    message=(
+                        f"waypoint {waypoint_index}/{len(trajectory)} has "
+                        f"{len(target_positions)} joints; expected {expected_count}"
+                    ),
+                )
+            final_target_positions = [float(value) for value in target_positions[:expected_count]]
+            self._publish_joint_positions_rad(final_target_positions)
+            if sleep_sec > 0.0:
+                time.sleep(sleep_sec)
+
+        if final_target_positions is None:
+            return ArmGoal.Result(success=False, message="PB generated an empty trajectory")
+
+        final_joint_result = self._publish_joint_updates_and_wait(
+            phase="move_to_target_final",
+            joint_updates_rad={
+                joint_index: final_target_positions[joint_index]
+                for joint_index in range(expected_count)
+            },
+            min_joint_count=expected_count,
+            tolerance_rad=joint_command_tolerance_rad,
+            timeout_sec=joint_command_timeout_sec,
+            republish_interval_sec=joint_command_republish_interval_sec,
+        )
+        if not final_joint_result["success"]:
+            return ArmGoal.Result(
+                success=False,
+                message=(
+                    "final target joints failed: "
+                    f"{final_joint_result['message']}; "
+                    f"max_error_rad={final_joint_result.get('max_error_rad')}"
+                ),
+            )
+
+        final_position = self.pybullet_robot_controller.solveForwardPositonKinematics(
+            self.pybullet_robot_controller.getJointStates()[0]
+        )[0:3]
+        distance_to_goal = math.sqrt(
+            sum(
+                (float(current) - float(goal)) ** 2
+                for current, goal in zip(final_position, target)
+            )
+        )
+        if distance_to_goal > tolerance:
+            return ArmGoal.Result(
+                success=False,
+                message=(
+                    "PB final EE distance "
+                    f"{distance_to_goal:.4f}m exceeds tolerance {tolerance:.4f}m"
+                ),
+            )
+
+        return ArmGoal.Result(
+            success=True,
+            message=(
+                f"target move success: {len(trajectory)} waypoints, "
+                f"final PB EE distance {distance_to_goal:.4f}m"
+            ),
+        )
+
+    def car_grasp_sequence(
+        self,
+        target_position,
+        *,
+        wrist_target_rad,
+        wrist_joint_index=3,
+        gripper_joint_index=4,
+        gripper_open_rad=math.radians(60.0),
+        gripper_close_rad=math.radians(10.0),
+        steps=5,
+        waypoint_sleep_sec=0.1,
+        goal_tolerance_m=0.03,
+        joint_state_wait_sec=5.0,
+        joint_command_timeout_sec=5.0,
+        joint_command_tolerance_rad=0.05,
+        joint_command_republish_interval_sec=0.1,
+        gripper_close_delay_sec=3.0,
+        init_pose_delay_sec=1.0,
+    ):
+        try:
+            wrist_index = int(wrist_joint_index)
+            gripper_index = int(gripper_joint_index)
+            wrist_target = float(wrist_target_rad)
+            target = [float(value) for value in target_position]
+        except (TypeError, ValueError):
+            return ArmGoal.Result(
+                success=False,
+                message="car_grasp_sequence needs numeric target_position and wrist_target_rad",
+            )
+        if len(target) != 3 or not all(math.isfinite(value) for value in target):
+            return ArmGoal.Result(
+                success=False,
+                message="car_grasp_sequence target_position must contain exactly three finite values",
+            )
+        if not math.isfinite(wrist_target):
+            return ArmGoal.Result(
+                success=False,
+                message="car_grasp_sequence wrist_target_rad must be finite",
+            )
+
+        expected_count = self._expected_joint_count()
+        if not (0 <= wrist_index < expected_count) or not (0 <= gripper_index < expected_count):
+            return ArmGoal.Result(
+                success=False,
+                message=(
+                    "car_grasp_sequence joint index out of range: "
+                    f"wrist={wrist_index}, gripper={gripper_index}, count={expected_count}"
+                ),
+            )
+
+        open_rad = float(gripper_open_rad) if gripper_open_rad > 0.0 else math.radians(60.0)
+        close_rad = float(gripper_close_rad) if gripper_close_rad > 0.0 else math.radians(10.0)
+        joint_wait = max(0.0, float(joint_state_wait_sec)) if joint_state_wait_sec > 0 else 5.0
+        joint_timeout = max(0.0, float(joint_command_timeout_sec)) if joint_command_timeout_sec > 0 else 5.0
+        joint_tolerance = (
+            max(0.0, float(joint_command_tolerance_rad))
+            if joint_command_tolerance_rad > 0
+            else 0.05
+        )
+        republish_interval = (
+            max(0.0, float(joint_command_republish_interval_sec))
+            if joint_command_republish_interval_sec > 0
+            else 0.1
+        )
+        min_joint_count = max(wrist_index, gripper_index) + 1
+
+        initial_positions = self._wait_for_joint_state_positions(
+            min_joint_count=min_joint_count,
+            timeout_sec=joint_wait,
+        )
+        if initial_positions is None:
+            return ArmGoal.Result(
+                success=False,
+                message=f"car_grasp_sequence failed: no joint_states with {min_joint_count} joints",
+            )
+
+        phases = []
+        open_result = self._publish_joint_updates_and_wait(
+            phase="open_gripper",
+            joint_updates_rad={gripper_index: open_rad},
+            min_joint_count=min_joint_count,
+            tolerance_rad=joint_tolerance,
+            timeout_sec=joint_timeout,
+            republish_interval_sec=republish_interval,
+        )
+        phases.append(open_result)
+        if not open_result["success"]:
+            return ArmGoal.Result(success=False, message=f"open_gripper failed: {open_result['message']}")
+
+        wrist_result = self._publish_joint_updates_and_wait(
+            phase="wrist",
+            joint_updates_rad={wrist_index: wrist_target},
+            min_joint_count=min_joint_count,
+            tolerance_rad=joint_tolerance,
+            timeout_sec=joint_timeout,
+            republish_interval_sec=republish_interval,
+        )
+        phases.append(wrist_result)
+        if not wrist_result["success"]:
+            return ArmGoal.Result(success=False, message=f"wrist failed: {wrist_result['message']}")
+
+        move_result = self._move_to_target_position(
+            target,
+            steps=steps,
+            waypoint_sleep_sec=waypoint_sleep_sec,
+            goal_tolerance_m=goal_tolerance_m,
+            joint_command_timeout_sec=joint_timeout,
+            joint_command_tolerance_rad=joint_tolerance,
+            joint_command_republish_interval_sec=republish_interval,
+        )
+        if not move_result.success:
+            return ArmGoal.Result(
+                success=False,
+                message=f"move_to_target failed: {move_result.message}",
+            )
+
+        close_current_positions = self._wait_for_joint_state_positions(
+            min_joint_count=min_joint_count,
+            timeout_sec=joint_timeout,
+        )
+        if close_current_positions is None:
+            return ArmGoal.Result(
+                success=False,
+                message="close_gripper failed: joint state was not available before publishing command",
+            )
+
+        close_target_positions = list(close_current_positions)
+        close_target_positions[gripper_index] = close_rad
+        self._publish_joint_positions_rad(close_target_positions)
+        close_delay = max(0.0, float(gripper_close_delay_sec))
+        if close_delay > 0.0:
+            time.sleep(close_delay)
+        close_result = {
+            "success": True,
+            "phase": "close_gripper",
+            "published_count": 1,
+            "waited_sec": float(close_delay),
+            "message": "close gripper command published; skipped finger tolerance wait",
+        }
+        phases.append(close_result)
+
+        init_delay = max(0.0, float(init_pose_delay_sec))
+        if init_delay > 0.0:
+            time.sleep(init_delay)
+        reset_positions = self._joint_reset_positions_rad()
+        init_result = self._publish_joint_updates_and_wait(
+            phase="init_pose",
+            joint_updates_rad={
+                joint_index: joint_position
+                for joint_index, joint_position in enumerate(reset_positions)
+            },
+            min_joint_count=expected_count,
+            tolerance_rad=joint_tolerance,
+            timeout_sec=joint_timeout,
+            republish_interval_sec=republish_interval,
+        )
+        phases.append(init_result)
+        if not init_result["success"]:
+            return ArmGoal.Result(success=False, message=f"init_pose failed: {init_result['message']}")
+
+        phase_summary = ", ".join(
+            f"{phase['phase']}:{phase.get('published_count', 0)}pub"
+            for phase in phases
+        )
+        return ArmGoal.Result(
+            success=True,
+            message=(
+                "car_grasp_sequence success: "
+                f"{phase_summary}; {move_result.message}"
+            ),
+        )
+
     def grap(self):
         self.arm_agnle_control.arm_index_change(4, 10)
         self.arm_commute_node.publish_arm_angle()
@@ -196,9 +721,10 @@ class ArmAutoController:
                 self.move_real_and_virtual(radian=angle)
                 time.sleep(0.2)
 
-    def move_real_and_virtual(self, radian):
-        self.pybullet_robot_controller.setJointPosition(position=radian)
-        degree = self.radians_to_degrees(radian)
+    def move_real_and_virtual(self, radian, *, preserve_grasp_joints=False):
+        joint_positions = self._with_preserved_grasp_joints(radian) if preserve_grasp_joints else list(radian)
+        self.pybullet_robot_controller.setJointPosition(position=joint_positions)
+        degree = self.radians_to_degrees(joint_positions)
         self.arm_agnle_control.arm_all_change(degree)
         self.arm_commute_node.publish_arm_angle()
 

@@ -33,6 +33,7 @@ def _save_debug_npz(
     *,
     object_id: str,
     camera_name: str,
+    depth_camera_x_mirrored: bool,
     image_bgr: np.ndarray,
     depth_m: np.ndarray,
     intrinsic_matrix: np.ndarray,
@@ -63,6 +64,7 @@ def _save_debug_npz(
         {
             "object_id": np.array(object_id),
             "camera_name": np.array(camera_name),
+            "depth_camera_x_mirrored": np.array(bool(depth_camera_x_mirrored)),
             "image_bgr": np.asarray(image_bgr, dtype=np.uint8),
             "depth_m": np.asarray(depth_m, dtype=np.float32),
             "intrinsic_matrix": np.asarray(intrinsic_matrix, dtype=float),
@@ -160,6 +162,7 @@ def _depth_to_point_cloud(
     stride: int,
     min_depth_m: float,
     max_depth_m: float,
+    mirror_x: bool = False,
 ) -> np.ndarray:
     fx = float(intrinsic_matrix[0, 0])
     fy = float(intrinsic_matrix[1, 1])
@@ -183,6 +186,8 @@ def _depth_to_point_cloud(
 
     z = depth_m[v_idx, u_idx].astype(np.float32)
     x = (u_idx.astype(np.float32) - cx) * z / fx
+    if mirror_x:
+        x *= -1.0
     y = (v_idx.astype(np.float32) - cy) * z / fy
     return np.column_stack([x, y, z]).astype(np.float32)
 
@@ -198,6 +203,22 @@ def _voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
 def _flip_mask_for_depth_alignment(mask_bool: np.ndarray) -> np.ndarray:
     """Flip the SAM mask vertically before depth backprojection."""
     return np.flip(mask_bool, axis=0).copy()
+
+
+def _mirror_camera_points_x(points_camera_xyz: np.ndarray) -> np.ndarray:
+    points = np.asarray(points_camera_xyz, dtype=float).copy()
+    if points.shape[-1] != 3:
+        raise ValueError(f"Expected camera points with last dimension 3, got shape {points.shape}.")
+    points[..., 0] *= -1.0
+    return points
+
+
+def _runtime_bool(value: object, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def _rotation_matrix_to_quaternion_xyzw(rotation: np.ndarray) -> list[float]:
@@ -300,6 +321,7 @@ def run_pipeline(
     seg_mask_bool = _flip_mask_for_depth_alignment(seg_mask_bool)
 
     runtime = cfg["runtime"]
+    mirror_depth_camera_x = _runtime_bool(runtime.get("mirror_depth_camera_x"), True)
     object_pc_camera = _depth_to_point_cloud(
         depth_m=depth_m,
         intrinsic_matrix=intrinsic_matrix,
@@ -307,6 +329,7 @@ def run_pipeline(
         stride=int(runtime["object_point_stride"]),
         min_depth_m=float(runtime["min_depth_m"]),
         max_depth_m=float(runtime["max_depth_m"]),
+        mirror_x=mirror_depth_camera_x,
     )
     if len(object_pc_camera) == 0:
         raise RuntimeError("Target mask produced no valid depth points.")
@@ -326,6 +349,7 @@ def run_pipeline(
         stride=int(runtime["scene_point_stride"]),
         min_depth_m=float(runtime["min_depth_m"]),
         max_depth_m=float(runtime["max_depth_m"]),
+        mirror_x=mirror_depth_camera_x,
     )
     scene_pc_camera = _voxel_downsample(
         scene_pc_camera,
@@ -362,6 +386,8 @@ def run_pipeline(
     )
     if gripper_midpoint_camera_xyz.shape != (3,):
         raise ValueError("runtime.gripper_midpoint_camera_xyz must contain exactly three values.")
+    if mirror_depth_camera_x:
+        gripper_midpoint_camera_xyz = _mirror_camera_points_x(gripper_midpoint_camera_xyz)
     (
         valid_grasps_local,
         valid_grasps_camera,
@@ -400,6 +426,7 @@ def run_pipeline(
     debug_npz_path = _save_debug_npz(
         object_id=object_id,
         camera_name=camera_name or str(cfg["camera"]["camera_name"]),
+        depth_camera_x_mirrored=mirror_depth_camera_x,
         image_bgr=image_bgr,
         depth_m=depth_m,
         intrinsic_matrix=intrinsic_matrix,
@@ -429,6 +456,7 @@ def run_pipeline(
         "detection_confidence": float(detection_confidence),
         "grasp_confidence": float(valid_grasp_confidences[best_idx]),
         "num_valid_grasps": int(len(valid_grasps_camera)),
+        "depth_camera_x_mirrored": bool(mirror_depth_camera_x),
         "gripper_midpoint_camera_xyz": gripper_midpoint_camera_xyz.astype(float).tolist(),
         "grasp_distance_to_gripper_midpoint_m": float(
             valid_grasp_distance_to_gripper_midpoint_m[best_idx]

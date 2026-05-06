@@ -15,6 +15,8 @@ runtime:
   yolo_conf_threshold: 0.25
   min_depth_m: 0.19
   max_depth_m: 3.0
+  # Mirror depth-derived camera points so camera +X becomes -X before grasp inference.
+  mirror_depth_camera_x: true
   object_point_stride: 1
   scene_point_stride: 4
   object_voxel_size_m: 0.002

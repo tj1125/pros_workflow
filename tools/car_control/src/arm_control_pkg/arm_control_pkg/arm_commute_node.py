@@ -5,6 +5,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
+from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectoryPoint
 
@@ -18,6 +19,24 @@ class ArmCummuteNode(Node):
         self.arm_pub = self.create_publisher(
             JointTrajectoryPoint, self.arm_params["global"]["arm_topic"], 10
         )
+        self.latest_joint_positions_rad = None
+        self.latest_joint_group_positions_rad = None
+        self.joint_state_groups = self._joint_state_groups_from_config()
+        joint_state_topic = str(
+            self.arm_params["global"].get("joint_state_topic", "/joint_states")
+        ).strip() or "/joint_states"
+        joint_state_topics = [joint_state_topic]
+        if joint_state_topic == "/joint_states":
+            joint_state_topics.append("/joint_state")
+        self.joint_state_subscriptions = [
+            self.create_subscription(
+                JointState,
+                topic,
+                self.joint_state_callback,
+                10,
+            )
+            for topic in dict.fromkeys(joint_state_topics)
+        ]
 
         self.latest_imu_data = None
         self.imu_sub = self.create_subscription(
@@ -37,6 +56,71 @@ class ArmCummuteNode(Node):
 
     def imu_callback(self, msg: Imu):
         self.latest_imu_data = msg
+
+    def _joint_state_groups_from_config(self):
+        raw_names = self.arm_params["global"].get("joint_state_names", [])
+        groups = []
+        if not isinstance(raw_names, list):
+            return groups
+        for raw_name in raw_names:
+            if isinstance(raw_name, list):
+                group = tuple(str(name).strip() for name in raw_name if str(name).strip())
+            else:
+                group = (str(raw_name).strip(),)
+            if group:
+                groups.append(group)
+        return groups
+
+    def _map_joint_state_positions(self, msg: JointState, joint_positions):
+        if not self.joint_state_groups or not msg.name:
+            return list(joint_positions), [[float(value)] for value in joint_positions]
+
+        name_to_position = {
+            str(name): float(joint_positions[index])
+            for index, name in enumerate(msg.name)
+            if index < len(joint_positions)
+        }
+        mapped_positions = []
+        group_positions = []
+        for group in self.joint_state_groups:
+            if not all(name in name_to_position for name in group):
+                return None, None
+            positions = [name_to_position[name] for name in group]
+            group_positions.append(positions)
+            mapped_positions.append(sum(positions) / len(positions))
+        return mapped_positions, group_positions
+
+    def joint_state_callback(self, msg: JointState):
+        try:
+            joint_positions = [float(value) for value in msg.position]
+        except (TypeError, ValueError):
+            return
+        if not joint_positions or not all(math.isfinite(value) for value in joint_positions):
+            return
+        mapped_positions, group_positions = self._map_joint_state_positions(
+            msg, joint_positions
+        )
+        if mapped_positions is None or group_positions is None:
+            return
+        if not all(math.isfinite(value) for value in mapped_positions):
+            return
+        self.latest_joint_positions_rad = mapped_positions
+        self.latest_joint_group_positions_rad = group_positions
+
+    def get_latest_joint_positions_rad(self, *, min_joint_count=0):
+        if self.latest_joint_positions_rad is None:
+            return None
+        if len(self.latest_joint_positions_rad) < int(min_joint_count):
+            return None
+        return list(self.latest_joint_positions_rad)
+
+    def get_latest_joint_group_positions_rad(self, joint_index):
+        if self.latest_joint_group_positions_rad is None:
+            return None
+        joint_index = int(joint_index)
+        if joint_index < 0 or joint_index >= len(self.latest_joint_group_positions_rad):
+            return None
+        return list(self.latest_joint_group_positions_rad[joint_index])
 
     def get_latest_imu_data(self):
         if self.latest_imu_data is None:

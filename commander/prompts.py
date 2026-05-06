@@ -30,6 +30,10 @@ Your task is to analyze the current RGBD camera image and task context, then dis
   TRIGGER: ONLY after grasp_agent has determined the grasp pose, and the mobile base needs to navigate to it.
            Also trigger when arm_approach_agent returns "No IK solution satisfied the pose tolerances."
            and the commander determines that the mobile base position still needs minor adjustment.
+           Also trigger after a previous grasp attempt when the current observation shows the
+           gripper/robotic arm is NOT holding the target bear (the bear is still free on
+           the table/floor, outside the gripper fingers, or visibly dropped), as long as a
+           latest grasp result is still available for retry.
   MEMORY: If it succeeds with arm_result.success=true, car_approach has already
           executed the arm/gripper finish sequence. Do not dispatch arm_approach_agent
           just because the immediately previous step was car_approach_agent.
@@ -67,7 +71,7 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 4. If path is CLEAR → grasp_agent
 5. If grasp pose is ready and base approach is not complete → car_approach_agent
 6. If arm_approach_agent reports "No IK solution satisfied the pose tolerances." and base position still needs minor adjustment → car_approach_agent
-7. If car_approach_agent succeeded with arm_result.success=true but the grasp is not visually confirmed → view_agent or recovery, not DONE
+7. If car_approach_agent succeeded with arm_result.success=true but the current observation shows the bear is NOT held by the gripper → car_approach_agent retry, not DONE
 8. Do not call arm_approach_agent in the normal post-car_approach path while it is frozen
 
 Use the Action History KeyFacts as authoritative memory of prior stages.

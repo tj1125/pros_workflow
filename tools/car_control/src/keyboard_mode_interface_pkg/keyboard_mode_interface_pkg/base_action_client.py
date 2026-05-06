@@ -18,8 +18,8 @@ class BaseActionClient:
 
         self._logger.info(f"{client_name} initialized.")
 
-    def send_goal(self, mode):
-        goal_msg = self._create_goal_msg(mode)
+    def send_goal(self, mode, **goal_kwargs):
+        goal_msg = self._create_goal_msg(mode, **goal_kwargs)
 
         if not self.action_client.wait_for_server(timeout_sec=1.0):
             self._logger.error(f"{self._server_name} not available!")
