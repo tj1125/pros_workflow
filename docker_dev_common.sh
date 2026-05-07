@@ -65,9 +65,9 @@ build_base_docker_args() {
         --network
         compose_cube_bridge_network
         --env
-        OLLAMA_URL=http://192.168.75.24:11434
+        OLLAMA_URL=http://140.116.82.233:11434
         --env
-        OLLAMA_BASE_URL=http://192.168.75.24:11434
+        OLLAMA_BASE_URL=http://140.116.82.233:11434
         -v
         "$SCRIPT_DIR:/workspaces/VLM_RL"
         -v

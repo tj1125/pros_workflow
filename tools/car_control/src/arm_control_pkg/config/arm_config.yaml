@@ -15,7 +15,7 @@ pybullet:
   urdf_name: target.urdf
   gui: false
   view_world: false
-  initial_height: 0.18
+  initial_height: 0.21
   base_orientation_euler_deg: [0.0, 0.0, 0.0]
   controllable_joints: 5
   end_eff_index: [4, 8]
@@ -31,7 +31,7 @@ joints:
     max_angle: 240.0
   2:
     min_angle: 0.0
-    max_angle: 180.0
+    max_angle: 150.0
   3:
     min_angle: 0.0
     max_angle: 180.0
