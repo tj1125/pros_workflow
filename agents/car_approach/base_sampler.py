@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,9 +96,9 @@ class ApproachAgentRunConfig:
     run_rule_navigation: bool = True
     evaluate_current_pose_only: bool = False
     show_gui: bool = False
-    write_map_png: bool = True
+    write_map_png: bool = False
     map_png_path: Path | None = None
-    write_debug_views: bool = True
+    write_debug_views: bool = False
     debug_render_path: Path | None = None
 
 
@@ -108,7 +109,7 @@ MAX_GRASP_POSES_TO_EVALUATE = 10
 TARGET_OBJECT_POINTCLOUD_KEY = "object_pc_camera"
 BASE_LINK_YAW_MAX_DELTA_FROM_CURRENT_DEG = 20.0
 BASE_LINK_FROM_AMCL_PB_XY = np.asarray([0.0, 0.1288], dtype=np.float64)
-VEHICLE_BASE_LENGTH_X_M = 0.36
+VEHICLE_BASE_LENGTH_X_M = 0.34
 VEHICLE_BASE_LENGTH_Y_M = 0.38
 ARM_BASE_ALIGNMENT_JOINT_INDEX = 0
 ARM_BASE_ALIGNMENT_SOURCE = "approach_agent_car_approach"
@@ -543,6 +544,114 @@ def _run_rule_navigation_for_solution(
         flush=True,
     )
     return result
+
+
+def _arm_result_reached_init_pose(arm_result: dict[str, object]) -> bool:
+    if not isinstance(arm_result, dict) or bool(arm_result.get("skipped", False)):
+        return False
+    if bool(arm_result.get("init_pose_success", False)):
+        return True
+    if bool(arm_result.get("success", False)):
+        return True
+
+    messages = [str(arm_result.get("message", ""))]
+    sequence_result = arm_result.get("car_grasp_sequence_result")
+    if isinstance(sequence_result, dict):
+        messages.append(str(sequence_result.get("message", "")))
+    return any("continued_to_init_pose=True" in message for message in messages)
+
+
+def _cube_z_distance_verification_from_message(message: str) -> dict[str, object]:
+    match = re.search(
+        r"cube_z_distance=([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)m\s*(<|>=)\s*"
+        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)m",
+        str(message),
+    )
+    if not match:
+        return {
+            "cube_z_distance_verified": False,
+            "cube_z_distance_success": False,
+        }
+
+    distance_m = float(match.group(1))
+    comparator = match.group(2)
+    threshold_m = float(match.group(3))
+    return {
+        "cube_z_distance_verified": True,
+        "cube_z_distance_success": comparator == "<" and distance_m < threshold_m,
+        "cube_z_distance_m": distance_m,
+        "cube_z_distance_threshold_m": threshold_m,
+    }
+
+
+def _arm_result_cube_z_distance_verification(arm_result: dict[str, object]) -> dict[str, object]:
+    if not isinstance(arm_result, dict):
+        return {
+            "cube_z_distance_verified": False,
+            "cube_z_distance_success": False,
+        }
+    if bool(arm_result.get("cube_z_distance_verified", False)):
+        return {
+            "cube_z_distance_verified": True,
+            "cube_z_distance_success": bool(arm_result.get("cube_z_distance_success", False)),
+            "cube_z_distance_m": arm_result.get("cube_z_distance_m"),
+            "cube_z_distance_threshold_m": arm_result.get("cube_z_distance_threshold_m"),
+        }
+
+    messages = [str(arm_result.get("message", ""))]
+    sequence_result = arm_result.get("car_grasp_sequence_result")
+    if isinstance(sequence_result, dict):
+        messages.append(str(sequence_result.get("message", "")))
+    for message in messages:
+        parsed = _cube_z_distance_verification_from_message(message)
+        if bool(parsed.get("cube_z_distance_verified", False)):
+            return parsed
+    return {
+        "cube_z_distance_verified": False,
+        "cube_z_distance_success": False,
+    }
+
+
+def _run_rule_return_to_initial_pose(
+    initial_pose: object | None,
+    *,
+    initial_pose_source: str,
+) -> dict[str, object]:
+    if not _env_flag("APPROACH_AGENT_RULE_RETURN_TO_START", True):
+        print("[base_approach] reverse return disabled by APPROACH_AGENT_RULE_RETURN_TO_START.", flush=True)
+        return {"success": False, "skipped": True, "phase": "disabled_by_env"}
+    if initial_pose is None:
+        return {
+            "success": False,
+            "skipped": True,
+            "phase": "initial_pose_unavailable",
+            "message": "Cannot reverse return: no initial pose is available.",
+        }
+
+    rule_config = _rule_navigation_config()
+    try:
+        return_target_pose = move_car._initial_pose_dict_from_any(initial_pose)
+    except Exception as exc:
+        return {
+            "success": False,
+            "skipped": True,
+            "phase": "initial_pose_invalid",
+            "message": f"Cannot reverse return: invalid initial pose: {exc}",
+        }
+    _log_initial_pose_reference(initial_pose, f"reverse-return target from {initial_pose_source}")
+    result = move_car.drive_back_to_pose_by_rule(
+        return_target_pose,
+        config=rule_config,
+        prefer_amcl_pose=True,
+    )
+    result["initial_pose_source"] = initial_pose_source
+    print(
+        "[base_approach] reverse return result = "
+        f"{result}.",
+        flush=True,
+    )
+    return result
+
 
 def _print_closest_ik_solution_banner(
     *,
@@ -3313,12 +3422,13 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         APPROACH_AGENT_DIR / "outputs" / "base_sampler_debug.ppm"
     )
     debug_render_result: dict[str, object] = {
-        "debug_render_output_path": str(debug_render_path),
-        "debug_render_topdown_output_path": str(_derive_topdown_output_path(debug_render_path)),
-        "debug_render_side_output_path": str(_derive_side_output_path(debug_render_path)),
+        "debug_render_output_path": "",
+        "debug_render_topdown_output_path": "",
+        "debug_render_side_output_path": "",
         "debug_render_skipped": True,
     }
-    if run_config.write_debug_views:
+    write_debug_views = False
+    if write_debug_views:
         debug_render_result = _write_base_sampler_debug_views(
             p_mod=p_mod,
             pybullet_data=pybullet_data,
@@ -3350,6 +3460,17 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         "phase": "not_started",
         "message": "Arm finish sequence was not started.",
     }
+    car_return_result: dict[str, object] = {
+        "success": False,
+        "skipped": True,
+        "phase": "not_started",
+        "message": "Reverse return was not started.",
+    }
+    cube_z_distance_verification: dict[str, object] = {
+        "cube_z_distance_verified": False,
+        "cube_z_distance_success": False,
+    }
+    initial_pose_for_return: object | None = None
     arm_base_alignment_published = False
     arm_finish_requested = car_arm_finish_enabled()
     if goal_pose_solution is None:
@@ -3363,6 +3484,7 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         print("[base_approach] rule navigation disabled by caller.", flush=True)
     else:
         initial_pose = run_config.initial_pose or live_scene.captured_amcl_pose
+        initial_pose_for_return = initial_pose
         initial_pose_source = (
             run_config.initial_pose_source or "provided initial_pose"
             if run_config.initial_pose
@@ -3391,23 +3513,55 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
                     p_mod=p_mod,
                     pybullet_data=pybullet_data,
                 )
-                if bool(arm_result.get("success", False)):
+                arm_reached_init_pose = _arm_result_reached_init_pose(arm_result)
+                cube_z_distance_verification = _arm_result_cube_z_distance_verification(arm_result)
+                car_return_result = _run_rule_return_to_initial_pose(
+                    initial_pose_for_return,
+                    initial_pose_source=initial_pose_source,
+                )
+                car_return_result["arm_init_pose_confirmed"] = bool(arm_reached_init_pose)
+                car_return_result["cube_z_distance_success"] = bool(
+                    cube_z_distance_verification.get("cube_z_distance_success", False)
+                )
+
+                cube_success = bool(cube_z_distance_verification.get("cube_z_distance_success", False))
+                cube_verified = bool(cube_z_distance_verification.get("cube_z_distance_verified", False))
+                reverse_return_status = (
+                    "skipped"
+                    if bool(car_return_result.get("skipped", False))
+                    else "succeeded"
+                    if bool(car_return_result.get("success", False))
+                    else "failed"
+                )
+                if cube_success:
                     phase = "done"
                     message = (
-                        "Base approach reached the selected pose; gripper opened, "
-                        "arm moved to the target pose, and gripper closed."
+                        "Base approach reached the selected pose; grasp verification "
+                        "succeeded by cube_z_distance; reverse return "
+                        f"{reverse_return_status}."
                     )
+                    if bool(arm_result.get("arm_warning_present", False)):
+                        message += " Arm motion warnings were recorded but did not fail the grasp."
                     print(
-                        "[base_approach] base approach complete; car_approach executed "
-                        "the arm/gripper finish sequence directly.",
+                        "[base_approach] base approach complete; cube_z_distance "
+                        "verification accepted the grasp.",
                         flush=True,
                     )
                 else:
-                    phase = "arm_finish_failed"
-                    message = (
-                        "Base approach reached the selected pose, but direct arm finish failed: "
-                        f"{arm_result.get('message', arm_result.get('phase', 'unknown'))}"
-                    )
+                    phase = "grasp_verification_failed"
+                    if cube_verified:
+                        message = (
+                            "Base approach reached the selected pose, but grasp verification "
+                            "failed by cube_z_distance; reverse return "
+                            f"{reverse_return_status}."
+                        )
+                    else:
+                        message = (
+                            "Base approach reached the selected pose, but grasp verification "
+                            "did not produce a usable cube_z_distance result; reverse return "
+                            f"{reverse_return_status}. "
+                            f"Arm result: {arm_result.get('message', arm_result.get('phase', 'unknown'))}"
+                        )
                     print(f"[base_approach] {message}", flush=True)
             else:
                 arm_base_alignment_result = {
@@ -3430,8 +3584,9 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
             phase = "rule_navigation_failed"
             message = "Rule navigation did not reach the selected pose."
 
+    write_map_png = False
     map_png_path = run_config.map_png_path or (APPROACH_AGENT_DIR / "outputs" / "map_occupied.png")
-    if run_config.write_map_png:
+    if write_map_png:
         _write_best_display_solution_ros_map_png(
             map_yaml_path=Path(cfg["map_yaml_path"]),
             planning_config=planning_config,
@@ -3457,7 +3612,20 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
 
     base_success = bool(nav_result.get("success", False)) if run_config.run_rule_navigation else goal_pose_solution is not None
     arm_finish_required = bool(run_config.run_rule_navigation and arm_finish_requested and base_success)
-    success = bool(base_success and (not arm_finish_required or bool(arm_result.get("success", False))))
+    car_return_required = bool(arm_finish_required)
+    cube_z_distance_verification = (
+        _arm_result_cube_z_distance_verification(arm_result)
+        if arm_finish_required
+        else cube_z_distance_verification
+    )
+    success = bool(
+        base_success
+        and (
+            bool(cube_z_distance_verification.get("cube_z_distance_success", False))
+            if arm_finish_required
+            else True
+        )
+    )
     status_code = "APPROACH_SUCCESS" if success else "APPROACH_FAIL"
     next_agent = None if (arm_finish_required and success) else "Arm_Approach_Agent" if success else None
     arm_approach_start_base_joint_index = arm_base_alignment_result.get("joint_index")
@@ -3490,6 +3658,20 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
         "arm_result": arm_result,
         "arm_finish_requested": bool(arm_finish_requested),
         "arm_finish_required": bool(arm_finish_required),
+        "car_return_result": car_return_result,
+        "car_return_requested": bool(arm_finish_required),
+        "car_return_required": bool(car_return_required),
+        "cube_z_distance_verification": cube_z_distance_verification,
+        "cube_z_distance_verified": bool(
+            cube_z_distance_verification.get("cube_z_distance_verified", False)
+        ),
+        "cube_z_distance_success": bool(
+            cube_z_distance_verification.get("cube_z_distance_success", False)
+        ),
+        "cube_z_distance_m": cube_z_distance_verification.get("cube_z_distance_m"),
+        "cube_z_distance_threshold_m": cube_z_distance_verification.get(
+            "cube_z_distance_threshold_m"
+        ),
         "arm_base_alignment_result": arm_base_alignment_result,
         "arm_base_alignment_published": bool(arm_base_alignment_published),
         "arm_approach_start_base_joint_index": arm_approach_start_base_joint_index,
@@ -3501,7 +3683,7 @@ def run_approach_agent(run_config: ApproachAgentRunConfig | None = None) -> dict
             else ""
         ),
         "arm_motion_skipped": bool(arm_result.get("skipped", True)),
-        "map_png_path": str(map_png_path) if run_config.write_map_png else "",
+        "map_png_path": str(map_png_path) if write_map_png else "",
         "debug_render_output_path": str(debug_render_result.get("debug_render_output_path", "")),
         "debug_render_topdown_output_path": str(
             debug_render_result.get("debug_render_topdown_output_path", "")
@@ -3605,7 +3787,7 @@ def _should_show_gui(args: argparse.Namespace) -> bool:
 def _should_write_debug_views(args: argparse.Namespace) -> bool:
     if args.write_debug_views is not None:
         return bool(args.write_debug_views)
-    return _env_flag("BASE_SAMPLER_WRITE_DEBUG_VIEWS", True)
+    return _env_flag("BASE_SAMPLER_WRITE_DEBUG_VIEWS", False)
 
 
 def main():

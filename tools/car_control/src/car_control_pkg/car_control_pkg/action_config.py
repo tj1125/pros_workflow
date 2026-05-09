@@ -8,7 +8,7 @@ vel, rotate_vel為自走車PID數值, 可於arduino程式碼查看
 """
 vel = 10.0
 vel_slow = 5.0
-rotate_vel = 8.0
+rotate_vel = 8.5
 rotate_vel_slow = 6.7
 rotate_vel_median = 7.5
 ACTION_MAPPINGS = {
@@ -34,7 +34,7 @@ ACTION_MAPPINGS = {
         rotate_vel_median,
     ],  # 中速左自轉
     "BACKWARD": [-vel, -vel, -vel, -vel],  # 後退
-    "BACKWARD_SLOW": [-vel_slow, -vel_slow, -vel_slow, -vel_slow],  # 後退
+    "BACKWARD_SLOW": [-vel_slow*1.5, -vel_slow*1.5, -vel_slow*1.5, -vel_slow*1.5],  # 後退
     "CLOCKWISE_ROTATION": [rotate_vel, -rotate_vel, rotate_vel, -rotate_vel],  # 右自轉
     "CLOCKWISE_ROTATION_SLOW": [
         rotate_vel_slow*0.8,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -23,9 +24,9 @@ CAR_ARM_FINISH_WRIST_YAW_MAX_DEG = 120.0
 CAR_ARM_FINISH_ARM_ACTION_SERVER_NAME = "arm_action_server"
 CAR_ARM_FINISH_ACTION_SERVER_WAIT_SEC = 5.0
 CAR_ARM_FINISH_ACTION_RESULT_TIMEOUT_SEC = 45.0
-CAR_ARM_FINISH_GRASP_TARGET_OFFSET_X_M = 0.04
+CAR_ARM_FINISH_GRASP_TARGET_OFFSET_X_M = 0.05
 CAR_ARM_FINISH_GRASP_TARGET_OFFSET_Y_M = 0.0
-CAR_ARM_FINISH_GRASP_TARGET_OFFSET_Z_M = -0.135
+CAR_ARM_FINISH_GRASP_TARGET_OFFSET_Z_M = -0.13
 CAR_ARM_FINISH_GRASP_TARGET_HORIZONTAL_DEEPER_M = 0.0
 CAR_ARM_FINISH_GRASP_TARGET_TRAJECTORY_STEPS = 5
 CAR_ARM_FINISH_GRASP_TARGET_WAYPOINT_SLEEP_SEC = 0.1
@@ -52,6 +53,29 @@ def env_flag(name: str, default: bool) -> bool:
 
 def car_arm_finish_enabled() -> bool:
     return env_flag("APPROACH_AGENT_CAR_FINISH_ARM_ON_ARRIVAL", CAR_ARM_FINISH_ENABLED)
+
+
+def _cube_z_distance_verification_from_message(message: str) -> dict[str, object]:
+    match = re.search(
+        r"cube_z_distance=([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)m\s*(<|>=)\s*"
+        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)m",
+        str(message),
+    )
+    if not match:
+        return {
+            "cube_z_distance_verified": False,
+            "cube_z_distance_success": False,
+        }
+
+    distance_m = float(match.group(1))
+    comparator = match.group(2)
+    threshold_m = float(match.group(3))
+    return {
+        "cube_z_distance_verified": True,
+        "cube_z_distance_success": comparator == "<" and distance_m < threshold_m,
+        "cube_z_distance_m": distance_m,
+        "cube_z_distance_threshold_m": threshold_m,
+    }
 
 
 def run_car_arm_finish_sequence(
@@ -669,13 +693,27 @@ def _run_car_grasp_sequence_action(
             init_pose_delay_sec=float(init_pose_delay_sec),
             timeout_sec=max(0.0, action_timeout_sec),
         )
-        success = bool(sequence_result.get("success", False))
+        sequence_message = str(sequence_result.get("message", ""))
+        cube_verification = _cube_z_distance_verification_from_message(sequence_message)
+        success = bool(cube_verification.get("cube_z_distance_success", False))
+        continued_to_init_pose = "continued_to_init_pose=True" in sequence_message
+        arm_warning_present = "arm_warnings=" in sequence_message
+        arm_warnings = (
+            sequence_message.split("arm_warnings=", 1)[1]
+            if arm_warning_present
+            else ""
+        )
+
+        def phase_warned(phase: str) -> bool:
+            return f"{phase}:" in arm_warnings
+
         return {
             "success": success,
             "execution_model": CAR_ARM_FINISH_ACTION_EXECUTION_MODEL,
             "action_server": action_name,
             "car_grasp_sequence_success": success,
             "car_grasp_sequence_result": sequence_result,
+            **cube_verification,
             "joint_command_timeout_sec": float(joint_command_timeout_sec),
             "joint_command_tolerance_rad": float(joint_command_tolerance_rad),
             "joint_command_tolerance_deg": math.degrees(float(joint_command_tolerance_rad)),
@@ -685,13 +723,13 @@ def _run_car_grasp_sequence_action(
             "car_grasp_sequence_trajectory_steps": max(1, trajectory_steps),
             "car_grasp_sequence_waypoint_sleep_sec": max(0.0, waypoint_sleep_sec),
             "car_grasp_sequence_tolerance_m": max(0.0, goal_tolerance_m),
-            "target_move_success": success,
-            "gripper_open_success": success,
-            "wrist_success": success,
+            "target_move_success": not phase_warned("move_to_target"),
+            "gripper_open_success": not phase_warned("open_gripper"),
+            "wrist_success": not phase_warned("wrist"),
             "wrist_joint_index": int(wrist_joint_index),
             "wrist_target_rad": float(wrist_target_rad),
             "wrist_target_deg": math.degrees(float(wrist_target_rad)),
-            "gripper_close_success": success,
+            "gripper_close_success": not phase_warned("close_gripper"),
             "gripper_joint_index": int(gripper_joint_index),
             "gripper_open_rad": float(gripper_open_rad),
             "gripper_open_deg": math.degrees(float(gripper_open_rad)),
@@ -699,9 +737,12 @@ def _run_car_grasp_sequence_action(
             "gripper_close_deg": math.degrees(float(gripper_close_rad)),
             "gripper_close_delay_sec": float(close_delay_sec),
             "init_pose_delay_sec": float(init_pose_delay_sec),
-            "init_pose_success": success,
-            "return_to_start_published": success,
-            "message": str(sequence_result.get("message", "")),
+            "init_pose_success": bool(success or continued_to_init_pose),
+            "return_to_start_published": bool(success or continued_to_init_pose),
+            "continued_to_init_pose": bool(continued_to_init_pose),
+            "arm_warning_present": bool(arm_warning_present),
+            "arm_warnings": arm_warnings,
+            "message": sequence_message,
         }
     finally:
         if node is not None:

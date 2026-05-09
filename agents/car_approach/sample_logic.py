@@ -554,7 +554,7 @@ def sample_base_pose_for_best_grasp(
     max_backoff = float(os.getenv("BASE_SIMPLE_SAMPLE_MAX_BACKOFF_M", "0.60")) if max_backoff_m is None else float(max_backoff_m)
     step = float(os.getenv("BASE_SIMPLE_SAMPLE_STEP_M", "0.02")) if step_m is None else float(step_m)
     max_yaw_delta_deg = (
-        float(os.getenv("BASE_SIMPLE_SAMPLE_MAX_AMCL_YAW_DELTA_DEG", "30.0"))
+        float(os.getenv("BASE_SIMPLE_SAMPLE_MAX_AMCL_YAW_DELTA_DEG", "20.0"))
         if max_amcl_yaw_delta_deg is None
         else float(max_amcl_yaw_delta_deg)
     )

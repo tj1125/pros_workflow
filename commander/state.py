@@ -10,7 +10,6 @@ def _keep_last_three(existing: List, new: List) -> List:
 LATEST_RESULT_KEYS = (
     "latest_nav_result",
     "latest_grasp_result",
-    "latest_view_result",
     "latest_approach_result",
 )
 
@@ -30,7 +29,7 @@ class CommanderState(TypedDict):
     # VLM reasoning output
     reasoning: str
 
-    # Target agent module to invoke (nav_agent / grasp_agent / car_approach_agent / arm_approach_agent / view_agent / DONE)
+    # Target agent module to invoke (nav_agent / grasp_agent / car_approach_agent / DONE)
     call_module: str
 
     # Parameters to pass into the target agent
@@ -106,7 +105,6 @@ class CommanderState(TypedDict):
     # Latest structured results for downstream nodes and debugging
     latest_nav_result: Dict[str, Any]
     latest_grasp_result: Dict[str, Any]
-    latest_view_result: Dict[str, Any]
     latest_approach_result: Dict[str, Any]
 
 
@@ -149,6 +147,5 @@ def create_initial_state(
         "agent_success": False,
         "latest_nav_result": {},
         "latest_grasp_result": {},
-        "latest_view_result": {},
         "latest_approach_result": {},
     }

@@ -25,9 +25,9 @@ debug_render_height: 720
 debug_render_camera_distance: 0.8
 debug_render_yaw_deg: 45.0
 debug_render_pitch_deg: -30.0
-debug_render_output_path: outputs/pybullet_ompl.ppm
+debug_render_output_path:
 animation_frame_sleep_sec: 0.03
-animation_output_dir: outputs/pybullet_ompl_frames
+animation_output_dir:
 obstacles:
   - size: [0.10, 0.10, 0.10]
     position: [0.30, 0.08, 0.27]

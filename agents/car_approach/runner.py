@@ -40,9 +40,9 @@ def run_base_approach_sync(
             allow_missing_amcl=_bool_param(params, "allow_missing_amcl", False),
             run_rule_navigation=_run_rule_navigation_from_params(params),
             show_gui=_bool_param(params, "show_gui", False),
-            write_map_png=_bool_param(params, "write_map_png", True),
+            write_map_png=_bool_param(params, "write_map_png", False),
             map_png_path=_optional_path_param(params, "map_png_path"),
-            write_debug_views=_bool_param(params, "write_debug_views", True),
+            write_debug_views=_bool_param(params, "write_debug_views", False),
             debug_render_path=_optional_path_param(params, "debug_render_path"),
         )
         result = base_sampler.run_approach_agent(config)

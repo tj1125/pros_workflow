@@ -39,15 +39,12 @@ class Orchestrator:
             input_node → find_node → get_item_info_no_sam3d_node → nav_move_node
             nav_move_node → observe_node → reason_node
             reason_node --[nav_agent]-------> nav_node   ┐
-            reason_node --[grasp_agent]-----> grasp_node ┤→ approach_node ─→ update_memory_node → observe_node
+            reason_node --[grasp_agent]-----> car_grasp_node ─→ car_approach_node ─→ update_memory_node → observe_node
             reason_node --[car_approach_agent]--> car_grasp_node ┘
-            reason_node --[arm_approach_agent]--> arm_grasp_node ┘
-            reason_node --[view_agent]------> view_node  ─→ update_memory_node
-            reason_node --[DONE]-----------> END
+            reason_node --[DONE]-----------> nav_home_node → END
 
     grasp_node: 擷取 RGBD、呼叫 GraspAgent，取得 6-DoF 抓取位姿並寫入 latest_grasp_result。
     car_approach_node: 讀取 latest_grasp_result，呼叫 CarApproachAgent 移動車體至接近點。
-    arm_approach_node: 重新取得 grasp pose，呼叫 ArmApproachAgent 固定車體移動手臂至預抓取點。
     """
 
     def __init__(self, trace_logger: TraceLogger, use_mock: bool = True):
@@ -74,11 +71,9 @@ class Orchestrator:
         # Individual Agent nodes (A2A Clients)
         workflow.add_node("nav_node", self._nav_node)
         workflow.add_node("nav_move_node", self._nav_move_node)
+        workflow.add_node("nav_home_node", self._nav_home_node)
         workflow.add_node("car_grasp_node", self._car_grasp_node)
-        workflow.add_node("arm_grasp_node", self._arm_grasp_node)
         workflow.add_node("car_approach_node", self._car_approach_node)
-        workflow.add_node("arm_approach_node", self._arm_approach_node)
-        workflow.add_node("view_node", self._view_node)
         workflow.add_node("get_item_info_no_sam3d_node", self._get_item_info_no_sam3d_node)
 
         # Entry point
@@ -89,15 +84,12 @@ class Orchestrator:
         workflow.add_edge("get_item_info_no_sam3d_node", "nav_move_node")
         workflow.add_edge("observe_node", "reason_node")
         workflow.add_edge("nav_node", "nav_move_node")
+        workflow.add_edge("nav_home_node", END)
         
         # Grasp nodes statically route to their respective approach nodes
         workflow.add_edge("car_grasp_node", "car_approach_node")
         workflow.add_edge("car_approach_node", "update_memory_node")
         
-        workflow.add_edge("arm_grasp_node", "arm_approach_node")
-        workflow.add_edge("arm_approach_node", "update_memory_node")
-        
-        workflow.add_edge("view_node", "update_memory_node")
         workflow.add_edge("update_memory_node", "observe_node")
 
         # find_node → get_item_info_no_sam3d_node or END
@@ -114,9 +106,7 @@ class Orchestrator:
             {
                 "nav_node":    "nav_node",
                 "car_grasp_node": "car_grasp_node",
-                "arm_grasp_node": "arm_grasp_node",
-                "view_node":  "view_node",
-                "end":        END,
+                "end":        "nav_home_node",
             },
         )
         workflow.add_conditional_edges(
@@ -688,19 +678,20 @@ class Orchestrator:
 
     def _route_decision(
         self, state: CommanderState
-    ) -> Literal["nav_node", "car_grasp_node", "arm_grasp_node", "view_node", "end"]:
+    ) -> Literal["nav_node", "car_grasp_node", "end"]:
         module = state.get("call_module", "")
         if module == "DONE" or state.get("task_complete", False):
-            logger.info("[route] Task complete — ending graph.")
+            logger.info("[route] Task complete — navigating home before ending graph.")
             return "end"
         mapping = {
             "nav_agent":          "nav_node",
             "grasp_agent":        "car_grasp_node",
             "approach_agent":     "car_grasp_node",
             "car_approach_agent": "car_grasp_node",
-            "arm_approach_agent": "arm_grasp_node",
-            "view_agent":         "view_node",
         }
+        if module in {"arm_approach_agent", "view_agent"}:
+            logger.warning("%s is disabled; ending without executing it.", module)
+            return "end"
         return mapping.get(module, "end")
 
     def _route_nav_move(self, state: CommanderState) -> Literal["observe_node", "update_memory_node"]:
@@ -908,6 +899,106 @@ class Orchestrator:
             "_exec_latency": time.time() - start_t,
         }
 
+    async def _nav_home_node(self, state: CommanderState) -> Dict[str, Any]:
+        """
+        Final home navigation executor.
+
+        Uses the original hardcoded initial pose as /goal_pose. It does not
+        publish /initialpose, so AMCL is not reset; the pose is only a target.
+        """
+        start_t = time.time()
+        goal_pose = dict(self._default_initial_pose())
+        plan_timeout = float(
+            os.getenv("NAV_HOME_PLAN_TIMEOUT_SEC", os.getenv("NAV_PLAN_TIMEOUT_SEC", "8"))
+        )
+        arrival_timeout = float(
+            os.getenv("NAV_HOME_ARRIVAL_TIMEOUT_SEC", os.getenv("NAV_ARRIVAL_TIMEOUT_SEC", "180"))
+        )
+        publish_interval = float(
+            os.getenv("NAV_HOME_PUBLISH_INTERVAL_SEC", os.getenv("NAV_PUBLISH_INTERVAL_SEC", "0.1"))
+        )
+        goal_tolerance_m = float(
+            os.getenv(
+                "NAV_HOME_GOAL_TOLERANCE_M",
+                os.getenv("NAV_GOAL_TOLERANCE_M", str(goal_tolerance_m_default())),
+            )
+        )
+        legacy_goal_heading_tolerance_deg = (
+            os.getenv("NAV_HOME_GOAL_HEADING_TOLERANCE_DEG")
+            or os.getenv("NAV_GOAL_HEADING_TOLERANCE_DEG")
+        )
+        goal_heading_tolerance_rad = float(
+            os.getenv(
+                "NAV_HOME_GOAL_HEADING_TOLERANCE_RAD",
+                os.getenv(
+                    "NAV_GOAL_HEADING_TOLERANCE_RAD",
+                    str(
+                        math.radians(float(legacy_goal_heading_tolerance_deg))
+                        if legacy_goal_heading_tolerance_deg is not None
+                        else goal_heading_tolerance_rad_default()
+                    ),
+                ),
+            )
+        )
+
+        if self.use_mock:
+            await asyncio.sleep(0.2)
+            mock_events = [
+                {"event": "goal_publishing", "rank": 0, "attempt": 1, "source": "nav_home"},
+                {"event": "plan_ready", "rank": 0, "attempt": 1, "source": "nav_home"},
+                {"event": "arrived", "rank": 0, "attempt": 1, "source": "nav_home"},
+            ]
+            return {
+                "nav_goal_pose": goal_pose,
+                "nav_plan_ready": True,
+                "nav_arrived": True,
+                "nav_attempt": 1,
+                "nav_move_source": "nav_home",
+                "nav_move_events": mock_events,
+                "agent_result": "[MOCK_NAV_HOME] Arrived at hardcoded initial pose.",
+                "agent_success": True,
+                "task_complete": True,
+                "current_status": "NAV_HOME_COMPLETED",
+                "_exec_latency": time.time() - start_t,
+            }
+
+        payload = {
+            "goal_pose": goal_pose,
+            "publish_initialpose": False,
+            "initial_pose": self._default_initial_pose(),
+            "plan_timeout_sec": plan_timeout,
+            "arrival_timeout_sec": arrival_timeout,
+            "publish_interval_sec": publish_interval,
+            "goal_tolerance_m": goal_tolerance_m,
+            "goal_heading_tolerance_rad": goal_heading_tolerance_rad,
+            "status_topic": "/nav_home/status",
+            "attempt": 1,
+            "rank": 0,
+            "source": "nav_home",
+        }
+        result = await self._run_nav_move_runner(payload)
+        events = result.get("events", [])
+        plan_ready = bool(result.get("plan_ready", False))
+        success = bool(result.get("success", False))
+        message = result.get(
+            "message",
+            "home navigation completed" if success else "home navigation failed",
+        )
+
+        return {
+            "nav_goal_pose": goal_pose,
+            "nav_plan_ready": plan_ready,
+            "nav_arrived": success,
+            "nav_attempt": 1,
+            "nav_move_source": "nav_home",
+            "nav_move_events": events,
+            "agent_result": f"[NAV_HOME] {message}",
+            "agent_success": success,
+            "task_complete": True,
+            "current_status": "NAV_HOME_COMPLETED" if success else "NAV_HOME_FAILED",
+            "_exec_latency": time.time() - start_t,
+        }
+
     async def _do_grasp_logic(self, state: CommanderState, context_label: str) -> Dict[str, Any]:
         """GraspGen Agent Logic — outputs information only."""
         from agents.grasp_agent import GraspAgent
@@ -967,9 +1058,6 @@ class Orchestrator:
     async def _car_grasp_node(self, state: CommanderState) -> Dict[str, Any]:
         return await self._do_grasp_logic(state, "car_grasp_node")
 
-    async def _arm_grasp_node(self, state: CommanderState) -> Dict[str, Any]:
-        return await self._do_grasp_logic(state, "arm_grasp_node")
-
     @staticmethod
     def _set_default_grasp_result(params: Dict[str, Any], latest_grasp: Dict[str, Any]) -> None:
         if "grasp_result_payload" in params or "grasp_result" in params:
@@ -1015,48 +1103,6 @@ class Orchestrator:
         result = await self._run_agent(agent, state, has_http=False, params_override=params)
         result["call_module"] = "car_approach_agent"
         return result
-
-    async def _arm_approach_node(self, state: CommanderState) -> Dict[str, Any]:
-        """Arm Approach Agent Node."""
-        from agents.arm_approach_agent import ArmApproachAgent
-        from commander.room_topics import get_amcl_pose
-
-        params = dict(state.get("module_params", {}) or {})
-        latest_grasp = state.get("latest_grasp_result", {}) or {}
-        latest_approach = state.get("latest_approach_result", {}) or {}
-        last_arm_base_alignment = state.get("last_arm_base_alignment_result", {}) or {}
-
-        print("\n📍 [arm_approach_node] 取得最新 /amcl_pose...")
-        amcl_pose = await get_amcl_pose(timeout_sec=5.0)
-        if not amcl_pose:
-            logger.warning("[arm_approach_node] /amcl_pose not available — proceeding without it.")
-            amcl_pose = {}
-        else:
-            logger.info("[arm_approach_node] amcl_pose=%s", amcl_pose)
-
-        self._set_default_grasp_result(params, latest_grasp)
-        if amcl_pose and "amcl_pose" not in params:
-            params["amcl_pose"] = amcl_pose
-        if "car_approach_arm_base_alignment_result" not in params:
-            if last_arm_base_alignment:
-                params["car_approach_arm_base_alignment_result"] = last_arm_base_alignment
-            elif (
-                isinstance(latest_approach, dict)
-                and latest_approach.get("module") == "car_approach_agent"
-                and isinstance(latest_approach.get("arm_base_alignment_result"), dict)
-            ):
-                params["car_approach_arm_base_alignment_result"] = latest_approach["arm_base_alignment_result"]
-
-        agent = ArmApproachAgent()
-        result = await self._run_agent(agent, state, has_http=False, params_override=params)
-        result["call_module"] = "arm_approach_agent"
-        return result
-
-    async def _view_node(self, state: CommanderState) -> Dict[str, Any]:
-        """View Agent Node: adjust camera/arm posture via INF_VIEW (A2A Server)."""
-        from agents.view_agent import ViewAgent
-        agent = ViewAgent(http_client=self.http_client)
-        return await self._run_agent(agent, state)
 
     async def _run_agent(
         self,
@@ -1148,29 +1194,11 @@ class Orchestrator:
                 "pose_ready": pose_ready,
             }
 
-        if module == "view_agent":
+        if module in {"approach_agent", "car_approach_agent"}:
             payload = result if isinstance(result, dict) else {}
-            delta_joints = payload.get("delta_joints", [])
-            confidence = payload.get("confidence", 0.0)
-            if success:
-                summary = (
-                    "View adjustment computed "
-                    f"(confidence={float(confidence):.3f})."
-                )
-            else:
-                summary = self._condense_text(result)
-            return summary, {
-                "confidence": confidence,
-                "has_delta_joints": bool(delta_joints),
-            }
-
-        if module in {"approach_agent", "car_approach_agent", "arm_approach_agent"}:
-            payload = result if isinstance(result, dict) else {}
-            default_success = "ARM_APPROACH_SUCCESS" if module == "arm_approach_agent" else "APPROACH_SUCCESS"
-            default_fail = "ARM_APPROACH_FAIL" if module == "arm_approach_agent" else "APPROACH_FAIL"
             status_code = str(
                 payload.get("status_code")
-                or (default_success if success else default_fail)
+                or ("APPROACH_SUCCESS" if success else "APPROACH_FAIL")
             )
             phase = payload.get("phase", "")
             next_agent = payload.get("next_agent")
@@ -1249,23 +1277,11 @@ class Orchestrator:
             }
             return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
 
-        if module == "view_agent":
+        if module in {"approach_agent", "car_approach_agent"}:
             payload = result if isinstance(result, dict) else {}
-            latest_key = "latest_view_result"
-            latest_value = {
-                "trace_id": trace_id,
-                "delta_joints": payload.get("delta_joints", []),
-                "confidence": payload.get("confidence", 0.0),
-            }
-            return {latest_key: latest_value}, {"updated_latest_keys": [latest_key]}
-
-        if module in {"approach_agent", "car_approach_agent", "arm_approach_agent"}:
-            payload = result if isinstance(result, dict) else {}
-            default_success = "ARM_APPROACH_SUCCESS" if module == "arm_approach_agent" else "APPROACH_SUCCESS"
-            default_fail = "ARM_APPROACH_FAIL" if module == "arm_approach_agent" else "APPROACH_FAIL"
             status_code = str(
                 payload.get("status_code")
-                or (default_success if success else default_fail)
+                or ("APPROACH_SUCCESS" if success else "APPROACH_FAIL")
             )
             latest_key = "latest_approach_result"
             nav_result = payload.get("nav_result", {})
@@ -1290,9 +1306,6 @@ class Orchestrator:
                 "nav_result": nav_result,
                 "arm_result": payload.get("arm_result", {}),
                 "arm_base_alignment_result": arm_base_alignment_result,
-                "arm_approach_start_base_joint_index": payload.get("arm_approach_start_base_joint_index"),
-                "arm_approach_start_base_joint_rad": payload.get("arm_approach_start_base_joint_rad"),
-                "arm_approach_start_base_joint_deg": payload.get("arm_approach_start_base_joint_deg"),
                 "selected_solution": payload.get("selected_solution", {}),
             }
             latest_update = {latest_key: latest_value}

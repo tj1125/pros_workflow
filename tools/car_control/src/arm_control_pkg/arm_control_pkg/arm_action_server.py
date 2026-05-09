@@ -1,13 +1,22 @@
 import functools
+import math
+import threading
+import time
 
 from action_interface.action import ArmGoal
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
+from std_msgs.msg import Float32
 
 
 class ArmActionServer(Node):
     def __init__(self, arm_commute_node, arm_auto_controller):
         super().__init__("arm_action_server_node")
+        self._callback_group = ReentrantCallbackGroup()
+        self._cube_z_distance_lock = threading.Lock()
+        self._latest_cube_z_distance_m = None
+        self._latest_cube_z_distance_received_at = None
         self._action_server = ActionServer(
             self,
             ArmGoal,
@@ -15,9 +24,37 @@ class ArmActionServer(Node):
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
+            callback_group=self._callback_group,
+        )
+        self._cube_z_distance_sub = self.create_subscription(
+            Float32,
+            "/cube_z_distance",
+            self._cube_z_distance_callback,
+            10,
+            callback_group=self._callback_group,
         )
         self.arm_commute_node = arm_commute_node
         self.arm_auto_controller = arm_auto_controller
+
+    def _cube_z_distance_callback(self, msg):
+        try:
+            distance_m = float(msg.data)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(distance_m):
+            return
+        with self._cube_z_distance_lock:
+            self._latest_cube_z_distance_m = distance_m
+            self._latest_cube_z_distance_received_at = time.monotonic()
+
+    def latest_cube_z_distance_m(self, *, since_time_sec=None):
+        with self._cube_z_distance_lock:
+            if self._latest_cube_z_distance_m is None:
+                return None
+            received_at = float(self._latest_cube_z_distance_received_at or 0.0)
+            if since_time_sec is not None and received_at < float(since_time_sec):
+                return None
+            return float(self._latest_cube_z_distance_m), received_at
 
     def goal_callback(self, goal_request):
         self.get_logger().info(f"Received arm action request: {goal_request.mode}")
@@ -111,6 +148,7 @@ class ArmActionServer(Node):
                     getattr(goal_request, "gripper_close_delay_sec", 0.0)
                 ),
                 init_pose_delay_sec=float(getattr(goal_request, "init_pose_delay_sec", 0.0)),
+                cube_z_distance_reader=self.latest_cube_z_distance_m,
             )
         if mode in ["up", "down", "right", "left"]:
             return functools.partial(

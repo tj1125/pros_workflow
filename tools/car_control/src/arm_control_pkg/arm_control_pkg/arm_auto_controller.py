@@ -273,6 +273,67 @@ class ArmAutoController:
             ),
         }
 
+    def _verify_car_grasp_cube_z_distance(
+        self,
+        cube_z_distance_reader,
+        *,
+        since_time_sec,
+        threshold_m=0.08,
+    ):
+        threshold = max(0.0, float(threshold_m))
+        if cube_z_distance_reader is None:
+            return {
+                "success": False,
+                "phase": "verify_cube_z_distance",
+                "message": "grasp verification failed: no /cube_z_distance reader is configured",
+            }
+        try:
+            reading = cube_z_distance_reader(since_time_sec=since_time_sec)
+        except Exception as exc:
+            return {
+                "success": False,
+                "phase": "verify_cube_z_distance",
+                "message": f"grasp verification failed: /cube_z_distance read error: {exc}",
+            }
+        if reading is None:
+            return {
+                "success": False,
+                "phase": "verify_cube_z_distance",
+                "threshold_m": threshold,
+                "message": "grasp verification failed: no fresh /cube_z_distance received after reset pose",
+            }
+
+        try:
+            distance_m = float(reading[0])
+        except (TypeError, ValueError, IndexError):
+            return {
+                "success": False,
+                "phase": "verify_cube_z_distance",
+                "threshold_m": threshold,
+                "message": f"grasp verification failed: invalid /cube_z_distance reading: {reading}",
+            }
+        if not math.isfinite(distance_m):
+            return {
+                "success": False,
+                "phase": "verify_cube_z_distance",
+                "threshold_m": threshold,
+                "cube_z_distance_m": distance_m,
+                "message": "grasp verification failed: /cube_z_distance is not finite",
+            }
+
+        success = distance_m < threshold
+        comparator = "<" if success else ">="
+        return {
+            "success": bool(success),
+            "phase": "verify_cube_z_distance",
+            "threshold_m": threshold,
+            "cube_z_distance_m": float(distance_m),
+            "message": (
+                f"grasp verification {'succeeded' if success else 'failed'}: "
+                f"cube_z_distance={distance_m:.4f}m {comparator} {threshold:.4f}m"
+            ),
+        }
+
     def set_joint_position_rad(self, joint_index, position_rad, settle_sec=0.2):
         try:
             joint_index = int(joint_index)
@@ -450,6 +511,7 @@ class ArmAutoController:
         joint_command_republish_interval_sec=0.1,
         gripper_close_delay_sec=3.0,
         init_pose_delay_sec=1.0,
+        cube_z_distance_reader=None,
     ):
         try:
             wrist_index = int(wrist_joint_index)
@@ -498,107 +560,208 @@ class ArmAutoController:
         )
         min_joint_count = max(wrist_index, gripper_index) + 1
 
-        initial_positions = self._wait_for_joint_state_positions(
-            min_joint_count=min_joint_count,
-            timeout_sec=joint_wait,
-        )
+        phases = []
+        warnings = []
+
+        def add_warning(phase, message):
+            warning = {
+                "success": False,
+                "phase": str(phase),
+                "message": str(message),
+            }
+            warnings.append(warning)
+            try:
+                self.arm_commute_node.get_logger().warn(
+                    f"car_grasp_sequence warning: {phase}: {message}"
+                )
+            except Exception:
+                pass
+
+        try:
+            initial_positions = self._wait_for_joint_state_positions(
+                min_joint_count=min_joint_count,
+                timeout_sec=joint_wait,
+            )
+        except Exception as exc:
+            initial_positions = None
+            add_warning("joint_state_wait", f"exception: {exc}")
+
         if initial_positions is None:
-            return ArmGoal.Result(
-                success=False,
-                message=f"car_grasp_sequence failed: no joint_states with {min_joint_count} joints",
+            add_warning(
+                "joint_state_wait",
+                f"no joint_states with {min_joint_count} joints",
             )
 
-        phases = []
-        open_result = self._publish_joint_updates_and_wait(
-            phase="open_gripper",
-            joint_updates_rad={gripper_index: open_rad},
-            min_joint_count=min_joint_count,
-            tolerance_rad=joint_tolerance,
-            timeout_sec=joint_timeout,
-            republish_interval_sec=republish_interval,
-        )
+        def publish_init_pose_after_delay():
+            init_delay = max(0.0, float(init_pose_delay_sec))
+            if init_delay > 0.0:
+                time.sleep(init_delay)
+            reset_positions = self._joint_reset_positions_rad()
+            self._publish_joint_positions_rad(reset_positions)
+            reset_command_time_sec = time.monotonic()
+            init_settle_sec = 3.0
+            time.sleep(init_settle_sec)
+            return (
+                {
+                    "success": True,
+                    "phase": "init_pose",
+                    "published_count": 1,
+                    "waited_sec": float(init_settle_sec),
+                    "message": "init pose command published; skipped joint state tolerance wait",
+                },
+                reset_command_time_sec,
+            )
+
+        try:
+            open_result = self._publish_joint_updates_and_wait(
+                phase="open_gripper",
+                joint_updates_rad={gripper_index: open_rad},
+                min_joint_count=min_joint_count,
+                tolerance_rad=joint_tolerance,
+                timeout_sec=joint_timeout,
+                republish_interval_sec=republish_interval,
+            )
+        except Exception as exc:
+            open_result = {
+                "success": False,
+                "phase": "open_gripper",
+                "published_count": 0,
+                "message": f"exception: {exc}",
+            }
         phases.append(open_result)
         if not open_result["success"]:
-            return ArmGoal.Result(success=False, message=f"open_gripper failed: {open_result['message']}")
+            add_warning("open_gripper", open_result["message"])
 
-        wrist_result = self._publish_joint_updates_and_wait(
-            phase="wrist",
-            joint_updates_rad={wrist_index: wrist_target},
-            min_joint_count=min_joint_count,
-            tolerance_rad=joint_tolerance,
-            timeout_sec=joint_timeout,
-            republish_interval_sec=republish_interval,
-        )
+        try:
+            wrist_result = self._publish_joint_updates_and_wait(
+                phase="wrist",
+                joint_updates_rad={wrist_index: wrist_target},
+                min_joint_count=min_joint_count,
+                tolerance_rad=joint_tolerance,
+                timeout_sec=joint_timeout,
+                republish_interval_sec=republish_interval,
+            )
+        except Exception as exc:
+            wrist_result = {
+                "success": False,
+                "phase": "wrist",
+                "published_count": 0,
+                "message": f"exception: {exc}",
+            }
         phases.append(wrist_result)
         if not wrist_result["success"]:
-            return ArmGoal.Result(success=False, message=f"wrist failed: {wrist_result['message']}")
+            add_warning("wrist", wrist_result["message"])
 
-        move_result = self._move_to_target_position(
-            target,
-            steps=steps,
-            waypoint_sleep_sec=waypoint_sleep_sec,
-            goal_tolerance_m=goal_tolerance_m,
-            joint_command_timeout_sec=joint_timeout,
-            joint_command_tolerance_rad=joint_tolerance,
-            joint_command_republish_interval_sec=republish_interval,
-        )
+        try:
+            move_result = self._move_to_target_position(
+                target,
+                steps=steps,
+                waypoint_sleep_sec=waypoint_sleep_sec,
+                goal_tolerance_m=goal_tolerance_m,
+                joint_command_timeout_sec=joint_timeout,
+                joint_command_tolerance_rad=joint_tolerance,
+                joint_command_republish_interval_sec=republish_interval,
+            )
+        except Exception as exc:
+            move_result = ArmGoal.Result(
+                success=False,
+                message=f"exception: {exc}",
+            )
         if not move_result.success:
-            return ArmGoal.Result(
-                success=False,
-                message=f"move_to_target failed: {move_result.message}",
-            )
+            add_warning("move_to_target", move_result.message)
 
-        close_current_positions = self._wait_for_joint_state_positions(
-            min_joint_count=min_joint_count,
-            timeout_sec=joint_timeout,
-        )
+        try:
+            close_current_positions = self._wait_for_joint_state_positions(
+                min_joint_count=min_joint_count,
+                timeout_sec=joint_timeout,
+            )
+        except Exception as exc:
+            add_warning("close_gripper", f"joint state read exception: {exc}")
+            close_current_positions = None
         if close_current_positions is None:
-            return ArmGoal.Result(
-                success=False,
-                message="close_gripper failed: joint state was not available before publishing command",
+            add_warning(
+                "close_gripper",
+                "joint state was not available before publishing command; using fallback joint positions",
             )
+            try:
+                close_current_positions = self._current_joint_positions_rad()
+            except Exception as exc:
+                add_warning("close_gripper", f"fallback joint position exception: {exc}")
+                close_current_positions = []
 
-        close_target_positions = list(close_current_positions)
-        close_target_positions[gripper_index] = close_rad
-        self._publish_joint_positions_rad(close_target_positions)
-        close_delay = max(0.0, float(gripper_close_delay_sec))
-        if close_delay > 0.0:
-            time.sleep(close_delay)
-        close_result = {
-            "success": True,
-            "phase": "close_gripper",
-            "published_count": 1,
-            "waited_sec": float(close_delay),
-            "message": "close gripper command published; skipped finger tolerance wait",
-        }
+        if len(close_current_positions) > gripper_index:
+            try:
+                close_target_positions = list(close_current_positions)
+                close_target_positions[gripper_index] = close_rad
+                self._publish_joint_positions_rad(close_target_positions)
+                close_delay = max(0.0, float(gripper_close_delay_sec))
+                if close_delay > 0.0:
+                    time.sleep(close_delay)
+                close_result = {
+                    "success": True,
+                    "phase": "close_gripper",
+                    "published_count": 1,
+                    "waited_sec": float(close_delay),
+                    "message": "close gripper command published; skipped finger tolerance wait",
+                }
+            except Exception as exc:
+                close_result = {
+                    "success": False,
+                    "phase": "close_gripper",
+                    "published_count": 0,
+                    "message": f"exception: {exc}",
+                }
+                add_warning("close_gripper", close_result["message"])
+        else:
+            close_result = {
+                "success": False,
+                "phase": "close_gripper",
+                "published_count": 0,
+                "message": (
+                    "close gripper skipped: fallback joint position count "
+                    f"{len(close_current_positions)} <= gripper index {gripper_index}"
+                ),
+            }
+            add_warning("close_gripper", close_result["message"])
         phases.append(close_result)
 
-        init_delay = max(0.0, float(init_pose_delay_sec))
-        if init_delay > 0.0:
-            time.sleep(init_delay)
-        reset_positions = self._joint_reset_positions_rad()
-        self._publish_joint_positions_rad(reset_positions)
-        init_settle_sec = 3.0
-        time.sleep(init_settle_sec)
-        init_result = {
-            "success": True,
-            "phase": "init_pose",
-            "published_count": 1,
-            "waited_sec": float(init_settle_sec),
-            "message": "init pose command published; skipped joint state tolerance wait",
-        }
+        try:
+            init_result, reset_command_time_sec = publish_init_pose_after_delay()
+        except Exception as exc:
+            reset_command_time_sec = time.monotonic()
+            init_result = {
+                "success": False,
+                "phase": "init_pose",
+                "published_count": 0,
+                "message": f"exception: {exc}",
+            }
+            add_warning("init_pose", init_result["message"])
         phases.append(init_result)
+
+        grasp_verify_result = self._verify_car_grasp_cube_z_distance(
+            cube_z_distance_reader,
+            since_time_sec=reset_command_time_sec,
+            threshold_m=0.08,
+        )
+        phases.append(grasp_verify_result)
 
         phase_summary = ", ".join(
             f"{phase['phase']}:{phase.get('published_count', 0)}pub"
             for phase in phases
         )
+        warning_summary = " | ".join(
+            f"{warning['phase']}: {warning['message']}" for warning in warnings
+        )
+        message = (
+            f"{grasp_verify_result['message']}; "
+            f"continued_to_init_pose={init_result['success']}; "
+            f"{phase_summary}"
+        )
+        if warning_summary:
+            message += f"; arm_warnings={warning_summary}"
         return ArmGoal.Result(
-            success=True,
-            message=(
-                "car_grasp_sequence success: "
-                f"{phase_summary}; {move_result.message}"
-            ),
+            success=bool(grasp_verify_result["success"]),
+            message=message,
         )
 
     def grap(self):

@@ -15,6 +15,7 @@ DEFAULT_REAR_WHEEL_TOPIC = "car_C_rear_wheel"
 
 RULE_ACTION_MAPPINGS: dict[str, tuple[float, float, float, float]] = {
     "FORWARD_SLOW": (4.0, 4.0, 4.0, 4.0),
+    "BACKWARD_SLOW": (-4.0, -4.0, -4.0, -4.0),
     "COUNTERCLOCKWISE_ROTATION_SLOW": (-5.85, 6.5, -7.8, 7.15),
     "CLOCKWISE_ROTATION_SLOW": (6.5, -5.85, 7.15, -7.8),
     "STOP": (0.0, 0.0, 0.0, 0.0),
@@ -439,6 +440,11 @@ def _target_heading_error(current_pose: GoalPose2D, target_pose: dict[str, float
     return _wrap_angle_rad(target_heading - current_pose.yaw_rad)
 
 
+def _target_reverse_heading_error(current_pose: GoalPose2D, target_pose: dict[str, float]) -> float:
+    target_heading = math.atan2(float(target_pose["y"]) - current_pose.y, float(target_pose["x"]) - current_pose.x)
+    return _wrap_angle_rad(target_heading + math.pi - current_pose.yaw_rad)
+
+
 def drive_to_pose_by_rule(
     pose: Any,
     *,
@@ -446,10 +452,16 @@ def drive_to_pose_by_rule(
     initial_pose: Any | None = None,
     initial_pose_source: str = "initial_pose",
     config: RuleNavigationConfig | None = None,
+    reverse_drive: bool = False,
 ) -> dict[str, Any]:
     cfg = config or RuleNavigationConfig()
     target_pose = _goal_pose_dict_from_any(pose, prefer_amcl_pose=prefer_amcl_pose)
     initial_pose_payload = _initial_pose_dict_from_any(initial_pose) if initial_pose is not None else None
+    heading_error_fn = _target_reverse_heading_error if reverse_drive else _target_heading_error
+    drive_action = "BACKWARD_SLOW" if reverse_drive else "FORWARD_SLOW"
+    mode_label = "reverse rule return" if reverse_drive else "rule navigation"
+    face_phase_name = "face_start_for_backward" if reverse_drive else "face_target"
+    drive_phase_name = "backward_to_start" if reverse_drive else "drive_to_target"
 
     import rclpy
     from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -553,11 +565,11 @@ def drive_to_pose_by_rule(
                 if current_pose is None:
                     return False, None
                 distance_m = _distance_to_target(current_pose, target_pose)
-                heading_error = _target_heading_error(current_pose, target_pose) if distance_m > 1e-6 else 0.0
+                heading_error = heading_error_fn(current_pose, target_pose) if distance_m > 1e-6 else 0.0
                 final_yaw_error = _wrap_angle_rad(float(target_pose["yaw"]) - current_pose.yaw_rad)
                 if time.monotonic() >= next_log_at:
                     print(
-                        f"[move_car] rule_nav {phase_name}: "
+                        f"[move_car] {mode_label} {phase_name}: "
                         f"current=({current_pose.x:.3f}, {current_pose.y:.3f}, yaw={current_pose.yaw_rad:.3f}) "
                         f"target=({target_pose['x']:.3f}, {target_pose['y']:.3f}, yaw={target_pose['yaw']:.3f}) "
                         f"dist={distance_m:.3f}m "
@@ -581,9 +593,9 @@ def drive_to_pose_by_rule(
             return False, None
 
         print(
-            "[move_car] rule navigation target: "
+            f"[move_car] {mode_label} target: "
             f"x={target_pose['x']:.3f} y={target_pose['y']:.3f} yaw={target_pose['yaw']:.3f}. "
-            "No /goal_pose or Nav2 topics will be used.",
+            f"drive_action={drive_action}. No /goal_pose or Nav2 topics will be used.",
             flush=True,
         )
         if initial_pose_payload is None:
@@ -619,7 +631,7 @@ def drive_to_pose_by_rule(
         timeout_deadline = None if timeout <= 0.0 else time.monotonic() + timeout
 
         face_done, _ = _run_phase(
-            "face_target",
+            face_phase_name,
             lambda current, distance, heading_error, final_yaw_error: _rotation_action_for_error(heading_error),
             lambda current, distance, heading_error, final_yaw_error: (
                 distance <= cfg.xy_tolerance_m or abs(heading_error) <= cfg.face_target_yaw_tolerance_rad
@@ -635,18 +647,18 @@ def drive_to_pose_by_rule(
             )
             return {
                 "success": False,
-                "phase": "face_target",
+                "phase": face_phase_name,
                 "target_pose": target_pose,
                 "final_amcl_pose": _latest_amcl_pose_payload(),
-                "message": "Rule navigation failed while facing the target point.",
+                "message": f"{mode_label} failed while facing the target point.",
             }
 
         drive_done, _ = _run_phase(
-            "drive_to_target",
+            drive_phase_name,
             lambda current, distance, heading_error, final_yaw_error: (
                 _rotation_action_for_error(heading_error)
                 if abs(heading_error) > cfg.drive_heading_tolerance_rad
-                else "FORWARD_SLOW"
+                else drive_action
             ),
             lambda current, distance, heading_error, final_yaw_error: distance <= cfg.xy_tolerance_m,
             timeout_deadline=timeout_deadline,
@@ -660,10 +672,10 @@ def drive_to_pose_by_rule(
             )
             return {
                 "success": False,
-                "phase": "drive_to_target",
+                "phase": drive_phase_name,
                 "target_pose": target_pose,
                 "final_amcl_pose": _latest_amcl_pose_payload(),
-                "message": "Rule navigation failed while driving to target position.",
+                "message": f"{mode_label} failed while driving to target position.",
             }
 
         align_done, final_pose = _run_phase(
@@ -697,7 +709,7 @@ def drive_to_pose_by_rule(
             else None
         )
         print(
-            "[move_car] rule navigation reached target: "
+            f"[move_car] {mode_label} reached target: "
             f"distance={final_distance if final_distance is not None else float('nan'):.3f}m "
             f"yaw_error={final_yaw_error if final_yaw_error is not None else float('nan'):.3f}rad.",
             flush=True,
@@ -706,6 +718,8 @@ def drive_to_pose_by_rule(
         return {
             "success": True,
             "phase": "done",
+            "drive_mode": "backward" if reverse_drive else "forward",
+            "drive_action": drive_action,
             "target_pose": target_pose,
             "final_amcl_pose": _latest_amcl_pose_payload(),
             "final_distance_m": final_distance,
@@ -726,6 +740,22 @@ def drive_to_pose_by_rule(
             node.destroy_node()
         if owns_rclpy and rclpy.ok():
             rclpy.shutdown()
+
+
+def drive_back_to_pose_by_rule(
+    pose: Any,
+    *,
+    prefer_amcl_pose: bool = True,
+    config: RuleNavigationConfig | None = None,
+) -> dict[str, Any]:
+    return drive_to_pose_by_rule(
+        pose,
+        prefer_amcl_pose=prefer_amcl_pose,
+        initial_pose=None,
+        initial_pose_source="reverse return does not publish /initialpose",
+        config=config,
+        reverse_drive=True,
+    )
 
 
 def _parse_args() -> argparse.Namespace:

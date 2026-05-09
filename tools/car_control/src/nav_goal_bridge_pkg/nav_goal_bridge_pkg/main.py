@@ -56,10 +56,18 @@ class NavGoalBridge(Node):
     def _goal_callback(self, msg: PoseStamped) -> None:
         goal_key = self._pose_key(msg)
         now = time.monotonic()
-        if (
-            goal_key == self._last_goal_key
+        same_goal = goal_key == self._last_goal_key
+        recent_duplicate = (
+            same_goal
             and now - self._last_goal_received_at <= self._duplicate_goal_window_sec
+        )
+        if same_goal and (
+            self._pending_nav2_goal is not None
+            or self._active_nav2_goal is not None
         ):
+            self._last_goal_received_at = now
+            return
+        if recent_duplicate:
             return
 
         self._goal_sequence += 1

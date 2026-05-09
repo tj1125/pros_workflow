@@ -411,20 +411,8 @@ def run_camera_car_voxel_ompl(
         result.depth_format = snapshot.depth_format
         result.amcl_pose_world = _amcl_pose_to_dict(snapshot.amcl_pose)
 
-        try:
-            rgb_path, depth_path = _save_capture_artifacts(
-                output_dir,
-                rgb_bytes=snapshot.rgb_bytes,
-                rgb_format=snapshot.rgb_format,
-                depth_bytes=snapshot.depth_bytes,
-                depth_format=snapshot.depth_format,
-            )
-            result.captured_rgb_path = str(rgb_path)
-            result.captured_depth_path = str(depth_path)
-        except Exception as exc:
-            result.failure_bucket = "io"
-            result.error = f"Failed to save capture artifacts: {exc}"
-            return result
+        result.captured_rgb_path = None
+        result.captured_depth_path = None
 
         try:
             intrinsics = load_camera_intrinsics(Path(config.intrinsics_path))
@@ -568,14 +556,12 @@ def run_camera_car_voxel_ompl(
 
     scene_view_target, scene_view_distance = _estimate_scene_view(voxel_centers_pybullet)
 
-    planner_debug_ppm = output_dir / "planner_debug.ppm"
-    planner_frames_dir = output_dir / "planner_frames"
     planning_result = run_ompl_planning_test(
         Path(config.planner_config_path),
         gui_override=gui_override,
         hold_seconds_override=hold_seconds_override,
-        save_debug_ppm_override=(None if gui_override else str(planner_debug_ppm)),
-        save_animation_dir_override=(None if gui_override else str(planner_frames_dir)),
+        save_debug_ppm_override=None,
+        save_animation_dir_override=None,
         obstacle_specs_override=obstacle_specs,
         target_position_override=(
             [float(v) for v in target_position_pybullet_xyz]
