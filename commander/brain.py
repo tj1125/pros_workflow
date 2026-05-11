@@ -24,7 +24,12 @@ class BrainDecision(BaseModel):
         description="Step-by-step reasoning about the current scene and why this action is chosen"
     )
     call_module: Literal[
-        "nav_agent", "grasp_agent", "car_approach_agent", "DONE"
+        "nav_agent",
+        "minor_nav_node",
+        "major_nav_node",
+        "grasp_agent",
+        "car_approach_agent",
+        "DONE",
     ] = Field(description="The agent module to invoke, or DONE if the task is complete")
     module_params: Dict[str, Any] = Field(
         default_factory=dict,

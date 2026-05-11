@@ -29,7 +29,7 @@ class CommanderState(TypedDict):
     # VLM reasoning output
     reasoning: str
 
-    # Target agent module to invoke (nav_agent / grasp_agent / car_approach_agent / DONE)
+    # Target module/node to invoke (minor_nav_node / major_nav_node / grasp_agent / car_approach_agent / DONE)
     call_module: str
 
     # Parameters to pass into the target agent
@@ -75,6 +75,8 @@ class CommanderState(TypedDict):
     world_position_update_distance_m: float
     world_position_update_reason: str
     item_info_refresh_count: int
+    goal_pose_db: Dict[str, Any]
+    goal_pose_db_updated_at: float
 
     # 1-based index pointing to the rank of the current goal pose to attempt
     current_goal_rank: int
@@ -89,11 +91,13 @@ class CommanderState(TypedDict):
     # User-selected detection ID (0 = user typed "no")
     selected_detection_id: int
 
-    # nav_move routing source: bootstrap (from get_item_info) or reason_loop (from nav_node)
+    # nav_move routing source: bootstrap, minor_nav, major_nav, or nav_home
     nav_move_source: str
 
     # Computed goal pose for navigation runner
     nav_goal_pose: Dict[str, Any]
+    current_goal_pose_index: int
+    nav_goal_pose_source: str
 
     # Last AMCL pose recorded after car_approach finished moving the base
     last_car_approach_amcl_pose: Dict[str, Any]
@@ -147,12 +151,16 @@ def create_initial_state(
         "world_position_update_distance_m": 0.0,
         "world_position_update_reason": "",
         "item_info_refresh_count": 0,
+        "goal_pose_db": {},
+        "goal_pose_db_updated_at": 0.0,
         "find_complete": False,
         "yolo_detections": {},
         "selected_detection_id": 0,
         "current_goal_rank": 1,
         "nav_move_source": "",
         "nav_goal_pose": {},
+        "current_goal_pose_index": 0,
+        "nav_goal_pose_source": "",
         "last_car_approach_amcl_pose": {},
         "last_arm_base_alignment_result": {},
         "nav_plan_ready": False,

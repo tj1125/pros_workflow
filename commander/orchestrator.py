@@ -37,8 +37,12 @@ class Orchestrator:
     Graph topology:
         observe_node → reason_node
             input_node → find_node → get_item_info_no_sam3d_node → nav_move_node
+                                                     └─[failed/no goal]→ nav_home_node
             nav_move_node → observe_node → reason_node
-            reason_node --[nav_agent]-------> update_item_info_1_node → nav_node
+            reason_node --[minor_nav_node]--> update_item_info_1_node → minor_nav_node → nav_move_node → update_memory_node
+            reason_node --[major_nav_node]--> update_item_info_3_node → major_nav_node → nav_move_node → update_memory_node
+            minor_nav_node --[minor exhausted]→ major_nav_node
+            major_nav_node --[no next rank]→ nav_home_node → END
             reason_node --[grasp_agent]-----> update_item_info_2_node → car_grasp_node → car_approach_node → update_memory_node → observe_node
             reason_node --[car_approach_agent]--> update_item_info_2_node ┘
             reason_node --[DONE]-----------> nav_home_node → END
@@ -66,12 +70,14 @@ class Orchestrator:
         workflow.add_node("find_node", self._find_node)
         workflow.add_node("update_item_info_1_node", self._update_item_info_1_node)
         workflow.add_node("update_item_info_2_node", self._update_item_info_2_node)
+        workflow.add_node("update_item_info_3_node", self._update_item_info_3_node)
         workflow.add_node("observe_node", self._observe_node)
         workflow.add_node("reason_node", self._reason_node)
         workflow.add_node("update_memory_node", self._update_memory_node)
 
         # Individual Agent nodes (A2A Clients)
-        workflow.add_node("nav_node", self._nav_node)
+        workflow.add_node("minor_nav_node", self._minor_nav_node)
+        workflow.add_node("major_nav_node", self._major_nav_node)
         workflow.add_node("nav_move_node", self._nav_move_node)
         workflow.add_node("nav_home_node", self._nav_home_node)
         workflow.add_node("car_grasp_node", self._car_grasp_node)
@@ -83,9 +89,7 @@ class Orchestrator:
 
         # Fixed edges
         workflow.add_edge("input_node", "find_node")
-        workflow.add_edge("get_item_info_no_sam3d_node", "nav_move_node")
         workflow.add_edge("observe_node", "reason_node")
-        workflow.add_edge("nav_node", "nav_move_node")
         workflow.add_edge("nav_home_node", END)
         
         # Grasp nodes statically route to their respective approach nodes
@@ -100,6 +104,14 @@ class Orchestrator:
             self._route_find,
             {"get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node", "end": END},
         )
+        workflow.add_conditional_edges(
+            "get_item_info_no_sam3d_node",
+            self._route_get_item_info_no_sam3d,
+            {
+                "nav_move_node": "nav_move_node",
+                "nav_home_node": "nav_home_node",
+            },
+        )
 
         workflow.add_conditional_edges(
             "update_item_info_1_node",
@@ -107,7 +119,7 @@ class Orchestrator:
             {
                 "get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node",
                 "nav_home_node": "nav_home_node",
-                "nav_node": "nav_node",
+                "minor_nav_node": "minor_nav_node",
             },
         )
         workflow.add_conditional_edges(
@@ -119,15 +131,41 @@ class Orchestrator:
                 "car_grasp_node": "car_grasp_node",
             },
         )
+        workflow.add_conditional_edges(
+            "update_item_info_3_node",
+            self._route_update_item_info_3,
+            {
+                "get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node",
+                "nav_home_node": "nav_home_node",
+                "major_nav_node": "major_nav_node",
+            },
+        )
 
         # reason_node → update_item_info_*_node → agent node or END
         workflow.add_conditional_edges(
             "reason_node",
             self._route_decision,
             {
-                "nav_node": "update_item_info_1_node",
+                "minor_nav_node": "update_item_info_1_node",
+                "major_nav_node": "update_item_info_3_node",
                 "car_grasp_node": "update_item_info_2_node",
                 "end":        "nav_home_node",
+            },
+        )
+        workflow.add_conditional_edges(
+            "minor_nav_node",
+            self._route_minor_nav,
+            {
+                "nav_move_node": "nav_move_node",
+                "major_nav_node": "major_nav_node",
+            },
+        )
+        workflow.add_conditional_edges(
+            "major_nav_node",
+            self._route_major_nav,
+            {
+                "nav_move_node": "nav_move_node",
+                "nav_home_node": "nav_home_node",
             },
         )
         workflow.add_conditional_edges(
@@ -334,6 +372,7 @@ class Orchestrator:
         for key in (
             "group_ranking",
             "goal_pose_path",
+            "goal_pose_db",
             "objects",
             "num_matched_objects",
             "primary_camera_id",
@@ -341,6 +380,59 @@ class Orchestrator:
         ):
             updated.pop(key, None)
         return updated
+
+    @staticmethod
+    def _goal_pose_db_from_target_object(
+        target_object: Dict[str, Any],
+        current_rank: int,
+    ) -> Dict[str, Any]:
+        group_ranking = target_object.get("group_ranking", []) or []
+        ranks: Dict[str, Dict[str, Any]] = {}
+        rank_order: list[int] = []
+        for group in group_ranking:
+            if not isinstance(group, dict):
+                continue
+            try:
+                rank = int(group.get("rank", len(rank_order) + 1))
+            except (TypeError, ValueError):
+                rank = len(rank_order) + 1
+            rank_order.append(rank)
+            grasp_goal_poses = group.get("grasp_goal_poses", [])
+            if not isinstance(grasp_goal_poses, list):
+                grasp_goal_poses = []
+            ranks[str(rank)] = {
+                "rank": rank,
+                "orientation_group": group.get("orientation_group"),
+                "best_confidence": group.get("best_confidence"),
+                "best_goal_pose_ros_map": group.get("best_goal_pose_ros_map", []),
+                "best_goal_pose_unity": group.get("best_goal_pose_unity", []),
+                "best_pose_unity": group.get("best_pose_unity", []),
+                "best_pose_matrix_unity": group.get("best_pose_matrix_unity", []),
+                "map_feasible": group.get("map_feasible"),
+                "selection_mode": group.get("selection_mode", ""),
+                "num_grasp_goal_poses": len(grasp_goal_poses),
+                "num_map_feasible_grasp_goal_poses": int(
+                    sum(
+                        1
+                        for item in grasp_goal_poses
+                        if isinstance(item, dict) and bool(item.get("map_feasible", False))
+                    )
+                ),
+                "grasp_goal_poses": grasp_goal_poses,
+            }
+
+        return {
+            "target_item_id": target_object.get("id") or target_object.get("item_id"),
+            "target_instance_id": target_object.get("instance_id"),
+            "target_instance_key": target_object.get("instance_key")
+            or target_object.get("target_instance_key"),
+            "center_world": list(target_object.get("center_world", []) or []),
+            "goal_pose_path": target_object.get("goal_pose_path", ""),
+            "current_goal_rank": int(current_rank),
+            "rank_order": rank_order,
+            "ranks": ranks,
+            "updated_at": time.time(),
+        }
 
     async def _update_item_info_node(
         self,
@@ -417,6 +509,8 @@ class Orchestrator:
                 "world_position_db": world_position_db,
                 "world_position_db_updated_at": world_position_db["updated_at"],
                 "world_position_update_reason": "target_missing",
+                "goal_pose_db": {},
+                "goal_pose_db_updated_at": 0.0,
                 "agent_result": "物品消失了。",
                 "agent_success": False,
                 "current_status": "TARGET_LOST_IN_WORLD_POSITION",
@@ -480,7 +574,11 @@ class Orchestrator:
             "world_position_update_distance_m": moved_distance,
             "world_position_update_reason": "target_moved",
             "current_goal_rank": 1,
+            "current_goal_pose_index": 0,
             "nav_goal_pose": {},
+            "nav_goal_pose_source": "",
+            "goal_pose_db": {},
+            "goal_pose_db_updated_at": 0.0,
             "nav_plan_ready": False,
             "nav_arrived": False,
             "nav_attempt": 0,
@@ -495,6 +593,9 @@ class Orchestrator:
 
     async def _update_item_info_2_node(self, state: CommanderState) -> Dict[str, Any]:
         return await self._update_item_info_node(state, "update_item_info_2_node")
+
+    async def _update_item_info_3_node(self, state: CommanderState) -> Dict[str, Any]:
+        return await self._update_item_info_node(state, "update_item_info_3_node")
 
     @staticmethod
     def _pick_primary_room_camera(
@@ -730,16 +831,58 @@ class Orchestrator:
             return "end"
         return "get_item_info_no_sam3d_node"
 
+    def _route_get_item_info_no_sam3d(
+        self,
+        state: CommanderState,
+    ) -> Literal["nav_move_node", "nav_home_node"]:
+        if state.get("current_status", "") != "ITEM_INFO_NO_SAM3D_READY":
+            logger.warning(
+                "[route_get_item_info_no_sam3d] Item info not ready; routing home. status=%s",
+                state.get("current_status", ""),
+            )
+            return "nav_home_node"
+        nav_goal_pose = state.get("nav_goal_pose", {}) or {}
+        if not isinstance(nav_goal_pose, dict) or not nav_goal_pose:
+            logger.warning(
+                "[route_get_item_info_no_sam3d] No nav_goal_pose produced; routing home."
+            )
+            return "nav_home_node"
+        return "nav_move_node"
+
     @staticmethod
     def _world_position_target_missing(state: CommanderState) -> bool:
         return state.get("world_position_update_reason", "") == "target_missing"
+
+    @staticmethod
+    def _requested_nav_node(state: CommanderState) -> str:
+        module = str(state.get("call_module", "") or "")
+        module_params = state.get("module_params", {}) or {}
+        nav_mode = ""
+        if isinstance(module_params, dict):
+            nav_mode = str(
+                module_params.get("nav_mode")
+                or module_params.get("mode")
+                or module_params.get("nav_node")
+                or ""
+            ).strip().lower()
+
+        if module in {"major_nav_node", "major_nav_agent"} or nav_mode in {
+            "major",
+            "major_nav",
+            "major_nav_node",
+            "major_nav_agent",
+            "coarse",
+            "large",
+        }:
+            return "major_nav_node"
+        return "minor_nav_node"
 
     def _route_update_item_info_1(self, state: CommanderState) -> str:
         if self._world_position_target_missing(state):
             return "nav_home_node"
         if state.get("world_position_target_changed", False):
             return "get_item_info_no_sam3d_node"
-        return "nav_node"
+        return "minor_nav_node"
 
     def _route_update_item_info_2(self, state: CommanderState) -> str:
         if self._world_position_target_missing(state):
@@ -747,6 +890,13 @@ class Orchestrator:
         if state.get("world_position_target_changed", False):
             return "get_item_info_no_sam3d_node"
         return "car_grasp_node"
+
+    def _route_update_item_info_3(self, state: CommanderState) -> str:
+        if self._world_position_target_missing(state):
+            return "nav_home_node"
+        if state.get("world_position_target_changed", False):
+            return "get_item_info_no_sam3d_node"
+        return "major_nav_node"
 
     # ------------------------------------------------------------------
     # Node: get_item_info_no_sam3d (runs once — retrieve full 3D info)
@@ -935,6 +1085,7 @@ class Orchestrator:
         current_rank = int(state.get("current_goal_rank", 1) or 1)
         if current_rank < 1:
             current_rank = 1
+        goal_pose_db = self._goal_pose_db_from_target_object(target_object, current_rank)
         item_info_refresh_count = int(state.get("item_info_refresh_count", 0) or 0)
         should_publish_initialpose = item_info_refresh_count == 0
         goal_pose, goal_pose_err = self._goal_pose_for_rank(target_object, current_rank)
@@ -957,10 +1108,14 @@ class Orchestrator:
             "selected_target": refreshed_selected_target,
             "target_object": target_object,
             "current_goal_rank": current_rank,
+            "current_goal_pose_index": 0,
             "nav_goal_pose": goal_pose if not goal_pose_err else {},
+            "nav_goal_pose_source": "rank_best",
             "nav_move_source": "bootstrap",
             "force_initialpose": should_publish_initialpose,
             "item_info_refresh_count": item_info_refresh_count + 1,
+            "goal_pose_db": goal_pose_db,
+            "goal_pose_db_updated_at": goal_pose_db["updated_at"],
             "world_position_db": world_position_db,
             "world_position_db_updated_at": world_position_db["updated_at"],
             "world_position_target_changed": False,
@@ -1025,13 +1180,20 @@ class Orchestrator:
 
     def _route_decision(
         self, state: CommanderState
-    ) -> Literal["nav_node", "car_grasp_node", "end"]:
+    ) -> Literal["minor_nav_node", "major_nav_node", "car_grasp_node", "end"]:
         module = state.get("call_module", "")
         if module == "DONE" or state.get("task_complete", False):
             logger.info("[route] Task complete — navigating home before ending graph.")
             return "end"
+        if module in {
+            "nav_agent",
+            "minor_nav_agent",
+            "minor_nav_node",
+            "major_nav_agent",
+            "major_nav_node",
+        }:
+            return self._requested_nav_node(state)
         mapping = {
-            "nav_agent":          "nav_node",
             "grasp_agent":        "car_grasp_node",
             "approach_agent":     "car_grasp_node",
             "car_approach_agent": "car_grasp_node",
@@ -1051,61 +1213,136 @@ class Orchestrator:
     # Agent nodes (each is an A2A Client calling RTX 3090)
     # ------------------------------------------------------------------
 
-    async def _nav_node(self, state: CommanderState) -> Dict[str, Any]:
-        """Prepare navigation context and delegate execution to nav_move_node."""
-        module_params = state.get("module_params", {}) or {}
+    def _goal_pose_for_rank_grasp_index(
+        self,
+        state: CommanderState,
+        rank: int,
+        goal_pose_index: int,
+    ) -> tuple[Dict[str, Any], str]:
+        target_object = state.get("target_object", {}) or {}
+        goal_pose_db = state.get("goal_pose_db", {}) or {}
+        ranks = goal_pose_db.get("ranks", {}) if isinstance(goal_pose_db, dict) else {}
+        rank_record = ranks.get(str(rank))
+        if not isinstance(rank_record, dict):
+            return {}, f"rank={rank} missing from goal_pose_db"
+
+        grasp_goal_poses = rank_record.get("grasp_goal_poses", [])
+        if not isinstance(grasp_goal_poses, list):
+            return {}, f"rank={rank} has invalid grasp_goal_poses"
+        if goal_pose_index < 0 or goal_pose_index >= len(grasp_goal_poses):
+            return {}, f"rank={rank} has no goal_pose_index={goal_pose_index}"
+
+        candidate = grasp_goal_poses[goal_pose_index]
+        if not isinstance(candidate, dict):
+            return {}, f"rank={rank} goal_pose_index={goal_pose_index} is invalid"
+        goal_pose, err = self._goal_pose_from_ros_map(
+            target_object,
+            candidate.get("goal_pose_ros_map", []),
+        )
+        if err:
+            return {}, f"rank={rank} goal_pose_index={goal_pose_index}: {err}"
+
+        goal_pose.update(
+            {
+                "goal_rank": rank,
+                "goal_pose_index": goal_pose_index,
+                "goal_pose_source": "minor_nav",
+                "grasp_index": candidate.get("grasp_index"),
+                "grasp_confidence": candidate.get("confidence"),
+                "orientation_group": rank_record.get("orientation_group"),
+                "map_feasible": candidate.get("map_feasible"),
+                "selection_mode": candidate.get("selection_mode", ""),
+            }
+        )
+        return goal_pose, ""
+
+    async def _minor_nav_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Navigate to the next confidence-ranked goal pose within the current rank."""
+        current_rank = int(state.get("current_goal_rank", 1) or 1)
+        if current_rank < 1:
+            current_rank = 1
+        current_index = int(state.get("current_goal_pose_index", 0) or 0)
+        next_index = current_index + 1
+
+        goal_data, err = self._goal_pose_for_rank_grasp_index(state, current_rank, next_index)
+        if err:
+            logger.info(
+                "[minor_nav_node] %s; requesting major_nav_node.",
+                err,
+            )
+            print(
+                f"\n🔁 minor_nav_node：rank {current_rank} 沒有下一個 goal pose，改執行 major_nav_node。",
+                flush=True,
+            )
+            return {
+                "call_module": "nav_agent",
+                "current_status": "MINOR_NAV_EXHAUSTED",
+                "agent_result": f"[MINOR_NAV] {err}; escalate to major_nav_node.",
+                "agent_success": False,
+            }
+
+        return {
+            "call_module": "nav_agent",
+            "current_goal_rank": current_rank,
+            "current_goal_pose_index": next_index,
+            "nav_goal_pose": goal_data,
+            "nav_goal_pose_source": "minor_nav",
+            "nav_move_source": "minor_nav",
+            "force_initialpose": False,
+            "current_status": "MINOR_NAV_CONTEXT_READY",
+        }
+
+    async def _major_nav_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Navigate to the next rank's best goal pose."""
         target_object = state.get("target_object", {}) or {}
         current_rank = int(state.get("current_goal_rank", 1) or 1)
         if current_rank < 1:
             current_rank = 1
+        next_rank = current_rank + 1
 
-        requested_rank = None
-        for key in ("goal_rank", "target_rank", "current_goal_rank", "rank"):
-            if key not in module_params:
-                continue
-            try:
-                requested_rank = int(module_params[key])
-            except (TypeError, ValueError):
-                continue
-            break
-
-        if requested_rank is not None:
-            current_rank = max(1, requested_rank)
-        else:
-            latest_nav = state.get("latest_nav_result", {}) or {}
-            previous_nav_rank = int(latest_nav.get("rank", 0) or 0) or current_rank
-            previous_nav_arrived = bool(latest_nav.get("arrived", False)) or bool(
-                state.get("nav_arrived", False)
-            )
-            if previous_nav_arrived and previous_nav_rank == current_rank:
-                next_rank = current_rank + 1
-                logger.info(
-                    "[nav_node] nav_agent requested a new observation position; "
-                    "advancing goal rank %s -> %s",
-                    current_rank,
-                    next_rank,
-                )
-                print(
-                    f"\n🔁 nav_agent 切換觀察點：rank {current_rank} -> {next_rank}",
-                    flush=True,
-                )
-                current_rank = next_rank
-
-        goal_data, err = self._goal_pose_for_rank(target_object, current_rank)
-        update: Dict[str, Any] = {
-            "call_module": "nav_agent",
-            "current_goal_rank": current_rank,
-            "nav_move_source": "reason_loop",
-            "force_initialpose": bool(module_params.get("force_initialpose", False)),
-            "current_status": "NAV_CONTEXT_READY",
-        }
+        goal_data, err = self._goal_pose_for_rank(target_object, next_rank)
         if err:
-            update["agent_result"] = f"[NAV_CONTEXT_ERROR] {err}"
-            update["agent_success"] = False
-            update["nav_goal_pose"] = {}
-        else:
-            update["nav_goal_pose"] = goal_data
-        return update
+            logger.info("[major_nav_node] %s; task is done.", err)
+            print("\n✅ major_nav_node：沒有下一個 rank，任務結束並返回 home。", flush=True)
+            return {
+                "call_module": "DONE",
+                "task_complete": True,
+                "current_status": "MAJOR_NAV_EXHAUSTED",
+                "agent_result": f"[MAJOR_NAV] {err}; DONE.",
+                "agent_success": False,
+            }
+
+        goal_data.update(
+            {
+                "goal_rank": next_rank,
+                "goal_pose_index": 0,
+                "goal_pose_source": "major_nav",
+            }
+        )
+        print(
+            f"\n🔁 major_nav_node：rank {current_rank} -> rank {next_rank} best goal pose",
+            flush=True,
+        )
+        return {
+            "call_module": "nav_agent",
+            "current_goal_rank": next_rank,
+            "current_goal_pose_index": 0,
+            "nav_goal_pose": goal_data,
+            "nav_goal_pose_source": "major_nav",
+            "nav_move_source": "major_nav",
+            "force_initialpose": False,
+            "current_status": "MAJOR_NAV_CONTEXT_READY",
+        }
+
+    def _route_minor_nav(self, state: CommanderState) -> Literal["nav_move_node", "major_nav_node"]:
+        if state.get("current_status", "") == "MINOR_NAV_EXHAUSTED":
+            return "major_nav_node"
+        return "nav_move_node"
+
+    def _route_major_nav(self, state: CommanderState) -> Literal["nav_move_node", "nav_home_node"]:
+        if state.get("current_status", "") == "MAJOR_NAV_EXHAUSTED" or state.get("task_complete", False):
+            return "nav_home_node"
+        return "nav_move_node"
 
     async def _nav_move_node(self, state: CommanderState) -> Dict[str, Any]:
         """
@@ -1114,20 +1351,9 @@ class Orchestrator:
         2. Wait for the tools-side navigation stack to expose a global plan.
         3. Observe AMCL until the robot reaches the requested goal pose.
         """
-        source = state.get("nav_move_source", "reason_loop")
+        source = str(state.get("nav_move_source", "reason_loop") or "reason_loop")
         target_object = state.get("target_object", {})
         group_ranking = target_object.get("group_ranking", []) or []
-        if not group_ranking:
-            return {
-                "agent_result": "[NAV] group_ranking is empty, cannot navigate.",
-                "agent_success": False,
-                "nav_plan_ready": False,
-                "nav_arrived": False,
-                "nav_move_events": [],
-                "current_status": "NAV_FAILED",
-                "_exec_latency": 0.0,
-            }
-
         start_t = time.time()
         same_rank_retries = max(0, int(os.getenv("NAV_SAME_RANK_RETRIES", "0")))
         max_attempt_per_rank = same_rank_retries + 1
@@ -1152,11 +1378,109 @@ class Orchestrator:
         rank = int(state.get("current_goal_rank", 1) or 1)
         if rank < 1:
             rank = 1
-        if rank > len(group_ranking):
-            last_error = f"rank={rank} out of range; no remaining goal_pose candidates"
+        goal_pose_index = int(state.get("current_goal_pose_index", 0) or 0)
+        if goal_pose_index < 0:
+            goal_pose_index = 0
+        selected_goal_pose = state.get("nav_goal_pose", {}) or {}
+        if isinstance(selected_goal_pose, dict):
+            goal_data = dict(selected_goal_pose)
+        else:
+            goal_data = {}
+        if goal_data:
+            rank = int(goal_data.get("goal_rank", rank) or rank)
+            goal_pose_index = int(goal_data.get("goal_pose_index", goal_pose_index) or 0)
+        else:
+            if not group_ranking:
+                last_error = "group_ranking is empty and no nav_goal_pose is selected"
+                logger.error(f"[nav_move_node] {last_error}")
+                return {
+                    "current_goal_rank": rank,
+                    "current_goal_pose_index": goal_pose_index,
+                    "nav_attempt": 0,
+                    "nav_goal_pose": {},
+                    "nav_plan_ready": False,
+                    "nav_arrived": False,
+                    "nav_move_events": [
+                        {
+                            "event": "navigation_failed",
+                            "detail": last_error,
+                            "rank": rank,
+                            "goal_pose_index": goal_pose_index,
+                            "source": source,
+                        }
+                    ],
+                    "agent_result": f"[NAV] {last_error}",
+                    "agent_success": False,
+                    "current_status": "NAV_FAILED",
+                    "_exec_latency": time.time() - start_t,
+                }
+            if rank > len(group_ranking):
+                last_error = f"rank={rank} out of range; no remaining goal_pose candidates"
+                logger.error(f"[nav_move_node] {last_error}")
+                return {
+                    "current_goal_rank": rank,
+                    "current_goal_pose_index": goal_pose_index,
+                    "nav_attempt": 0,
+                    "nav_goal_pose": {},
+                    "nav_plan_ready": False,
+                    "nav_arrived": False,
+                    "nav_move_events": [
+                        {
+                            "event": "navigation_failed",
+                            "detail": last_error,
+                            "rank": rank,
+                            "goal_pose_index": goal_pose_index,
+                            "attempt": 0,
+                            "source": source,
+                        }
+                    ],
+                    "agent_result": f"[NAV] {last_error}",
+                    "agent_success": False,
+                    "current_status": "NAV_FAILED",
+                    "_exec_latency": time.time() - start_t,
+                }
+            goal_data, goal_err = self._goal_pose_for_rank(target_object, rank)
+            if goal_err:
+                last_error = f"rank={rank} cannot provide a goal_pose: {goal_err}"
+                logger.error(f"[nav_move_node] {last_error}")
+                return {
+                    "current_goal_rank": rank,
+                    "current_goal_pose_index": goal_pose_index,
+                    "nav_attempt": 0,
+                    "nav_goal_pose": {},
+                    "nav_plan_ready": False,
+                    "nav_arrived": False,
+                    "nav_move_events": [
+                        {
+                            "event": "navigation_failed",
+                            "detail": last_error,
+                            "rank": rank,
+                            "goal_pose_index": goal_pose_index,
+                            "attempt": 0,
+                            "source": source,
+                        }
+                    ],
+                    "agent_result": f"[NAV] {last_error}",
+                    "agent_success": False,
+                    "current_status": "NAV_FAILED",
+                    "_exec_latency": time.time() - start_t,
+                }
+
+        goal_pose_source = str(
+            state.get("nav_goal_pose_source", "")
+            or goal_data.get("goal_pose_source", "")
+            or source
+        )
+        if not goal_pose_source:
+            goal_pose_source = "rank_best"
+
+        if not all(key in goal_data for key in ("x", "y", "qz", "qw")):
+            last_error = f"selected goal_pose is incomplete for rank={rank}, goal_pose_index={goal_pose_index}"
             logger.error(f"[nav_move_node] {last_error}")
             return {
                 "current_goal_rank": rank,
+                "current_goal_pose_index": goal_pose_index,
+                "nav_goal_pose_source": goal_pose_source,
                 "nav_attempt": 0,
                 "nav_goal_pose": {},
                 "nav_plan_ready": False,
@@ -1167,6 +1491,8 @@ class Orchestrator:
                         "detail": last_error,
                         "rank": rank,
                         "attempt": 0,
+                        "goal_pose_index": goal_pose_index,
+                        "goal_pose_source": goal_pose_source,
                         "source": source,
                     }
                 ],
@@ -1181,125 +1507,137 @@ class Orchestrator:
         last_error = "unknown navigation error"
         last_attempt = 0
 
-        while rank <= len(group_ranking):
-            goal_data, goal_err = self._goal_pose_for_rank(target_object, rank)
-            if goal_err:
-                next_rank = rank + 1
-                print(
-                    f"\n🔁 切換 goal_pose：rank {rank} -> rank {next_rank}，原因：{goal_err}",
-                    flush=True,
-                )
-                all_events.append({
-                    "event": "rank_advanced",
-                    "rank_from": rank,
-                    "rank_to": next_rank,
-                    "detail": goal_err,
-                })
-                rank = next_rank
-                continue
-
-            for attempt in range(1, max_attempt_per_rank + 1):
-                last_attempt = attempt
-                publish_initialpose = force_initialpose
-                if self.use_mock:
-                    await asyncio.sleep(0.2)
-                    mock_events = [
-                        {"event": "goal_publishing", "rank": rank, "attempt": attempt},
-                        {"event": "plan_ready", "rank": rank, "attempt": attempt},
-                        {"event": "arrived", "rank": rank, "attempt": attempt},
-                    ]
-                    return {
-                        "current_goal_rank": rank,
-                        "nav_attempt": attempt,
-                        "nav_goal_pose": goal_data,
-                        "nav_plan_ready": True,
-                        "nav_arrived": True,
-                        "nav_move_events": mock_events,
-                        "agent_result": f"[MOCK_NAV] Arrived at rank {rank} (attempt {attempt}).",
-                        "agent_success": True,
-                        "current_status": "NAV_COMPLETED",
-                        "_exec_latency": time.time() - start_t,
-                    }
-
-                payload = {
-                    "goal_pose": goal_data,
-                    "publish_initialpose": publish_initialpose,
-                    "initial_pose": self._default_initial_pose(),
-                    "plan_timeout_sec": plan_timeout,
-                    "arrival_timeout_sec": arrival_timeout,
-                    "publish_interval_sec": publish_interval,
-                    "goal_tolerance_m": goal_tolerance_m,
-                    "goal_heading_tolerance_rad": goal_heading_tolerance_rad,
-                    "status_topic": "/nav_move/status",
-                    "attempt": attempt,
-                    "rank": rank,
-                    "source": source,
-                }
-                result = await self._run_nav_move_runner(payload)
-                events = result.get("events", [])
-                all_events.extend(events)
-                plan_ready = bool(result.get("plan_ready", False))
-                success = bool(result.get("success", False))
-                if publish_initialpose and plan_ready:
-                    force_initialpose = False
-
-                if success:
-                    return {
-                        "current_goal_rank": rank,
-                        "nav_attempt": attempt,
-                        "nav_goal_pose": goal_data,
-                        "nav_plan_ready": plan_ready,
-                        "nav_arrived": True,
-                        "nav_move_events": all_events,
-                        "agent_result": result.get(
-                            "message",
-                            f"[NAV] Arrived at rank {rank} (attempt {attempt}).",
-                        ),
-                        "agent_success": True,
-                        "current_status": "NAV_COMPLETED",
-                        "_exec_latency": time.time() - start_t,
-                    }
-
-                last_error = result.get("message", "navigation attempt failed")
-                all_events.append(
+        for attempt in range(1, max_attempt_per_rank + 1):
+            last_attempt = attempt
+            publish_initialpose = force_initialpose
+            if self.use_mock:
+                await asyncio.sleep(0.2)
+                mock_events = [
                     {
-                        "event": "attempt_failed",
+                        "event": "goal_publishing",
                         "rank": rank,
+                        "goal_pose_index": goal_pose_index,
+                        "goal_pose_source": goal_pose_source,
                         "attempt": attempt,
-                        "detail": last_error,
-                    }
-                )
+                    },
+                    {
+                        "event": "plan_ready",
+                        "rank": rank,
+                        "goal_pose_index": goal_pose_index,
+                        "goal_pose_source": goal_pose_source,
+                        "attempt": attempt,
+                    },
+                    {
+                        "event": "arrived",
+                        "rank": rank,
+                        "goal_pose_index": goal_pose_index,
+                        "goal_pose_source": goal_pose_source,
+                        "attempt": attempt,
+                    },
+                ]
+                return {
+                    "current_goal_rank": rank,
+                    "current_goal_pose_index": goal_pose_index,
+                    "nav_goal_pose_source": goal_pose_source,
+                    "nav_attempt": attempt,
+                    "nav_goal_pose": goal_data,
+                    "nav_plan_ready": True,
+                    "nav_arrived": True,
+                    "nav_move_events": mock_events,
+                    "agent_result": (
+                        f"[MOCK_NAV] Arrived at rank {rank}, goal_pose_index "
+                        f"{goal_pose_index} (attempt {attempt})."
+                    ),
+                    "agent_success": True,
+                    "current_status": "NAV_COMPLETED",
+                    "_exec_latency": time.time() - start_t,
+                }
 
-            next_rank = rank + 1
-            print(
-                f"\n🔁 切換 goal_pose：rank {rank} -> rank {next_rank}，原因：{last_error}",
-                flush=True,
-            )
+            payload = {
+                "goal_pose": goal_data,
+                "publish_initialpose": publish_initialpose,
+                "initial_pose": self._default_initial_pose(),
+                "plan_timeout_sec": plan_timeout,
+                "arrival_timeout_sec": arrival_timeout,
+                "publish_interval_sec": publish_interval,
+                "goal_tolerance_m": goal_tolerance_m,
+                "goal_heading_tolerance_rad": goal_heading_tolerance_rad,
+                "status_topic": "/nav_move/status",
+                "attempt": attempt,
+                "rank": rank,
+                "goal_pose_index": goal_pose_index,
+                "goal_pose_source": goal_pose_source,
+                "source": source,
+            }
+            result = await self._run_nav_move_runner(payload)
+            events = result.get("events", [])
+            all_events.extend(events)
+            plan_ready = bool(result.get("plan_ready", False))
+            success = bool(result.get("success", False))
+            if publish_initialpose and plan_ready:
+                force_initialpose = False
+
+            if success:
+                return {
+                    "current_goal_rank": rank,
+                    "current_goal_pose_index": goal_pose_index,
+                    "nav_goal_pose_source": goal_pose_source,
+                    "nav_attempt": attempt,
+                    "nav_goal_pose": goal_data,
+                    "nav_plan_ready": plan_ready,
+                    "nav_arrived": True,
+                    "nav_move_events": all_events,
+                    "agent_result": result.get(
+                        "message",
+                        (
+                            f"[NAV] Arrived at rank {rank}, goal_pose_index "
+                            f"{goal_pose_index} (attempt {attempt})."
+                        ),
+                    ),
+                    "agent_success": True,
+                    "current_status": "NAV_COMPLETED",
+                    "_exec_latency": time.time() - start_t,
+                }
+
+            last_error = result.get("message", "navigation attempt failed")
             all_events.append(
                 {
-                    "event": "rank_advanced",
-                    "rank_from": rank,
-                    "rank_to": next_rank,
-                    "detail": "exhausted retries on current rank",
+                    "event": "attempt_failed",
+                    "rank": rank,
+                    "goal_pose_index": goal_pose_index,
+                    "goal_pose_source": goal_pose_source,
+                    "attempt": attempt,
+                    "detail": last_error,
                 }
             )
-            rank = next_rank
 
         all_events.append(
             {
                 "event": "navigation_failed",
                 "detail": last_error,
+                "rank": rank,
+                "goal_pose_index": goal_pose_index,
+                "goal_pose_source": goal_pose_source,
             }
         )
-        logger.error(f"[nav_move_node] Navigation failed completely. Inner error: {last_error}")
+        logger.error(
+            "[nav_move_node] Navigation failed at rank=%s goal_pose_index=%s. Inner error: %s",
+            rank,
+            goal_pose_index,
+            last_error,
+        )
         return {
             "current_goal_rank": rank,
+            "current_goal_pose_index": goal_pose_index,
+            "nav_goal_pose_source": goal_pose_source,
             "nav_attempt": last_attempt,
-            "nav_goal_pose": {},
+            "nav_goal_pose": goal_data,
             "nav_plan_ready": False,
             "nav_arrived": False,
             "nav_move_events": all_events,
-            "agent_result": f"[NAV] Failed after exhausting all ranks: {last_error}",
+            "agent_result": (
+                f"[NAV] Failed at rank {rank}, goal_pose_index {goal_pose_index}: {last_error}"
+            ),
             "agent_success": False,
             "current_status": "NAV_FAILED",
             "_exec_latency": time.time() - start_t,
@@ -1561,6 +1899,12 @@ class Orchestrator:
         """Build a concise outcome summary and key facts for rolling memory."""
         if module == "nav_agent":
             rank = int(state.get("current_goal_rank", 0) or 0)
+            goal_pose_index = int(state.get("current_goal_pose_index", 0) or 0)
+            goal_pose = state.get("nav_goal_pose", {}) or {}
+            goal_pose_source = str(
+                state.get("nav_goal_pose_source", "")
+                or (goal_pose.get("goal_pose_source", "") if isinstance(goal_pose, dict) else "")
+            )
             attempt = int(state.get("nav_attempt", 0) or 0)
             arrived = bool(state.get("nav_arrived", False))
             plan_ready = bool(state.get("nav_plan_ready", False))
@@ -1572,6 +1916,8 @@ class Orchestrator:
                     summary = f"Navigation failed at rank {rank} on attempt {attempt}."
             return summary, {
                 "rank": rank,
+                "goal_pose_index": goal_pose_index,
+                "goal_pose_source": goal_pose_source,
                 "attempt": attempt,
                 "arrived": arrived,
                 "plan_ready": plan_ready,
@@ -1656,6 +2002,15 @@ class Orchestrator:
                 "message": self._condense_text(result),
                 "goal_pose": state.get("nav_goal_pose", {}),
                 "rank": int(state.get("current_goal_rank", 0) or 0),
+                "goal_pose_index": int(state.get("current_goal_pose_index", 0) or 0),
+                "goal_pose_source": str(
+                    state.get("nav_goal_pose_source", "")
+                    or (
+                        (state.get("nav_goal_pose", {}) or {}).get("goal_pose_source", "")
+                        if isinstance(state.get("nav_goal_pose", {}), dict)
+                        else ""
+                    )
+                ),
                 "attempt": int(state.get("nav_attempt", 0) or 0),
                 "arrived": bool(state.get("nav_arrived", False)),
                 "plan_ready": bool(state.get("nav_plan_ready", False)),
@@ -1803,19 +2158,20 @@ class Orchestrator:
         target_map_y = float(center_world[0]) - 3.0
         return target_map_x, target_map_y
 
-    def _goal_pose_for_rank(self, target_object: Dict[str, Any], rank: int) -> tuple[Dict[str, Any], str]:
-        group_ranking = target_object.get("group_ranking", []) or []
-        rank_idx = rank - 1
-        if rank_idx < 0 or rank_idx >= len(group_ranking):
-            return {}, f"rank={rank} out of range"
-
-        goal_data = group_ranking[rank_idx] or {}
-        goal_pose_ros = goal_data.get("best_goal_pose_ros_map", [])
+    def _goal_pose_from_ros_map(
+        self,
+        target_object: Dict[str, Any],
+        goal_pose_ros: Any,
+    ) -> tuple[Dict[str, Any], str]:
         if not isinstance(goal_pose_ros, list) or len(goal_pose_ros) < 2:
-            return {}, f"rank={rank} missing best_goal_pose_ros_map"
+            return {}, "missing goal_pose_ros_map"
 
-        goal_x = float(goal_pose_ros[0])
-        goal_y = float(goal_pose_ros[1])
+        try:
+            goal_x = float(goal_pose_ros[0])
+            goal_y = float(goal_pose_ros[1])
+        except (TypeError, ValueError):
+            return {}, f"invalid goal_pose_ros_map={goal_pose_ros}"
+
         yaw = 0.0
         target_map_x, target_map_y = self._target_center_world_to_map_xy(target_object)
         if target_map_x is not None and target_map_y is not None:
@@ -1838,6 +2194,30 @@ class Orchestrator:
         if target_map_x is not None and target_map_y is not None:
             goal_pose["face_target_x"] = target_map_x
             goal_pose["face_target_y"] = target_map_y
+        return goal_pose, ""
+
+    def _goal_pose_for_rank(self, target_object: Dict[str, Any], rank: int) -> tuple[Dict[str, Any], str]:
+        group_ranking = target_object.get("group_ranking", []) or []
+        rank_idx = rank - 1
+        if rank_idx < 0 or rank_idx >= len(group_ranking):
+            return {}, f"rank={rank} out of range"
+
+        goal_data = group_ranking[rank_idx] or {}
+        goal_pose_ros = goal_data.get("best_goal_pose_ros_map", [])
+        goal_pose, err = self._goal_pose_from_ros_map(target_object, goal_pose_ros)
+        if err:
+            return {}, f"rank={rank} {err}"
+        goal_pose.update(
+            {
+                "goal_rank": rank,
+                "goal_pose_index": 0,
+                "goal_pose_source": "rank_best",
+                "orientation_group": goal_data.get("orientation_group"),
+                "grasp_confidence": goal_data.get("best_confidence"),
+                "map_feasible": goal_data.get("map_feasible"),
+                "selection_mode": goal_data.get("selection_mode", ""),
+            }
+        )
         return goal_pose, ""
 
     def _default_initial_pose(self) -> Dict[str, Any]:

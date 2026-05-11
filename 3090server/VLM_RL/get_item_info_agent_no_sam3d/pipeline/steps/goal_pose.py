@@ -147,6 +147,35 @@ def compute_goal_pose(
     map_feasible_mask: list[bool] = []
     goal_unity_candidates: list[np.ndarray] = []
     goal_ros_candidates: list[list[float]] = []
+    goal_pose_candidates_by_group: dict[int, list[dict[str, Any]]] = {}
+
+    def append_group_goal_pose_candidate(
+        *,
+        group: int,
+        grasp_index: int,
+        confidence: float,
+        world_pos: np.ndarray,
+        rotation: np.ndarray,
+        goal_unity: np.ndarray,
+        goal_ros: list[float],
+        map_feasible: bool,
+        selection_mode: str,
+    ) -> None:
+        pose_matrix = np.eye(4, dtype=float)
+        pose_matrix[:3, :3] = rotation
+        pose_matrix[:3, 3] = world_pos
+        goal_pose_candidates_by_group.setdefault(group, []).append(
+            {
+                "grasp_index": int(grasp_index),
+                "confidence": float(confidence),
+                "pose_unity": np.asarray(world_pos, dtype=float).tolist(),
+                "pose_matrix_unity": pose_matrix.tolist(),
+                "goal_pose_unity": np.asarray(goal_unity, dtype=float).tolist(),
+                "goal_pose_ros_map": [float(goal_ros[0]), float(goal_ros[1])],
+                "map_feasible": bool(map_feasible),
+                "selection_mode": str(selection_mode),
+            }
+        )
 
     def update_group_candidate(
         counts: dict[int, int],
@@ -179,7 +208,7 @@ def compute_goal_pose(
             "selection_mode": selection_mode,
         }
 
-    for grasp_matrix, confidence in zip(grasps, confidences):
+    for grasp_index, (grasp_matrix, confidence) in enumerate(zip(grasps, confidences)):
         position = np.array(grasp_matrix[:3, 3], dtype=float)
         rotation = np.array(grasp_matrix[:3, :3], dtype=float)
         group = grasp_orientation_group(grasp_matrix)
@@ -189,6 +218,17 @@ def compute_goal_pose(
         approach = rotation[:, 2]
         norm = np.linalg.norm(approach)
         if norm == 0:
+            append_group_goal_pose_candidate(
+                group=group,
+                grasp_index=grasp_index,
+                confidence=confidence,
+                world_pos=world_pos,
+                rotation=rotation,
+                goal_unity=np.full(3, np.nan, dtype=float),
+                goal_ros=[float("nan"), float("nan")],
+                map_feasible=False,
+                selection_mode="invalid_approach",
+            )
             map_feasible_mask.append(False)
             goal_unity_candidates.append(np.full(3, np.nan, dtype=float))
             goal_ros_candidates.append([float("nan"), float("nan")])
@@ -204,6 +244,18 @@ def compute_goal_pose(
         map_feasible_mask.append(bool(candidate_is_white))
         goal_unity_candidates.append(np.asarray(candidate, dtype=float))
         goal_ros_candidates.append([float(goal_ros[0]), float(goal_ros[1])])
+        selection_mode = "free_map" if candidate_is_white else "fallback_nonfree_map"
+        append_group_goal_pose_candidate(
+            group=group,
+            grasp_index=grasp_index,
+            confidence=confidence,
+            world_pos=world_pos,
+            rotation=rotation,
+            goal_unity=candidate,
+            goal_ros=[float(goal_ros[0]), float(goal_ros[1])],
+            map_feasible=candidate_is_white,
+            selection_mode=selection_mode,
+        )
 
         update_group_candidate(
             fallback_counts,
@@ -214,7 +266,7 @@ def compute_goal_pose(
             world_pos=world_pos,
             rotation=rotation,
             map_feasible=candidate_is_white,
-            selection_mode="free_map" if candidate_is_white else "fallback_nonfree_map",
+            selection_mode=selection_mode,
         )
 
         if not candidate_is_white:
@@ -249,9 +301,14 @@ def compute_goal_pose(
     group_ranking = []
     for rank, group in enumerate(sorted_groups, start=1):
         info_group = best_by_group[group]
+        grasp_goal_poses = sorted(
+            goal_pose_candidates_by_group.get(group, []),
+            key=lambda item: (-float(item.get("confidence", 0.0)), int(item.get("grasp_index", 0))),
+        )
         group_ranking.append(
             {
                 "rank": int(rank),
+                "orientation_group": int(group),
                 "best_confidence": float(info_group["confidence"]),
                 "best_pose_unity": np.array(info_group["pose_unity"], dtype=float).tolist(),
                 "best_pose_matrix_unity": np.array(info_group["pose_matrix_unity"], dtype=float).tolist(),
@@ -259,6 +316,11 @@ def compute_goal_pose(
                 "best_goal_pose_ros_map": [float(info_group["goal_ros"][0]), float(info_group["goal_ros"][1])],
                 "map_feasible": bool(info_group["map_feasible"]),
                 "selection_mode": str(info_group["selection_mode"]),
+                "num_grasp_goal_poses": int(len(grasp_goal_poses)),
+                "num_map_feasible_grasp_goal_poses": int(
+                    sum(1 for item in grasp_goal_poses if bool(item.get("map_feasible", False)))
+                ),
+                "grasp_goal_poses": grasp_goal_poses,
             }
         )
 
