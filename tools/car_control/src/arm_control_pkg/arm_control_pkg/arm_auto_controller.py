@@ -1,4 +1,5 @@
 import math
+import os
 import time
 
 from action_interface.action import ArmGoal
@@ -196,6 +197,10 @@ class ArmAutoController:
         tolerance_rad,
         timeout_sec,
         republish_interval_sec,
+        cube_z_distance_reader=None,
+        cube_z_distance_stop_threshold_m=0.0,
+        cube_z_distance_since_time_sec=None,
+        cube_z_distance_poll_interval_sec=0.1,
     ):
         current_positions = self._wait_for_joint_state_positions(
             min_joint_count=min_joint_count,
@@ -224,6 +229,14 @@ class ArmAutoController:
         published_count = 0
         last_publish_time_sec = -float("inf")
         last_errors = {}
+        stop_threshold = max(0.0, float(cube_z_distance_stop_threshold_m))
+        poll_interval_sec = max(0.001, float(cube_z_distance_poll_interval_sec))
+        last_cube_z_distance_poll_sec = -float("inf")
+        since_time_sec = (
+            float(cube_z_distance_since_time_sec)
+            if cube_z_distance_since_time_sec is not None
+            else time.monotonic()
+        )
 
         while True:
             now = time.monotonic()
@@ -237,6 +250,32 @@ class ArmAutoController:
                 self._publish_joint_positions_rad(target_positions)
                 published_count += 1
                 last_publish_time_sec = now
+
+            if (
+                stop_threshold > 0.0
+                and now - last_cube_z_distance_poll_sec >= poll_interval_sec
+            ):
+                last_cube_z_distance_poll_sec = now
+                cube_z_distance_m = self._read_fresh_cube_z_distance(
+                    cube_z_distance_reader,
+                    since_time_sec=since_time_sec,
+                )
+                if cube_z_distance_m is not None and cube_z_distance_m < stop_threshold:
+                    return {
+                        "success": True,
+                        "phase": str(phase),
+                        "published_count": int(published_count),
+                        "joint_errors_rad": last_errors,
+                        "max_error_rad": max(last_errors.values()) if last_errors else None,
+                        "early_stopped_by_cube_z_distance": True,
+                        "early_stop_distance_m": float(cube_z_distance_m),
+                        "early_stop_threshold_m": float(stop_threshold),
+                        "message": (
+                            "joint command early-stopped by cube_z_distance: "
+                            f"early_stop_distance_m={cube_z_distance_m:.4f} < "
+                            f"threshold_m={stop_threshold:.4f}"
+                        ),
+                    }
 
             current_positions = self.arm_commute_node.get_latest_joint_positions_rad(
                 min_joint_count=len(target_positions)
@@ -334,6 +373,91 @@ class ArmAutoController:
             ),
         }
 
+    def _cube_z_distance_early_stop_threshold_m(self):
+        raw_threshold = os.getenv(
+            "APPROACH_AGENT_CAR_GRASP_EARLY_STOP_CUBE_Z_DISTANCE_M",
+            "0.03",
+        )
+        try:
+            threshold = float(raw_threshold)
+        except (TypeError, ValueError):
+            return 0.03
+        return threshold if math.isfinite(threshold) and threshold > 0.0 else 0.0
+
+    def _cube_z_distance_early_stop_enabled(self):
+        raw_enabled = os.getenv(
+            "APPROACH_AGENT_CAR_GRASP_EARLY_STOP_ON_CUBE_Z_DISTANCE",
+            "1",
+        )
+        return str(raw_enabled).strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "",
+        }
+
+    def _cube_z_distance_early_stop_poll_interval_sec(self):
+        raw_interval = os.getenv(
+            "APPROACH_AGENT_CAR_GRASP_EARLY_STOP_POLL_INTERVAL_SEC",
+            "0.1",
+        )
+        try:
+            interval_sec = float(raw_interval)
+        except (TypeError, ValueError):
+            return 0.1
+        return interval_sec if math.isfinite(interval_sec) and interval_sec > 0.0 else 0.1
+
+    def _read_fresh_cube_z_distance(self, cube_z_distance_reader, *, since_time_sec):
+        if cube_z_distance_reader is None:
+            return None
+        try:
+            reading = cube_z_distance_reader(since_time_sec=since_time_sec)
+        except Exception:
+            return None
+        if reading is None:
+            return None
+        try:
+            distance_m = float(reading[0])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if not math.isfinite(distance_m):
+            return None
+        return distance_m
+
+    def _wait_or_stop_on_cube_z_distance(
+        self,
+        cube_z_distance_reader,
+        *,
+        since_time_sec,
+        duration_sec,
+        threshold_m,
+        poll_interval_sec,
+        waypoint_index,
+        waypoint_count,
+    ):
+        deadline = time.monotonic() + max(0.0, float(duration_sec))
+        while True:
+            cube_z_distance_m = self._read_fresh_cube_z_distance(
+                cube_z_distance_reader,
+                since_time_sec=since_time_sec,
+            )
+            if cube_z_distance_m is not None and cube_z_distance_m < float(threshold_m):
+                return ArmGoal.Result(
+                    success=True,
+                    message=(
+                        "target move early-stopped by cube_z_distance: "
+                        f"early_stop_distance_m={cube_z_distance_m:.4f} < "
+                        f"threshold_m={float(threshold_m):.4f} during "
+                        f"high-frequency check at waypoint "
+                        f"{int(waypoint_index)}/{int(waypoint_count)}"
+                    ),
+                )
+            remaining_sec = deadline - time.monotonic()
+            if remaining_sec <= 0.0:
+                return None
+            time.sleep(min(max(0.001, float(poll_interval_sec)), remaining_sec))
+
     def set_joint_position_rad(self, joint_index, position_rad, settle_sec=0.2):
         try:
             joint_index = int(joint_index)
@@ -404,6 +528,8 @@ class ArmAutoController:
         joint_command_timeout_sec,
         joint_command_tolerance_rad,
         joint_command_republish_interval_sec,
+        cube_z_distance_reader=None,
+        cube_z_distance_stop_threshold_m=0.0,
     ):
         step_count = max(1, int(steps)) if int(steps) > 0 else 50
         sleep_sec = (
@@ -428,6 +554,10 @@ class ArmAutoController:
 
         expected_count = self._expected_joint_count()
         final_target_positions = None
+        move_start_time_sec = time.monotonic()
+        stop_threshold = max(0.0, float(cube_z_distance_stop_threshold_m))
+        poll_interval_sec = self._cube_z_distance_early_stop_poll_interval_sec()
+        early_stop_start_waypoint = max(1, len(trajectory) - 1)
         for waypoint_index, joint_positions in enumerate(trajectory, start=1):
             target_positions = self._with_preserved_grasp_joints(joint_positions)
             if len(target_positions) < expected_count:
@@ -440,7 +570,22 @@ class ArmAutoController:
                 )
             final_target_positions = [float(value) for value in target_positions[:expected_count]]
             self._publish_joint_positions_rad(final_target_positions)
-            if sleep_sec > 0.0:
+            high_frequency_stop_enabled = (
+                stop_threshold > 0.0 and waypoint_index >= early_stop_start_waypoint
+            )
+            if high_frequency_stop_enabled:
+                stop_result = self._wait_or_stop_on_cube_z_distance(
+                    cube_z_distance_reader,
+                    since_time_sec=move_start_time_sec,
+                    duration_sec=sleep_sec,
+                    threshold_m=stop_threshold,
+                    poll_interval_sec=poll_interval_sec,
+                    waypoint_index=waypoint_index,
+                    waypoint_count=len(trajectory),
+                )
+                if stop_result is not None:
+                    return stop_result
+            elif sleep_sec > 0.0:
                 time.sleep(sleep_sec)
 
         if final_target_positions is None:
@@ -456,6 +601,10 @@ class ArmAutoController:
             tolerance_rad=joint_command_tolerance_rad,
             timeout_sec=joint_command_timeout_sec,
             republish_interval_sec=joint_command_republish_interval_sec,
+            cube_z_distance_reader=cube_z_distance_reader,
+            cube_z_distance_stop_threshold_m=stop_threshold,
+            cube_z_distance_since_time_sec=move_start_time_sec,
+            cube_z_distance_poll_interval_sec=poll_interval_sec,
         )
         if not final_joint_result["success"]:
             return ArmGoal.Result(
@@ -466,6 +615,8 @@ class ArmAutoController:
                     f"max_error_rad={final_joint_result.get('max_error_rad')}"
                 ),
             )
+        if bool(final_joint_result.get("early_stopped_by_cube_z_distance", False)):
+            return ArmGoal.Result(success=True, message=str(final_joint_result["message"]))
 
         final_position = self.pybullet_robot_controller.solveForwardPositonKinematics(
             self.pybullet_robot_controller.getJointStates()[0]
@@ -557,6 +708,11 @@ class ArmAutoController:
             max(0.0, float(joint_command_republish_interval_sec))
             if joint_command_republish_interval_sec > 0
             else 0.1
+        )
+        early_stop_threshold_m = (
+            self._cube_z_distance_early_stop_threshold_m()
+            if self._cube_z_distance_early_stop_enabled()
+            else 0.0
         )
         min_joint_count = max(wrist_index, gripper_index) + 1
 
@@ -661,14 +817,17 @@ class ArmAutoController:
                 joint_command_timeout_sec=joint_timeout,
                 joint_command_tolerance_rad=joint_tolerance,
                 joint_command_republish_interval_sec=republish_interval,
+                cube_z_distance_reader=cube_z_distance_reader,
+                cube_z_distance_stop_threshold_m=early_stop_threshold_m,
             )
         except Exception as exc:
             move_result = ArmGoal.Result(
                 success=False,
                 message=f"exception: {exc}",
             )
+        move_result_message = str(getattr(move_result, "message", ""))
         if not move_result.success:
-            add_warning("move_to_target", move_result.message)
+            add_warning("move_to_target", move_result_message)
 
         try:
             close_current_positions = self._wait_for_joint_state_positions(
@@ -755,6 +914,7 @@ class ArmAutoController:
         message = (
             f"{grasp_verify_result['message']}; "
             f"continued_to_init_pose={init_result['success']}; "
+            f"move_to_target={move_result_message}; "
             f"{phase_summary}"
         )
         if warning_summary:

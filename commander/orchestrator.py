@@ -38,9 +38,9 @@ class Orchestrator:
         observe_node → reason_node
             input_node → find_node → get_item_info_no_sam3d_node → nav_move_node
             nav_move_node → observe_node → reason_node
-            reason_node --[nav_agent]-------> nav_node   ┐
-            reason_node --[grasp_agent]-----> car_grasp_node ─→ car_approach_node ─→ update_memory_node → observe_node
-            reason_node --[car_approach_agent]--> car_grasp_node ┘
+            reason_node --[nav_agent]-------> update_item_info_1_node → nav_node
+            reason_node --[grasp_agent]-----> update_item_info_2_node → car_grasp_node → car_approach_node → update_memory_node → observe_node
+            reason_node --[car_approach_agent]--> update_item_info_2_node ┘
             reason_node --[DONE]-----------> nav_home_node → END
 
     grasp_node: 擷取 RGBD、呼叫 GraspAgent，取得 6-DoF 抓取位姿並寫入 latest_grasp_result。
@@ -64,6 +64,8 @@ class Orchestrator:
         # Core nodes
         workflow.add_node("input_node", self._input_node)
         workflow.add_node("find_node", self._find_node)
+        workflow.add_node("update_item_info_1_node", self._update_item_info_1_node)
+        workflow.add_node("update_item_info_2_node", self._update_item_info_2_node)
         workflow.add_node("observe_node", self._observe_node)
         workflow.add_node("reason_node", self._reason_node)
         workflow.add_node("update_memory_node", self._update_memory_node)
@@ -99,13 +101,32 @@ class Orchestrator:
             {"get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node", "end": END},
         )
 
-        # reason_node → agent node or END
+        workflow.add_conditional_edges(
+            "update_item_info_1_node",
+            self._route_update_item_info_1,
+            {
+                "get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node",
+                "nav_home_node": "nav_home_node",
+                "nav_node": "nav_node",
+            },
+        )
+        workflow.add_conditional_edges(
+            "update_item_info_2_node",
+            self._route_update_item_info_2,
+            {
+                "get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node",
+                "nav_home_node": "nav_home_node",
+                "car_grasp_node": "car_grasp_node",
+            },
+        )
+
+        # reason_node → update_item_info_*_node → agent node or END
         workflow.add_conditional_edges(
             "reason_node",
             self._route_decision,
             {
-                "nav_node":    "nav_node",
-                "car_grasp_node": "car_grasp_node",
+                "nav_node": "update_item_info_1_node",
+                "car_grasp_node": "update_item_info_2_node",
                 "end":        "nav_home_node",
             },
         )
@@ -220,6 +241,262 @@ class Orchestrator:
         }
 
     @staticmethod
+    def _world_position_camera_names(candidates: list[Dict[str, Any]]) -> list[str]:
+        ordered_unique: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            for camera_name in candidate.get("camsrc", []) or []:
+                camera_text = str(camera_name).strip()
+                if not camera_text or camera_text in seen:
+                    continue
+                seen.add(camera_text)
+                ordered_unique.append(camera_text)
+        return ordered_unique
+
+    @staticmethod
+    def _world_position_db_from_candidates(
+        world_position_payload: Dict[str, Any],
+        candidates: list[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        instances: Dict[str, Dict[str, Any]] = {}
+        for candidate in candidates:
+            instance_key = str(candidate.get("instance_key", "")).strip()
+            if not instance_key:
+                continue
+            try:
+                instance_id = int(candidate.get("instance_id", -1))
+            except (TypeError, ValueError):
+                instance_id = -1
+            instances[instance_key] = {
+                "item_id": candidate.get("item_id", ""),
+                "instance_id": instance_id,
+                "instance_key": instance_key,
+                "topic_key": candidate.get("topic_key", ""),
+                "center_world": list(candidate.get("center_world", [])),
+                "camsrc": list(candidate.get("camsrc", [])),
+                "bboxes_by_camera": dict(candidate.get("bboxes_by_camera", {})),
+            }
+        return {
+            "payload": world_position_payload,
+            "instances": instances,
+            "updated_at": time.time(),
+        }
+
+    @staticmethod
+    def _selected_target_instance_key(selected_target: Dict[str, Any]) -> str:
+        return str(selected_target.get("instance_key", "")).strip()
+
+    @staticmethod
+    def _find_selected_world_position_candidate(
+        candidates: list[Dict[str, Any]],
+        selected_target: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        selected_key = Orchestrator._selected_target_instance_key(selected_target)
+        selected_item_id = str(selected_target.get("item_id") or selected_target.get("id") or "").strip()
+        try:
+            selected_instance_id = int(selected_target.get("instance_id", -1))
+        except (TypeError, ValueError):
+            selected_instance_id = -1
+
+        for candidate in candidates:
+            if selected_key and candidate.get("instance_key") == selected_key:
+                return candidate
+            if (
+                selected_item_id
+                and candidate.get("item_id") == selected_item_id
+                and int(candidate.get("instance_id", -1)) == selected_instance_id
+            ):
+                return candidate
+        return None
+
+    @staticmethod
+    def _center_world_distance_m(old_center: Any, new_center: Any) -> float:
+        try:
+            old_xyz = [float(value) for value in list(old_center)[:3]]
+            new_xyz = [float(value) for value in list(new_center)[:3]]
+        except Exception:
+            return math.inf
+        if len(old_xyz) != 3 or len(new_xyz) != 3:
+            return math.inf
+        return math.dist(old_xyz, new_xyz)
+
+    @staticmethod
+    def _target_object_with_invalidated_item_info(
+        target_object: Dict[str, Any],
+        refreshed_selected_target: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        updated = {
+            **target_object,
+            **refreshed_selected_target,
+            "id": refreshed_selected_target.get("item_id", target_object.get("id")),
+            "label": refreshed_selected_target.get("label", target_object.get("label", "")),
+        }
+        for key in (
+            "group_ranking",
+            "goal_pose_path",
+            "objects",
+            "num_matched_objects",
+            "primary_camera_id",
+            "center_world_coordinate_frame",
+        ):
+            updated.pop(key, None)
+        return updated
+
+    async def _update_item_info_node(
+        self,
+        state: CommanderState,
+        source_node: str,
+    ) -> Dict[str, Any]:
+        selected_target = dict(state.get("selected_target") or {})
+        base_update: Dict[str, Any] = {
+            "world_position_target_changed": False,
+            "world_position_update_source_node": source_node,
+            "world_position_update_distance_m": 0.0,
+            "world_position_update_reason": "unchanged",
+        }
+        if not selected_target:
+            return {
+                **base_update,
+                "world_position_update_reason": "no_selected_target",
+                "current_status": "WORLD_POSITION_UPDATE_SKIPPED",
+            }
+
+        if self.use_mock:
+            world_position_payload = selected_target.get("world_position_data") or {"data": json.dumps({"mock": []})}
+            world_position_db = self._world_position_db_from_candidates(
+                world_position_payload,
+                [selected_target],
+            )
+            return {
+                **base_update,
+                "world_position_db": world_position_db,
+                "world_position_db_updated_at": world_position_db["updated_at"],
+                "current_status": "WORLD_POSITION_UNCHANGED",
+            }
+
+        from .room_topics import get_topic_string_message
+        from .world_position import parse_world_position_payload
+
+        world_position_raw = await get_topic_string_message("/world_position_data", timeout_sec=5.0)
+        if not world_position_raw:
+            logger.error("[%s] Failed to read /world_position_data.", source_node)
+            return {
+                **base_update,
+                "world_position_update_reason": "read_failed",
+                "current_status": "WORLD_POSITION_UPDATE_READ_FAILED",
+            }
+
+        world_position_payload = {"data": world_position_raw}
+        try:
+            refreshed_candidates = parse_world_position_payload(world_position_payload)
+        except Exception as exc:
+            logger.error("[%s] Failed to parse /world_position_data: %s", source_node, exc, exc_info=True)
+            return {
+                **base_update,
+                "world_position_update_reason": "parse_failed",
+                "current_status": "WORLD_POSITION_UPDATE_PARSE_FAILED",
+            }
+
+        world_position_db = self._world_position_db_from_candidates(
+            world_position_payload,
+            refreshed_candidates,
+        )
+        refreshed_target = self._find_selected_world_position_candidate(
+            refreshed_candidates,
+            selected_target,
+        )
+        if not refreshed_target:
+            logger.warning(
+                "[%s] Selected target disappeared from /world_position_data: %s",
+                source_node,
+                selected_target.get("instance_key", "unknown"),
+            )
+            print("❌ 物品消失了。準備返回 home。")
+            return {
+                **base_update,
+                "world_position_db": world_position_db,
+                "world_position_db_updated_at": world_position_db["updated_at"],
+                "world_position_update_reason": "target_missing",
+                "agent_result": "物品消失了。",
+                "agent_success": False,
+                "current_status": "TARGET_LOST_IN_WORLD_POSITION",
+            }
+
+        previous_db = state.get("world_position_db", {}) or {}
+        previous_instances = previous_db.get("instances", {}) if isinstance(previous_db, dict) else {}
+        previous_target = previous_instances.get(refreshed_target.get("instance_key", ""))
+        label = str(
+            selected_target.get("label")
+            or (state.get("target_object", {}) or {}).get("label")
+            or refreshed_target.get("item_id")
+            or "目標物"
+        ).strip()
+        refreshed_selected_target = {
+            **selected_target,
+            **refreshed_target,
+            "label": label,
+            "world_position_data": world_position_payload,
+        }
+
+        if not previous_target:
+            return {
+                **base_update,
+                "selected_target": refreshed_selected_target,
+                "world_position_db": world_position_db,
+                "world_position_db_updated_at": world_position_db["updated_at"],
+                "world_position_update_reason": "db_created",
+                "current_status": "WORLD_POSITION_DB_CREATED",
+            }
+
+        moved_distance = self._center_world_distance_m(
+            previous_target.get("center_world", []),
+            refreshed_target.get("center_world", []),
+        )
+        threshold_m = float(os.getenv("WORLD_POSITION_UPDATE_THRESHOLD_M", "0.05"))
+        if moved_distance <= threshold_m:
+            return {
+                **base_update,
+                "world_position_update_distance_m": moved_distance,
+                "current_status": "WORLD_POSITION_UNCHANGED",
+            }
+
+        target_object = self._target_object_with_invalidated_item_info(
+            dict(state.get("target_object") or {}),
+            refreshed_selected_target,
+        )
+        logger.info(
+            "[%s] Target moved %.3f m (> %.3f m); routing back to get_item_info_no_sam3d_node.",
+            source_node,
+            moved_distance,
+            threshold_m,
+        )
+        return {
+            **base_update,
+            "selected_target": refreshed_selected_target,
+            "target_object": target_object,
+            "world_position_db": world_position_db,
+            "world_position_db_updated_at": world_position_db["updated_at"],
+            "world_position_target_changed": True,
+            "world_position_update_distance_m": moved_distance,
+            "world_position_update_reason": "target_moved",
+            "current_goal_rank": 1,
+            "nav_goal_pose": {},
+            "nav_plan_ready": False,
+            "nav_arrived": False,
+            "nav_attempt": 0,
+            "nav_move_events": [],
+            "latest_nav_result": {},
+            "latest_grasp_result": {},
+            "current_status": "WORLD_POSITION_TARGET_MOVED",
+        }
+
+    async def _update_item_info_1_node(self, state: CommanderState) -> Dict[str, Any]:
+        return await self._update_item_info_node(state, "update_item_info_1_node")
+
+    async def _update_item_info_2_node(self, state: CommanderState) -> Dict[str, Any]:
+        return await self._update_item_info_node(state, "update_item_info_2_node")
+
+    @staticmethod
     def _pick_primary_room_camera(
         candidate: Dict[str, Any],
         camera_images: Dict[str, str],
@@ -304,25 +581,35 @@ class Orchestrator:
             for candidate in raw_candidates
             if candidate.get("item_id") == requested_item_id
         ]
+        world_position_db = self._world_position_db_from_candidates(
+            world_position_payload,
+            raw_candidates,
+        )
+        world_position_db_update = {
+            "world_position_db": world_position_db,
+            "world_position_db_updated_at": world_position_db["updated_at"],
+            "world_position_target_changed": False,
+            "world_position_update_source_node": "find_node",
+            "world_position_update_distance_m": 0.0,
+            "world_position_update_reason": "db_created",
+        }
 
-        unique_camera_names: list[str] = []
-        seen_cameras: set[str] = set()
-        for candidate in matching_candidates:
-            for camera_name in candidate.get("camsrc", []) or []:
-                if camera_name in seen_cameras:
-                    continue
-                seen_cameras.add(camera_name)
-                unique_camera_names.append(camera_name)
+        world_camera_names = self._world_position_camera_names(raw_candidates)
         camera_images = (
             {}
             if self.use_mock
-            else await self._capture_room_camera_images(unique_camera_names, timeout_sec=10.0)
+            else await self._capture_room_camera_images(world_camera_names, timeout_sec=10.0)
         )
+        available_world_camera_names = [
+            camera_name
+            for camera_name in world_camera_names
+            if camera_images.get(camera_name)
+        ]
 
         yolo_detections: Dict[int, Dict[str, Any]] = {}
         for display_id, candidate in enumerate(matching_candidates, start=1):
             primary_camera, primary_bbox = self._pick_primary_room_camera(candidate, camera_images)
-            available_camera_names = [
+            target_camera_names = [
                 camera_name
                 for camera_name in candidate.get("camsrc", []) or []
                 if camera_images.get(camera_name)
@@ -343,7 +630,8 @@ class Orchestrator:
                 "camsrc": list(candidate.get("camsrc", [])),
                 "bboxes_by_camera": dict(candidate.get("bboxes_by_camera", {})),
                 "primary_camera": primary_camera,
-                "camera_names": available_camera_names,
+                "camera_names": available_world_camera_names,
+                "target_camera_names": target_camera_names,
                 "preview_path": preview_path,
                 "source": "mock_world_position" if self.use_mock else "world_position_data",
             }
@@ -374,6 +662,7 @@ class Orchestrator:
                 "selected_target": {},
                 "find_complete": True,
                 "current_status": "TARGET_NOT_FOUND",
+                **world_position_db_update,
             }
 
         while True:
@@ -393,6 +682,7 @@ class Orchestrator:
                     "selected_target": {},
                     "find_complete": True,
                     "current_status": "TARGET_NOT_FOUND",
+                    **world_position_db_update,
                 }
 
             try:
@@ -426,6 +716,7 @@ class Orchestrator:
             "selected_target": selected_target,
             "find_complete": True,
             "current_status": "TARGET_SELECTED_FROM_WORLD_POSITION",
+            **world_position_db_update,
         }
 
     # ------------------------------------------------------------------
@@ -439,19 +730,36 @@ class Orchestrator:
             return "end"
         return "get_item_info_no_sam3d_node"
 
+    @staticmethod
+    def _world_position_target_missing(state: CommanderState) -> bool:
+        return state.get("world_position_update_reason", "") == "target_missing"
+
+    def _route_update_item_info_1(self, state: CommanderState) -> str:
+        if self._world_position_target_missing(state):
+            return "nav_home_node"
+        if state.get("world_position_target_changed", False):
+            return "get_item_info_no_sam3d_node"
+        return "nav_node"
+
+    def _route_update_item_info_2(self, state: CommanderState) -> str:
+        if self._world_position_target_missing(state):
+            return "nav_home_node"
+        if state.get("world_position_target_changed", False):
+            return "get_item_info_no_sam3d_node"
+        return "car_grasp_node"
+
     # ------------------------------------------------------------------
     # Node: get_item_info_no_sam3d (runs once — retrieve full 3D info)
     # ------------------------------------------------------------------
 
     async def _get_item_info_no_sam3d_node(self, state: CommanderState) -> Dict[str, Any]:
         """
-        Takes the fully-prepared selected_target from find_node, refreshes the
-        exact instance from /world_position_data, and delegates multi-view
-        geometry estimation to GetItemInfoNoSam3DAgent.
+        Takes the fully-prepared selected_target from find_node/update_item_info
+        and delegates multi-view geometry estimation to GetItemInfoNoSam3DAgent.
         """
         from agents.get_item_info_agent_no_sam3d import GetItemInfoNoSam3DAgent
-        from .room_topics import get_topic_string_message, save_preview_bbox_annotated
-        from .world_position import find_instance
+        from .room_topics import save_preview_bbox_annotated
+        from .world_position import parse_world_position_payload
 
         target_obj = state.get("target_object", {}) or {}
         selected_target = dict(state.get("selected_target") or {})
@@ -460,55 +768,83 @@ class Orchestrator:
             print("❌ 失敗：find_node 沒有提供 selected_target。")
             return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
 
+        previous_world_position_db = state.get("world_position_db", {}) or {}
+        world_position_payload = (
+            selected_target.get("world_position_data")
+            or (
+                previous_world_position_db.get("payload")
+                if isinstance(previous_world_position_db, dict)
+                else None
+            )
+        )
+        if not world_position_payload:
+            logger.error("[get_item_info_no_sam3d_node] selected_target has no world_position_data.")
+            print("❌ 失敗：selected_target 沒有 world_position_data。")
+            return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+
         if self.use_mock:
-            world_position_payload = selected_target.get("world_position_data") or {"data": json.dumps({"mock": []})}
             refreshed_target = {
                 **selected_target,
                 "center_world": selected_target.get("center_world", [1.2, 0.4, 2.8]),
             }
-            camera_images = dict(selected_target.get("camera_images", {}) or {})
+            refreshed_candidates = [refreshed_target]
         else:
-            world_position_raw = await get_topic_string_message("/world_position_data", timeout_sec=5.0)
-            if not world_position_raw:
-                logger.error("[get_item_info_no_sam3d_node] Failed to refresh /world_position_data.")
-                print("❌ 失敗：進入 no_sam3d 前無法刷新 /world_position_data。")
-                return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
-            world_position_payload = {"data": world_position_raw}
             try:
-                refreshed_target = find_instance(
-                    world_position_payload,
-                    selected_target.get("item_id", ""),
-                    int(selected_target.get("instance_id", -1)),
-                )
+                refreshed_candidates = parse_world_position_payload(world_position_payload)
             except Exception as exc:
-                logger.error("[get_item_info_no_sam3d_node] Failed to parse refreshed /world_position_data: %s", exc, exc_info=True)
-                print("❌ 失敗：刷新後的 /world_position_data 格式無法解析。")
+                logger.error("[get_item_info_no_sam3d_node] Failed to parse state world_position_data: %s", exc, exc_info=True)
+                print("❌ 失敗：state 內的 world_position_data 格式無法解析。")
                 return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+
+            refreshed_target = self._find_selected_world_position_candidate(
+                refreshed_candidates,
+                selected_target,
+            )
             if not refreshed_target:
                 logger.error(
-                    "[get_item_info_no_sam3d_node] Instance disappeared. item=%s instance=%s",
-                    selected_target.get("item_id", ""),
-                    selected_target.get("instance_id", -1),
+                    "[get_item_info_no_sam3d_node] Selected target missing from state world_position_data: %s",
+                    selected_target.get("instance_key", "unknown"),
                 )
-                print("❌ 失敗：重新訂閱後找不到剛才選定的 instance。")
+                print("❌ 失敗：state 內找不到剛才選定的 instance。")
                 return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
-            camera_images = await self._capture_room_camera_images(
-                refreshed_target.get("camsrc", []) or [],
+
+        world_camera_names = self._world_position_camera_names(refreshed_candidates)
+        if not world_camera_names:
+            world_camera_names = list(selected_target.get("camera_names", []) or [])
+        camera_images = (
+            dict(selected_target.get("camera_images", {}) or {})
+            if self.use_mock
+            else await self._capture_room_camera_images(
+                world_camera_names,
                 timeout_sec=10.0,
             )
+        )
+        world_position_db = self._world_position_db_from_candidates(
+            world_position_payload,
+            refreshed_candidates,
+        )
 
         primary_camera, primary_bbox = self._pick_primary_room_camera(refreshed_target, camera_images)
-        available_cameras = [
+        target_available_cameras = [
             camera_name
             for camera_name in refreshed_target.get("camsrc", []) or []
             if camera_images.get(camera_name)
         ]
+        available_cameras = [
+            camera_name
+            for camera_name in (world_camera_names if not self.use_mock else target_available_cameras)
+            if camera_images.get(camera_name)
+        ]
         if not self.use_mock and not available_cameras:
-            logger.error("[get_item_info_no_sam3d_node] No usable room-camera images for %s.", refreshed_target.get("instance_key", "unknown"))
+            logger.error("[get_item_info_no_sam3d_node] No usable room-camera images for refreshed /world_position_data.")
+            print("❌ 失敗：/world_position_data 內的物件沒有任何可用的房間相機影像。")
+            return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
+        if not self.use_mock and not target_available_cameras:
+            logger.error("[get_item_info_no_sam3d_node] No usable target room-camera images for %s.", refreshed_target.get("instance_key", "unknown"))
             print("❌ 失敗：選定目標沒有任何可用的房間相機影像。")
             return {"current_status": "ITEM_INFO_NO_SAM3D_FAILED"}
-        if not primary_camera and available_cameras:
-            primary_camera = available_cameras[0]
+        if not primary_camera and target_available_cameras:
+            primary_camera = target_available_cameras[0]
 
         preview_path = str(selected_target.get("preview_path", "") or "")
         if primary_camera and primary_bbox and camera_images.get(primary_camera):
@@ -530,6 +866,7 @@ class Orchestrator:
             "target_label": label,
             "selected_camera": primary_camera,
             "camera_names": available_cameras,
+            "target_camera_names": target_available_cameras,
             "camera_images": {
                 camera_name: camera_images[camera_name]
                 for camera_name in available_cameras
@@ -578,6 +915,7 @@ class Orchestrator:
             "selected_camera": primary_camera,
             "primary_camera": primary_camera,
             "camera_names": available_cameras,
+            "target_camera_names": target_available_cameras,
             "camera_images": {
                 camera_name: camera_images[camera_name]
                 for camera_name in available_cameras
@@ -597,6 +935,8 @@ class Orchestrator:
         current_rank = int(state.get("current_goal_rank", 1) or 1)
         if current_rank < 1:
             current_rank = 1
+        item_info_refresh_count = int(state.get("item_info_refresh_count", 0) or 0)
+        should_publish_initialpose = item_info_refresh_count == 0
         goal_pose, goal_pose_err = self._goal_pose_for_rank(target_object, current_rank)
         if goal_pose_err:
             logger.warning(
@@ -619,7 +959,14 @@ class Orchestrator:
             "current_goal_rank": current_rank,
             "nav_goal_pose": goal_pose if not goal_pose_err else {},
             "nav_move_source": "bootstrap",
-            "force_initialpose": True,
+            "force_initialpose": should_publish_initialpose,
+            "item_info_refresh_count": item_info_refresh_count + 1,
+            "world_position_db": world_position_db,
+            "world_position_db_updated_at": world_position_db["updated_at"],
+            "world_position_target_changed": False,
+            "world_position_update_source_node": "get_item_info_no_sam3d_node",
+            "world_position_update_distance_m": 0.0,
+            "world_position_update_reason": "item_info_refreshed",
             "current_status": "ITEM_INFO_NO_SAM3D_READY",
         }
 
@@ -706,14 +1053,50 @@ class Orchestrator:
 
     async def _nav_node(self, state: CommanderState) -> Dict[str, Any]:
         """Prepare navigation context and delegate execution to nav_move_node."""
+        module_params = state.get("module_params", {}) or {}
+        target_object = state.get("target_object", {}) or {}
         current_rank = int(state.get("current_goal_rank", 1) or 1)
         if current_rank < 1:
             current_rank = 1
-        goal_data, err = self._goal_pose_for_rank(state.get("target_object", {}), current_rank)
+
+        requested_rank = None
+        for key in ("goal_rank", "target_rank", "current_goal_rank", "rank"):
+            if key not in module_params:
+                continue
+            try:
+                requested_rank = int(module_params[key])
+            except (TypeError, ValueError):
+                continue
+            break
+
+        if requested_rank is not None:
+            current_rank = max(1, requested_rank)
+        else:
+            latest_nav = state.get("latest_nav_result", {}) or {}
+            previous_nav_rank = int(latest_nav.get("rank", 0) or 0) or current_rank
+            previous_nav_arrived = bool(latest_nav.get("arrived", False)) or bool(
+                state.get("nav_arrived", False)
+            )
+            if previous_nav_arrived and previous_nav_rank == current_rank:
+                next_rank = current_rank + 1
+                logger.info(
+                    "[nav_node] nav_agent requested a new observation position; "
+                    "advancing goal rank %s -> %s",
+                    current_rank,
+                    next_rank,
+                )
+                print(
+                    f"\n🔁 nav_agent 切換觀察點：rank {current_rank} -> {next_rank}",
+                    flush=True,
+                )
+                current_rank = next_rank
+
+        goal_data, err = self._goal_pose_for_rank(target_object, current_rank)
         update: Dict[str, Any] = {
+            "call_module": "nav_agent",
             "current_goal_rank": current_rank,
             "nav_move_source": "reason_loop",
-            "force_initialpose": bool(state.get("module_params", {}).get("force_initialpose", False)),
+            "force_initialpose": bool(module_params.get("force_initialpose", False)),
             "current_status": "NAV_CONTEXT_READY",
         }
         if err:
@@ -769,6 +1152,29 @@ class Orchestrator:
         rank = int(state.get("current_goal_rank", 1) or 1)
         if rank < 1:
             rank = 1
+        if rank > len(group_ranking):
+            last_error = f"rank={rank} out of range; no remaining goal_pose candidates"
+            logger.error(f"[nav_move_node] {last_error}")
+            return {
+                "current_goal_rank": rank,
+                "nav_attempt": 0,
+                "nav_goal_pose": {},
+                "nav_plan_ready": False,
+                "nav_arrived": False,
+                "nav_move_events": [
+                    {
+                        "event": "navigation_failed",
+                        "detail": last_error,
+                        "rank": rank,
+                        "attempt": 0,
+                        "source": source,
+                    }
+                ],
+                "agent_result": f"[NAV] {last_error}",
+                "agent_success": False,
+                "current_status": "NAV_FAILED",
+                "_exec_latency": time.time() - start_t,
+            }
 
         force_initialpose = bool(state.get("force_initialpose", False))
         all_events = []

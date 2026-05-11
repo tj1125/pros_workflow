@@ -15,7 +15,7 @@ pybullet:
   urdf_name: target.urdf
   gui: false
   view_world: false
-  initial_height: 0.21
+  initial_height: 0.0
   base_orientation_euler_deg: [0.0, 0.0, 0.0]
   controllable_joints: 5
   end_eff_index: [4, 8]

@@ -67,6 +67,15 @@ class CommanderState(TypedDict):
     # Fully-prepared target selected by find_node for get_item_info_no_sam3d_node
     selected_target: Dict[str, Any]
 
+    # Latest /world_position_data snapshot DB keyed by instance_key
+    world_position_db: Dict[str, Any]
+    world_position_db_updated_at: float
+    world_position_target_changed: bool
+    world_position_update_source_node: str
+    world_position_update_distance_m: float
+    world_position_update_reason: str
+    item_info_refresh_count: int
+
     # 1-based index pointing to the rank of the current goal pose to attempt
     current_goal_rank: int
 
@@ -131,6 +140,13 @@ def create_initial_state(
         "target_object": {},
         "candidate_objects": [],
         "selected_target": {},
+        "world_position_db": {},
+        "world_position_db_updated_at": 0.0,
+        "world_position_target_changed": False,
+        "world_position_update_source_node": "",
+        "world_position_update_distance_m": 0.0,
+        "world_position_update_reason": "",
+        "item_info_refresh_count": 0,
         "find_complete": False,
         "yolo_detections": {},
         "selected_detection_id": 0,
