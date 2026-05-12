@@ -39,7 +39,7 @@ class Orchestrator:
             input_node → find_node → get_item_info_no_sam3d_node → nav_move_node
                                                      └─[failed/no goal]→ nav_home_node
             nav_move_node → observe_node → reason_node
-            reason_node --[minor_nav_node]--> update_item_info_1_node → minor_nav_node → nav_move_node → update_memory_node
+            reason_node --[minor_nav_node]--> update_item_info_1_node → minor_nav_node → update_memory_node
             reason_node --[major_nav_node]--> update_item_info_3_node → major_nav_node → nav_move_node → update_memory_node
             minor_nav_node --[minor exhausted]→ major_nav_node
             major_nav_node --[no next rank]→ nav_home_node → END
@@ -156,7 +156,7 @@ class Orchestrator:
             "minor_nav_node",
             self._route_minor_nav,
             {
-                "nav_move_node": "nav_move_node",
+                "update_memory_node": "update_memory_node",
                 "major_nav_node": "major_nav_node",
             },
         )
@@ -1257,7 +1257,8 @@ class Orchestrator:
         return goal_pose, ""
 
     async def _minor_nav_node(self, state: CommanderState) -> Dict[str, Any]:
-        """Navigate to the next confidence-ranked goal pose within the current rank."""
+        """Directly drive to the next confidence-ranked goal pose within the current rank."""
+        start_t = time.time()
         current_rank = int(state.get("current_goal_rank", 1) or 1)
         if current_rank < 1:
             current_rank = 1
@@ -1281,15 +1282,101 @@ class Orchestrator:
                 "agent_success": False,
             }
 
+        goal_data.update(
+            {
+                "goal_rank": current_rank,
+                "goal_pose_index": next_index,
+                "goal_pose_source": "minor_nav",
+            }
+        )
+        goal_pose_source = "minor_nav"
+        print(
+            f"\n🔁 minor_nav_node：rank {current_rank} goal_pose_index {current_index} -> {next_index}，直接移動。",
+            flush=True,
+        )
+
+        if self.use_mock:
+            await asyncio.sleep(0.2)
+            mock_events = [
+                {
+                    "event": "rule_navigation_started",
+                    "rank": current_rank,
+                    "goal_pose_index": next_index,
+                    "goal_pose_source": goal_pose_source,
+                    "source": "minor_nav",
+                    "direct_control": True,
+                },
+                {
+                    "event": "arrived",
+                    "rank": current_rank,
+                    "goal_pose_index": next_index,
+                    "goal_pose_source": goal_pose_source,
+                    "source": "minor_nav",
+                    "direct_control": True,
+                },
+            ]
+            return {
+                "call_module": "nav_agent",
+                "current_goal_rank": current_rank,
+                "current_goal_pose_index": next_index,
+                "nav_goal_pose": goal_data,
+                "nav_goal_pose_source": goal_pose_source,
+                "nav_move_source": "minor_nav",
+                "force_initialpose": False,
+                "nav_attempt": 1,
+                "nav_plan_ready": False,
+                "nav_arrived": True,
+                "nav_move_events": mock_events,
+                "agent_result": (
+                    f"[MOCK_MINOR_NAV] Directly moved to rank {current_rank}, "
+                    f"goal_pose_index {next_index}."
+                ),
+                "agent_success": True,
+                "current_status": "MINOR_NAV_COMPLETED",
+                "_exec_latency": time.time() - start_t,
+            }
+
+        payload = {
+            "goal_pose": goal_data,
+            "rank": current_rank,
+            "goal_pose_index": next_index,
+            "goal_pose_source": goal_pose_source,
+            "source": "minor_nav",
+        }
+        result = await self._run_minor_rule_nav_runner(payload)
+        events = result.get("events", []) if isinstance(result, dict) else []
+        nav_result = result.get("nav_result", {}) if isinstance(result, dict) else {}
+        success = bool(result.get("success", False)) if isinstance(result, dict) else False
+        message = (
+            result.get("message")
+            if isinstance(result, dict)
+            else "minor_nav rule navigation failed."
+        )
+        if not message and isinstance(nav_result, dict):
+            message = nav_result.get("message")
+        if not message:
+            message = (
+                f"[MINOR_NAV] Arrived at rank {current_rank}, goal_pose_index {next_index}."
+                if success
+                else f"[MINOR_NAV] Failed at rank {current_rank}, goal_pose_index {next_index}."
+            )
+
         return {
             "call_module": "nav_agent",
             "current_goal_rank": current_rank,
             "current_goal_pose_index": next_index,
             "nav_goal_pose": goal_data,
-            "nav_goal_pose_source": "minor_nav",
+            "nav_goal_pose_source": goal_pose_source,
             "nav_move_source": "minor_nav",
             "force_initialpose": False,
-            "current_status": "MINOR_NAV_CONTEXT_READY",
+            "nav_attempt": 1,
+            "nav_plan_ready": False,
+            "nav_arrived": success,
+            "nav_move_events": events,
+            "agent_result": message,
+            "agent_success": success,
+            "current_status": "MINOR_NAV_COMPLETED" if success else "MINOR_NAV_FAILED",
+            "_exec_latency": time.time() - start_t,
         }
 
     async def _major_nav_node(self, state: CommanderState) -> Dict[str, Any]:
@@ -1334,10 +1421,10 @@ class Orchestrator:
             "current_status": "MAJOR_NAV_CONTEXT_READY",
         }
 
-    def _route_minor_nav(self, state: CommanderState) -> Literal["nav_move_node", "major_nav_node"]:
+    def _route_minor_nav(self, state: CommanderState) -> Literal["update_memory_node", "major_nav_node"]:
         if state.get("current_status", "") == "MINOR_NAV_EXHAUSTED":
             return "major_nav_node"
-        return "nav_move_node"
+        return "update_memory_node"
 
     def _route_major_nav(self, state: CommanderState) -> Literal["nav_move_node", "nav_home_node"]:
         if state.get("current_status", "") == "MAJOR_NAV_EXHAUSTED" or state.get("task_complete", False):
@@ -2237,6 +2324,111 @@ class Orchestrator:
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.06853892060437211,
             ],
+        }
+
+    async def _run_minor_rule_nav_runner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        import shlex
+
+        safe_payload = shlex.quote(json.dumps(payload, ensure_ascii=False))
+        timeout_sec = float(os.getenv("MINOR_NAV_RULE_RUNNER_TIMEOUT_SEC", "180"))
+        repo_root = Path(__file__).resolve().parent.parent
+        python_bin = (
+            os.getenv("MINOR_NAV_RULE_PYTHON_BIN")
+            or os.getenv("ROS_PYTHON_BIN")
+            or "/usr/bin/python3"
+        )
+        ros_domain_id = os.getenv("ROS_DOMAIN_ID", "1")
+        setup_scripts = [
+            os.getenv("ROS_SETUP_BASH", "/opt/ros/humble/setup.bash"),
+            os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/install/setup.bash"),
+        ]
+        parts = [
+            "unset VIRTUAL_ENV PYTHONHOME PYTHONPATH",
+            "export PYTHONDONTWRITEBYTECODE=1",
+        ]
+        for setup_script in setup_scripts:
+            if setup_script:
+                quoted_script = shlex.quote(setup_script)
+                parts.append(f"if [ -f {quoted_script} ]; then source {quoted_script}; fi")
+        parts.extend(
+            [
+                f"export ROS_DOMAIN_ID={shlex.quote(ros_domain_id)}",
+                f"cd {shlex.quote(str(repo_root))}",
+                (
+                    "exec "
+                    f"{shlex.quote(python_bin)} "
+                    "-m commander.minor_nav_rule_runner "
+                    f"--payload {safe_payload}"
+                ),
+            ]
+        )
+        cmd = " && ".join(parts)
+
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            executable="/bin/bash",
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            message = f"minor_nav_rule_runner timed out after {timeout_sec:.1f}s"
+            logger.error("[minor_nav_node] %s", message)
+            return {
+                "success": False,
+                "plan_ready": False,
+                "message": message,
+                "events": [],
+                "nav_result": {"success": False, "phase": "timeout", "message": message},
+            }
+
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            err_msg = stderr_text or "minor_nav_rule_runner failed"
+            logger.error("[minor_nav_node] runner exit=%s: %s", proc.returncode, err_msg)
+            return {
+                "success": False,
+                "plan_ready": False,
+                "message": err_msg,
+                "events": [],
+                "nav_result": {
+                    "success": False,
+                    "phase": "subprocess_failed",
+                    "message": err_msg,
+                },
+            }
+
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        try:
+            result = json.loads(stdout_text or "{}")
+        except json.JSONDecodeError:
+            logger.error("[minor_nav_node] runner returned non-JSON output: %s", stdout_text)
+            return {
+                "success": False,
+                "plan_ready": False,
+                "message": "Invalid minor_nav_rule_runner output",
+                "events": [],
+                "nav_result": {
+                    "success": False,
+                    "phase": "invalid_subprocess_json",
+                    "message": "Invalid minor_nav_rule_runner output",
+                },
+            }
+        if stderr_text:
+            logger.info("[minor_nav_node] runner log:\n%s", stderr_text[-4000:])
+        return result if isinstance(result, dict) else {
+            "success": False,
+            "plan_ready": False,
+            "message": "minor_nav_rule_runner returned non-object JSON",
+            "events": [],
+            "nav_result": {
+                "success": False,
+                "phase": "invalid_subprocess_payload",
+                "message": "minor_nav_rule_runner returned non-object JSON",
+            },
         }
 
     async def _run_nav_move_runner(self, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -186,7 +186,7 @@ flowchart TD
   UpdateInfoMinor -- minor --> MinorNav[minor_nav_node: 同 rank 下一個 goal_pose]
   UpdateInfoMajor -- major --> MajorNav[major_nav_node: 下一 rank best goal_pose]
   MinorNav -- 無下一個 goal_pose --> MajorNav[major_nav_node: 下一 rank best goal_pose]
-  MinorNav -- 有候選 --> NavMove[nav_move_node: 執行導航]
+  MinorNav -- 有候選/直接移動 --> Memory[update_memory_node]
   MajorNav -- 有下一 rank --> NavMove
   MajorNav -- 無下一 rank --> Done
   Route -- 輕微遮擋 --> View[view_node: 微調視角]

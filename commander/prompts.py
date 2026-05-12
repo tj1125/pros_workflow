@@ -16,6 +16,10 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 Disabled modules: arm_approach_agent and view_agent are removed from the commander graph.
 NEVER output arm_approach_agent or view_agent.
 
+Important: visible does not mean reachable. If a non-target object sits between
+the gripper and the target object, the path is obstructed and you must choose
+minor_nav_node or major_nav_node instead of grasp_agent.
+
 - **minor_nav_node** (Minor Navigation):
   Move the robot base to the next confidence-ranked goal_pose within the current rank.
   TRIGGER: There is a minor obstruction between the gripper and the target object.
@@ -59,8 +63,8 @@ NEVER output arm_approach_agent or view_agent.
 
 ## Decision Priority
 1. If latest car_approach_agent succeeded → DONE
-2. If the gripper-to-target path has minor obstruction → minor_nav_node
-3. If the gripper-to-target path has severe obstruction → major_nav_node
+2. If the gripper-to-target path has severe obstruction → major_nav_node
+3. If the gripper-to-target path has minor obstruction → minor_nav_node
 4. If path is CLEAR → grasp_agent
 5. If grasp pose is ready and base approach is not complete → car_approach_agent
 
