@@ -25,7 +25,6 @@ class BrainDecision(BaseModel):
     )
     call_module: Literal[
         "nav_agent",
-        "minor_nav_node",
         "major_nav_node",
         "grasp_agent",
         "car_approach_agent",

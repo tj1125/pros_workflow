@@ -29,7 +29,7 @@ class CommanderState(TypedDict):
     # VLM reasoning output
     reasoning: str
 
-    # Target module/node to invoke (minor_nav_node / major_nav_node / grasp_agent / car_approach_agent / DONE)
+    # Target module/node to invoke (major_nav_node / grasp_agent / car_approach_agent / DONE)
     call_module: str
 
     # Parameters to pass into the target agent
@@ -91,7 +91,7 @@ class CommanderState(TypedDict):
     # User-selected detection ID (0 = user typed "no")
     selected_detection_id: int
 
-    # nav_move routing source: bootstrap, minor_nav, major_nav, or nav_home
+    # nav_move routing source: bootstrap, major_nav, nav_home, or reason_loop
     nav_move_source: str
 
     # Computed goal pose for navigation runner

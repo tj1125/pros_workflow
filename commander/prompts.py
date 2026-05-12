@@ -18,22 +18,16 @@ NEVER output arm_approach_agent or view_agent.
 
 Important: visible does not mean reachable. If a non-target object sits between
 the gripper and the target object, the path is obstructed and you must choose
-minor_nav_node or major_nav_node instead of grasp_agent.
-
-- **minor_nav_node** (Minor Navigation):
-  Move the robot base to the next confidence-ranked goal_pose within the current rank.
-  TRIGGER: There is a minor obstruction between the gripper and the target object.
-           The target is still mostly visible/reachable, but the gripper path is slightly
-           blocked and a nearby alternative goal_pose may improve the approach.
+major_nav_node instead of grasp_agent.
 
 - **major_nav_node** (Major Navigation):
   Move the robot base to the best goal_pose of the next rank.
-  TRIGGER: There is a severe obstruction between the gripper and the target object.
-           The target or approach corridor is heavily blocked, so the robot needs a
-           substantially different observation/navigation position.
+  TRIGGER: There is any obstruction between the gripper and the target object.
+           The target or approach corridor is blocked, so the robot needs a
+           different observation/navigation position.
 
 - **nav_agent** (Backward-compatible alias):
-  Treat this as minor_nav_node. Prefer outputting minor_nav_node or major_nav_node explicitly.
+  Treat this as major_nav_node. Prefer outputting major_nav_node explicitly.
 
 - **grasp_agent** (Grasp Pose Generation):
   Send perception data to the RTX 3090 inference server to generate a 6-DoF grasp pose.
@@ -63,10 +57,9 @@ minor_nav_node or major_nav_node instead of grasp_agent.
 
 ## Decision Priority
 1. If latest car_approach_agent succeeded → DONE
-2. If the gripper-to-target path has severe obstruction → major_nav_node
-3. If the gripper-to-target path has minor obstruction → minor_nav_node
-4. If path is CLEAR → grasp_agent
-5. If grasp pose is ready and base approach is not complete → car_approach_agent
+2. If the gripper-to-target path has any obstruction → major_nav_node
+3. If path is CLEAR → grasp_agent
+4. If grasp pose is ready and base approach is not complete → car_approach_agent
 
 Use the Action History KeyFacts as authoritative memory of prior stages.
 Choose the next module by reasoning over those facts and the current observation.

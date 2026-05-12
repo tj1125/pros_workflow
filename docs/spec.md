@@ -175,27 +175,19 @@ flowchart TD
   Loop --> Obs[拍照 observe_node]
   Obs --> Reason[VLM 推理 reason_node]
   Reason --> Route{決定動作}
-  Route -- minor_nav_node --> UpdateInfoMinor[update_item_info_1_node: 檢查 /world_position_data]
-  Route -- major_nav_node --> UpdateInfoMajor[update_item_info_3_node: 檢查 /world_position_data]
-  UpdateInfoMinor -- 目標移動 --> ItemInfo[get_item_info_no_sam3d_node: 重算 goal_pose]
+  Route -- 遮擋 / major_nav_node --> UpdateInfoMajor[update_item_info_1_node: 檢查 /world_position_data]
   UpdateInfoMajor -- 目標移動 --> ItemInfo
   ItemInfo -- 有 goal_pose --> NavMove[nav_move_node: 執行導航]
   ItemInfo -- 失敗/無 goal_pose --> Home
-  UpdateInfoMinor -- 目標消失 --> Home[nav_home_node]
-  UpdateInfoMajor -- 目標消失 --> Home
-  UpdateInfoMinor -- minor --> MinorNav[minor_nav_node: 同 rank 下一個 goal_pose]
+  UpdateInfoMajor -- 目標消失 --> Home[nav_home_node]
   UpdateInfoMajor -- major --> MajorNav[major_nav_node: 下一 rank best goal_pose]
-  MinorNav -- 無下一個 goal_pose --> MajorNav[major_nav_node: 下一 rank best goal_pose]
-  MinorNav -- 有候選/直接移動 --> Memory[update_memory_node]
   MajorNav -- 有下一 rank --> NavMove
   MajorNav -- 無下一 rank --> Done
-  Route -- 輕微遮擋 --> View[view_node: 微調視角]
   Route -- 路徑暢通 --> Grasp[grasp_node: 生成抓取位姿]
   Route -- 位姿確定 --> Approach[approach_node: 引導夾爪]
   Route -- 任務完成 --> Done[結束]
   NavMove --> Memory[update_memory_node]
   Home --> Done
-  View --> Memory
   Grasp --> Memory
   Approach --> Memory
   Memory --> Loop
