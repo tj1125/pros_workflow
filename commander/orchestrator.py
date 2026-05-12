@@ -11,7 +11,9 @@ from typing import Any, Dict, Literal
 
 import httpx
 import yaml
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
+from pydantic import BaseModel, Field
 
 from .brain import Brain
 from .logger import TraceLogger
@@ -23,6 +25,7 @@ from .state import CommanderState
 
 logger = logging.getLogger(__name__)
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+_GOODBYE_TOKENS = {"bye", "exit", "quit", "q", "再見", "掰掰", "結束"}
 
 
 def _load_graspable_objects() -> list[dict[str, Any]]:
@@ -30,20 +33,43 @@ def _load_graspable_objects() -> list[dict[str, Any]]:
         return yaml.safe_load(handle).get("graspable_objects", [])
 
 
+class TaskClassification(BaseModel):
+    """Structured output for routing human replies before robot tasks."""
+
+    intent: Literal["general_chat", "specific_task"] = Field(
+        description="Route to general_chat for casual conversation, specific_task for picking tasks."
+    )
+    selected_object_index: int = Field(
+        default=0,
+        description="1-based index from the provided object list; 0 if no valid object was selected.",
+    )
+    reasoning: str = Field(default="", description="Short reason for the classification.")
+
+
+class ChatReply(BaseModel):
+    """Structured output for a concise general chat response."""
+
+    reply: str = Field(description="Assistant reply to the user's general chat message.")
+
+
 class Orchestrator:
     """
     Builds and runs the LangGraph decision graph.
 
     Graph topology:
+        greeting_node → human_reply_node → task_classification_node
+            ├─[general_chat]→ ai_reply_node → chat_memory_node → human_reply_node
+            ├─[specific_task]→ input_node
+            └─[bye]→ goodbye_node → END
         observe_node → reason_node
             input_node → find_node → get_item_info_no_sam3d_node → nav_move_node
-                                                     └─[failed/no goal]→ nav_home_node
+                                                     └─[failed/no goal]→ nav_home_node → goodbye_node → END
             nav_move_node → observe_node → reason_node
             reason_node --[major_nav_node]--> update_item_info_1_node → major_nav_node → nav_move_node → update_memory_node
-            major_nav_node --[no next rank]→ nav_home_node → END
+            major_nav_node --[no next rank]→ nav_home_node → goodbye_node → END
             reason_node --[grasp_agent]-----> update_item_info_2_node → car_grasp_node → car_approach_node → update_memory_node → observe_node
             reason_node --[car_approach_agent]--> update_item_info_2_node ┘
-            reason_node --[DONE]-----------> nav_home_node → END
+            reason_node --[DONE]-----------> nav_home_node → goodbye_node → END
 
     grasp_node: 擷取 RGBD、呼叫 GraspAgent，取得 6-DoF 抓取位姿並寫入 latest_grasp_result。
     car_approach_node: 讀取 latest_grasp_result，呼叫 CarApproachAgent 移動車體至接近點。
@@ -54,7 +80,40 @@ class Orchestrator:
         self.brain = Brain(use_mock=use_mock)
         self.http_client = httpx.AsyncClient(timeout=120.0)
         self.use_mock = use_mock
+        self._classifier_model = None
+        self._chat_model = None
+        if not use_mock:
+            self._init_ollama_chat_models()
         self.graph = self._build_graph()
+
+    def _init_ollama_chat_models(self) -> None:
+        """Initialise small Ollama models for chat routing and general chat."""
+        from langchain_openai import ChatOpenAI
+
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        classifier_model_name = os.getenv("OLLAMA_CLASSIFIER_MODEL", "gemma3:1b")
+        chat_model_name = os.getenv(
+            "OLLAMA_CHAT_MODEL",
+            os.getenv("OLLAMA_MODEL", "gemma4:31b"),
+        )
+        self._classifier_model = ChatOpenAI(
+            model=classifier_model_name,
+            openai_api_key="ollama",
+            openai_api_base=f"{base_url}/v1",
+            temperature=0,
+        ).with_structured_output(TaskClassification)
+        self._chat_model = ChatOpenAI(
+            model=chat_model_name,
+            openai_api_key="ollama",
+            openai_api_base=f"{base_url}/v1",
+            temperature=0.7,
+        ).with_structured_output(ChatReply)
+        logger.info(
+            "[Orchestrator] Ollama chat models ready: classifier=%s chat=%s @ %s",
+            classifier_model_name,
+            chat_model_name,
+            base_url,
+        )
 
     # ------------------------------------------------------------------
     # Graph construction
@@ -62,6 +121,14 @@ class Orchestrator:
 
     def _build_graph(self) -> Any:
         workflow = StateGraph(CommanderState)
+
+        # Conversation gateway nodes
+        workflow.add_node("greeting_node", self._greeting_node)
+        workflow.add_node("human_reply_node", self._human_reply_node)
+        workflow.add_node("task_classification_node", self._task_classification_node)
+        workflow.add_node("ai_reply_node", self._ai_reply_node)
+        workflow.add_node("chat_memory_node", self._chat_memory_node)
+        workflow.add_node("goodbye_node", self._goodbye_node)
 
         # Core nodes
         workflow.add_node("input_node", self._input_node)
@@ -81,12 +148,16 @@ class Orchestrator:
         workflow.add_node("get_item_info_no_sam3d_node", self._get_item_info_no_sam3d_node)
 
         # Entry point
-        workflow.set_entry_point("input_node")
+        workflow.set_entry_point("greeting_node")
 
         # Fixed edges
+        workflow.add_edge("greeting_node", "human_reply_node")
+        workflow.add_edge("ai_reply_node", "chat_memory_node")
+        workflow.add_edge("chat_memory_node", "human_reply_node")
+        workflow.add_edge("goodbye_node", END)
         workflow.add_edge("input_node", "find_node")
         workflow.add_edge("observe_node", "reason_node")
-        workflow.add_edge("nav_home_node", END)
+        workflow.add_edge("nav_home_node", "goodbye_node")
         
         # Grasp nodes statically route to their respective approach nodes
         workflow.add_edge("car_grasp_node", "car_approach_node")
@@ -94,11 +165,31 @@ class Orchestrator:
         
         workflow.add_edge("update_memory_node", "observe_node")
 
-        # find_node → get_item_info_no_sam3d_node or END
+        workflow.add_conditional_edges(
+            "human_reply_node",
+            self._route_human_reply,
+            {
+                "task_classification_node": "task_classification_node",
+                "goodbye_node": "goodbye_node",
+            },
+        )
+        workflow.add_conditional_edges(
+            "task_classification_node",
+            self._route_task_classification,
+            {
+                "ai_reply_node": "ai_reply_node",
+                "input_node": "input_node",
+            },
+        )
+
+        # find_node → get_item_info_no_sam3d_node or goodbye_node
         workflow.add_conditional_edges(
             "find_node",
             self._route_find,
-            {"get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node", "end": END},
+            {
+                "get_item_info_no_sam3d_node": "get_item_info_no_sam3d_node",
+                "end": "goodbye_node",
+            },
         )
         workflow.add_conditional_edges(
             "get_item_info_no_sam3d_node",
@@ -128,7 +219,7 @@ class Orchestrator:
             },
         )
 
-        # reason_node → update_item_info_*_node → agent node or END
+        # reason_node → update_item_info_*_node → agent node or nav_home_node
         workflow.add_conditional_edges(
             "reason_node",
             self._route_decision,
@@ -158,6 +249,470 @@ class Orchestrator:
         return workflow.compile()
 
     # ------------------------------------------------------------------
+    # Conversation gateway nodes
+    # ------------------------------------------------------------------
+
+    def _node_execution_log(
+        self,
+        state: CommanderState,
+        node_name: str,
+        status: str,
+        started_at: float,
+        *,
+        success: bool = True,
+        reasoning: str = "",
+        extra_info: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        trace_id = uuid.uuid4().hex
+        latency = time.time() - started_at
+        payload = {
+            "trace_id": trace_id,
+            "node_name": node_name,
+            "status": status,
+            "success": success,
+            "latency_sec": round(latency, 4),
+            "reasoning": reasoning,
+            "extra_info": extra_info or {},
+        }
+        self.logger.log_trace(
+            agent_called=node_name,
+            reasoning=reasoning,
+            decision_latency=latency,
+            execution_latency=0.0,
+            success=success,
+            context_id=state.get("context_id", ""),
+            trace_id=trace_id,
+            extra_info=payload["extra_info"],
+        )
+        return payload
+
+    async def _greeting_node(self, state: CommanderState) -> Dict[str, Any]:
+        started_at = time.time()
+        status = "GREETING_SENT"
+        message = "嗨～有什麼需要幫忙的嗎？"
+        print("\n嗨～有什麼需要幫忙的嗎？", flush=True)
+        return {
+            "current_status": status,
+            "node_execution_log": self._node_execution_log(
+                state,
+                "greeting_node",
+                status,
+                started_at,
+                reasoning="Greeting displayed to the human.",
+                extra_info={"message": message},
+            ),
+        }
+
+    async def _human_reply_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Read the next human reply for either general chat or task routing."""
+        started_at = time.time()
+        existing_task = state.get("task_description", "").strip()
+        existing_reply = state.get("human_reply", "").strip()
+        if existing_task and not existing_reply:
+            status = "HUMAN_REPLY_PREFILLED"
+            logger.info("[human_reply_node] Using pre-filled task_description as human reply.")
+            return {
+                "human_reply": existing_task,
+                "task_intent": "specific_task",
+                "current_status": status,
+                "node_execution_log": self._node_execution_log(
+                    state,
+                    "human_reply_node",
+                    status,
+                    started_at,
+                    reasoning="Used pre-filled task_description as the human reply.",
+                    extra_info={"human_reply": existing_task, "source": "task_description"},
+                ),
+            }
+
+        loop = asyncio.get_event_loop()
+        try:
+            reply = await loop.run_in_executor(None, lambda: input("> "))
+        except EOFError:
+            reply = "bye"
+
+        reply = reply.strip()
+        status = "HUMAN_REPLY_RECEIVED"
+        logger.info("[human_reply_node] Human reply received.")
+        return {
+            "human_reply": reply,
+            "current_status": status,
+            "node_execution_log": self._node_execution_log(
+                state,
+                "human_reply_node",
+                status,
+                started_at,
+                reasoning="Human reply received from stdin.",
+                extra_info={"human_reply": reply},
+            ),
+        }
+
+    async def _task_classification_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Classify the human reply into general chat or a specific picking task."""
+        started_at = time.time()
+        human_reply = state.get("human_reply", "").strip()
+        objects = _load_graspable_objects()
+        configured_objects = [
+            {
+                "index": idx,
+                "id": obj.get("id", ""),
+                "label": obj.get("label", ""),
+            }
+            for idx, obj in enumerate(objects, 1)
+        ]
+
+        if state.get("current_status", "") == "HUMAN_REPLY_PREFILLED":
+            selected_index = self._infer_object_index(human_reply, objects)
+            status = "TASK_CLASSIFIED"
+            reasoning = "Pre-filled task_description is treated as a robot task."
+            return {
+                "task_intent": "specific_task",
+                "selected_object_index": selected_index,
+                "reasoning": reasoning,
+                "current_status": status,
+                "node_execution_log": self._node_execution_log(
+                    state,
+                    "task_classification_node",
+                    status,
+                    started_at,
+                    reasoning=reasoning,
+                    extra_info={
+                        "human_reply": human_reply,
+                        "intent": "specific_task",
+                        "selected_object_index": selected_index,
+                        "model": "prefilled",
+                        "configured_objects": configured_objects,
+                    },
+                ),
+            }
+
+        error_text = ""
+        model_name = "mock" if self.use_mock else os.getenv("OLLAMA_CLASSIFIER_MODEL", "gemma3:1b")
+        try:
+            if self.use_mock:
+                classification = self._mock_task_classification(human_reply, objects)
+            else:
+                classification = await self._llm_task_classification(human_reply, objects)
+        except Exception as exc:
+            error_text = str(exc)
+            logger.error("[task_classification_node] Classification failed: %s", exc, exc_info=True)
+            classification = self._mock_task_classification(human_reply, objects)
+            model_name = f"{model_name} -> mock_fallback"
+
+        selected_index = self._valid_object_index(
+            classification.selected_object_index,
+            objects,
+        )
+        status = "TASK_CLASSIFIED"
+        logger.info(
+            "[task_classification_node] intent=%s selected_object_index=%s",
+            classification.intent,
+            selected_index,
+        )
+        return {
+            "task_intent": classification.intent,
+            "selected_object_index": selected_index,
+            "reasoning": classification.reasoning,
+            "current_status": status,
+            "node_execution_log": self._node_execution_log(
+                state,
+                "task_classification_node",
+                status,
+                started_at,
+                success=not bool(error_text),
+                reasoning=classification.reasoning,
+                extra_info={
+                    "human_reply": human_reply,
+                    "intent": classification.intent,
+                    "selected_object_index": selected_index,
+                    "raw_selected_object_index": classification.selected_object_index,
+                    "model": model_name,
+                    "configured_objects": configured_objects,
+                    "error": error_text,
+                },
+            ),
+        }
+
+    async def _ai_reply_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Generate a general chat response with Ollama."""
+        started_at = time.time()
+        human_reply = state.get("human_reply", "").strip()
+        error_text = ""
+        model_name = "mock" if self.use_mock else os.getenv(
+            "OLLAMA_CHAT_MODEL",
+            os.getenv("OLLAMA_MODEL", "gemma4:31b"),
+        )
+        try:
+            if self.use_mock:
+                reply = self._mock_ai_reply(human_reply)
+            else:
+                reply = await self._llm_ai_reply(human_reply, state.get("chat_history_buffer", []))
+        except Exception as exc:
+            error_text = str(exc)
+            logger.error("[ai_reply_node] Chat reply failed: %s", exc, exc_info=True)
+            reply = (
+                f"我現在暫時無法連上 Ollama，但我有收到：「{human_reply}」。"
+                "如果需要抓取物件，也可以直接告訴我要抓什麼。"
+            )
+            model_name = f"{model_name} -> fallback"
+
+        status = "AI_REPLY_SENT"
+        print(reply, flush=True)
+        return {
+            "ai_reply": reply,
+            "current_status": status,
+            "node_execution_log": self._node_execution_log(
+                state,
+                "ai_reply_node",
+                status,
+                started_at,
+                success=not bool(error_text),
+                reasoning="Generated a general chat reply.",
+                extra_info={
+                    "human_reply": human_reply,
+                    "ai_reply": reply,
+                    "model": model_name,
+                    "chat_history_count": len(state.get("chat_history_buffer", []) or []),
+                    "error": error_text,
+                },
+            ),
+        }
+
+    async def _chat_memory_node(self, state: CommanderState) -> Dict[str, Any]:
+        """Store general chat memory separately from robot action memory."""
+        started_at = time.time()
+        entry = {
+            "human": state.get("human_reply", ""),
+            "ai": state.get("ai_reply", ""),
+            "timestamp": time.time(),
+        }
+        status = "CHAT_MEMORY_UPDATED"
+        return {
+            "chat_history_buffer": [entry],
+            "current_status": status,
+            "node_execution_log": self._node_execution_log(
+                state,
+                "chat_memory_node",
+                status,
+                started_at,
+                reasoning="Stored one general chat turn in chat_history_buffer.",
+                extra_info={
+                    "chat_entry": entry,
+                    "chat_history_count_before": len(state.get("chat_history_buffer", []) or []),
+                },
+            ),
+        }
+
+    async def _goodbye_node(self, state: CommanderState) -> Dict[str, Any]:
+        started_at = time.time()
+        status = "GOODBYE_SENT"
+        message = "對話及任務結束，祝您有美好的一天～"
+        print(f"\n{message}", flush=True)
+        return {
+            "current_status": status,
+            "node_execution_log": self._node_execution_log(
+                state,
+                "goodbye_node",
+                status,
+                started_at,
+                reasoning="Goodbye message displayed before ending the graph.",
+                extra_info={"message": message},
+            ),
+        }
+
+    def _route_human_reply(
+        self,
+        state: CommanderState,
+    ) -> Literal["task_classification_node", "goodbye_node"]:
+        if self._is_goodbye_reply(state.get("human_reply", "")):
+            return "goodbye_node"
+        return "task_classification_node"
+
+    def _route_task_classification(
+        self,
+        state: CommanderState,
+    ) -> Literal["ai_reply_node", "input_node"]:
+        if state.get("task_intent", "") == "specific_task":
+            return "input_node"
+        return "ai_reply_node"
+
+    @staticmethod
+    def _is_goodbye_reply(reply: str) -> bool:
+        text = reply.strip().casefold()
+        return text in _GOODBYE_TOKENS
+
+    @staticmethod
+    def _valid_object_index(value: Any, objects: list[dict[str, Any]]) -> int:
+        try:
+            idx = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return idx if 1 <= idx <= len(objects) else 0
+
+    @staticmethod
+    def _infer_object_index(reply: str, objects: list[dict[str, Any]]) -> int:
+        text = reply.strip().casefold()
+        if not text:
+            return 0
+
+        for idx, obj in enumerate(objects, 1):
+            candidates = [
+                str(obj.get("id", "")).strip(),
+                str(obj.get("label", "")).strip(),
+            ]
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                candidate_text = candidate.casefold()
+                if candidate_text in text or text in candidate_text:
+                    return idx
+        return 0
+
+    @staticmethod
+    def _object_selection_prompt(objects: list[dict[str, Any]]) -> str:
+        lines = []
+        for idx, obj in enumerate(objects, 1):
+            lines.append(
+                f"編號 {idx}: id='{obj.get('id', '')}', label='{obj.get('label', '')}'"
+            )
+        return "\n".join(lines) or "(no configured objects)"
+
+    def _mock_task_classification(
+        self,
+        reply: str,
+        objects: list[dict[str, Any]],
+    ) -> TaskClassification:
+        selected_index = self._infer_object_index(reply, objects)
+        task_keywords = (
+            "抓",
+            "拿",
+            "取",
+            "夾",
+            "pick",
+            "grab",
+            "fetch",
+            "task",
+            "object",
+        )
+        is_task = selected_index > 0 or any(keyword in reply.casefold() for keyword in task_keywords)
+        return TaskClassification(
+            intent="specific_task" if is_task else "general_chat",
+            selected_object_index=selected_index,
+            reasoning="Mock heuristic classification.",
+        )
+
+    async def _llm_task_classification(
+        self,
+        reply: str,
+        objects: list[dict[str, Any]],
+    ) -> TaskClassification:
+        if self._classifier_model is None:
+            self._init_ollama_chat_models()
+
+        messages = [
+            SystemMessage(
+                content=(
+                    "你是機器人抓取系統的 task_classification_node。\n"
+                    "你的工作只有兩件事：\n"
+                    "1. 判斷使用者是在一般聊天，還是要求機器人執行抓取/拿取/夾取任務。\n"
+                    "2. 若是任務，根據下一則訊息提供的 config/objects.yaml 物品清單，"
+                    "回傳使用者想要的物品編號。\n\n"
+                    "嚴格規則：\n"
+                    "- 預設 intent 是 'general_chat'；不要把問候、自我介紹、閒聊分類成任務。\n"
+                    "- 像 'hi', 'hello', 'hi, I am TJ', '你好', '我是...' 都是 general_chat，"
+                    "selected_object_index 必須是 0。\n"
+                    "- intent 只能是 'general_chat' 或 'specific_task'。\n"
+                    "- 抓、拿、取、夾、fetch、pick、grab、bring、take、我要、幫我、想要、需要 "
+                    "這類詞是強烈的任務訊號，但不是唯一判斷依據；請根據完整語意判斷。\n"
+                    "- 若使用者的語意是在指定、要求、請求或暗示機器人處理清單中的物品，"
+                    "intent 可以是 'specific_task'。\n"
+                    "- 若使用者只是問候、自我介紹、聊天，或沒有提到清單中的任何物品，"
+                    "intent 必須是 'general_chat'，selected_object_index 必須是 0。\n"
+                    "- selected_object_index 必須是物品清單中的 1-based 正整數編號。\n"
+                    "- 只有在使用者沒有提到任何清單中的物品時，selected_object_index 才能是 0。\n"
+                    "- 如果你的 reasoning 已經辨識出某個清單中的 id 或 label，"
+                    "selected_object_index 必須回該物品所在行的「編號」，不能回 0。\n"
+                    "- 例如清單某行是「編號 N: id='x', label='y'」，"
+                    "只要使用者語意對應到 id='x' 或 label='y'，selected_object_index 就必須是 N。\n"
+                    "- 物品對應必須完全根據提供的 config 物品清單，不要使用外部資料或固定答案。\n"
+                    "- 使用者可能只說 label 的一部分、簡稱、主體名詞、顏色加物品名，"
+                    "你仍要用語意判斷最符合的 config 物品。\n"
+                    "- 如果使用者說要抓、拿、取、夾、pick、grab、fetch 清單中的物品，"
+                    "intent 必須是 'specific_task'。\n"
+                    "- 不要回覆使用者，不要聊天，只填 structured output schema。\n"
+                    "- reasoning 簡短說明你如何從 config 清單對應到該編號。"
+                )
+            ),
+            HumanMessage(
+                content=(
+                    "以下是目前 config/objects.yaml 載入的可抓取物品清單，"
+                    "只能從這些 1-based 編號中選擇：\n"
+                    f"{self._object_selection_prompt(objects)}\n\n"
+                    f"使用者訊息：\n{reply}\n\n"
+                    "請輸出 TaskClassification：intent、selected_object_index、reasoning。"
+                )
+            ),
+        ]
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            self._classifier_model.invoke,
+            messages,
+        )
+        if isinstance(result, TaskClassification):
+            return result
+        if isinstance(result, dict):
+            return TaskClassification(**result)
+        return TaskClassification(
+            intent="general_chat",
+            selected_object_index=0,
+            reasoning="Unexpected classifier result.",
+        )
+
+    @staticmethod
+    def _mock_ai_reply(reply: str) -> str:
+        if reply:
+            return f"我收到你的訊息：「{reply}」。如果需要抓取物件，可以直接告訴我要抓哪個目標。"
+        return "我在，想聊天或要我抓取物件都可以。"
+
+    async def _llm_ai_reply(
+        self,
+        reply: str,
+        chat_history: list[Dict[str, Any]],
+    ) -> str:
+        if self._chat_model is None:
+            self._init_ollama_chat_models()
+
+        history_lines = []
+        for entry in chat_history[-6:]:
+            history_lines.append(f"Human: {entry.get('human', '')}")
+            history_lines.append(f"Assistant: {entry.get('ai', '')}")
+        history_text = "\n".join(history_lines) or "(no prior chat)"
+        messages = [
+            SystemMessage(
+                content=(
+                    "You are a friendly Traditional Chinese assistant for a robot system. "
+                    "Reply naturally and concisely to general chat. Do not start robot actions."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Recent chat history:\n{history_text}\n\n"
+                    f"Current human message:\n{reply}"
+                )
+            ),
+        ]
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            self._chat_model.invoke,
+            messages,
+        )
+        if isinstance(result, ChatReply):
+            return result.reply
+        if isinstance(result, dict):
+            return str(result.get("reply", "")).strip()
+        return str(result).strip()
+
+    # ------------------------------------------------------------------
     # Node: human input (runs ONCE at graph start)
     # ------------------------------------------------------------------
 
@@ -166,13 +721,66 @@ class Orchestrator:
         Display available objects from config/objects.yaml and wait for user selection.
         If task_description is already set (e.g. injected by tests), skip stdin.
         """
+        started_at = time.time()
         # Allow tests or programmatic callers to pre-fill task_description
         existing = state.get("task_description", "").strip()
         if existing:
+            status = "INPUT_RECEIVED"
             logger.info(f"[input_node] Task pre-filled: {existing}")
-            return {"task_description": existing, "current_status": "INPUT_RECEIVED"}
+            return {
+                "task_description": existing,
+                "current_status": status,
+                "node_execution_log": self._node_execution_log(
+                    state,
+                    "input_node",
+                    status,
+                    started_at,
+                    reasoning="Task description was pre-filled; skipped stdin selection.",
+                    extra_info={"task_description": existing, "source": "prefilled"},
+                ),
+            }
 
         objects = _load_graspable_objects()
+        selected_index = self._valid_object_index(
+            state.get("selected_object_index", 0),
+            objects,
+        )
+        if selected_index:
+            selected = objects[selected_index - 1]
+            task_desc = f"抓取{selected.get('label', selected.get('id', '目標物'))}"
+            task_desc = task_desc.strip() or "請抓取桌上的目標物件"
+            status = "INPUT_RECEIVED"
+            logger.info(
+                "[input_node] Task selected by classifier: index=%s desc=%s",
+                selected_index,
+                task_desc,
+            )
+            print(f"\n✅ 任務已確認：{task_desc}")
+            print("-" * 60)
+            return {
+                "task_description": task_desc,
+                "target_object": {
+                    "id": selected.get("id"),
+                    "label": selected.get("label"),
+                },
+                "current_status": status,
+                "node_execution_log": self._node_execution_log(
+                    state,
+                    "input_node",
+                    status,
+                    started_at,
+                    reasoning="Task target selected from classifier output.",
+                    extra_info={
+                        "task_description": task_desc,
+                        "selected_object_index": selected_index,
+                        "target_object": {
+                            "id": selected.get("id"),
+                            "label": selected.get("label"),
+                        },
+                        "source": "task_classification_node",
+                    },
+                ),
+            }
 
         print("\n" + "=" * 60)
         print("  VLM-RL 多代理人抓取系統")
@@ -202,6 +810,7 @@ class Orchestrator:
         task_desc = f"抓取{selected.get('label', selected.get('id', '目標物'))}"
 
         task_desc = task_desc.strip() or "請抓取桌上的目標物件"
+        status = "INPUT_RECEIVED"
         logger.info(f"[input_node] Task received: {task_desc}")
         print(f"\n✅ 任務已確認：{task_desc}")
         print("-" * 60)
@@ -212,7 +821,23 @@ class Orchestrator:
                 "id": selected.get("id"),
                 "label": selected.get("label")
             },
-            "current_status": "INPUT_RECEIVED",
+            "current_status": status,
+            "node_execution_log": self._node_execution_log(
+                state,
+                "input_node",
+                status,
+                started_at,
+                reasoning="Task target selected from manual stdin menu.",
+                extra_info={
+                    "task_description": task_desc,
+                    "selected_object_index": idx + 1,
+                    "target_object": {
+                        "id": selected.get("id"),
+                        "label": selected.get("label"),
+                    },
+                    "source": "manual_stdin",
+                },
+            ),
         }
 
     # ------------------------------------------------------------------
@@ -800,7 +1425,7 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _route_find(self, state: CommanderState) -> str:
-        """Route to get_item_info_no_sam3d_node if target found, else END."""
+        """Route to get_item_info_no_sam3d_node if target found, else goodbye_node."""
         if state.get("selected_detection_id", 0) == 0:
             logger.info("[route_find] No target → ending graph.")
             return "end"

@@ -7,6 +7,12 @@ def _keep_last_three(existing: List, new: List) -> List:
     return combined[-3:]
 
 
+def _keep_last_six(existing: List, new: List) -> List:
+    """Reducer: append new chat turns and keep only the last 6 entries."""
+    combined = existing + new
+    return combined[-6:]
+
+
 LATEST_RESULT_KEYS = (
     "latest_nav_result",
     "latest_grasp_result",
@@ -22,6 +28,16 @@ class CommanderState(TypedDict):
 
     # Human task description: set once at the start by the operator
     task_description: str
+
+    # General chat loop state before entering a specific robot task
+    human_reply: str
+    task_intent: str
+    selected_object_index: int
+    ai_reply: str
+    chat_history_buffer: Annotated[List[Dict[str, Any]], _keep_last_six]
+
+    # Last non-agent node execution payload persisted by SessionMemoryStore
+    node_execution_log: Dict[str, Any]
 
     # Current environment observation (image data or mock description)
     current_observation: Dict[str, Any]
@@ -130,6 +146,12 @@ def create_initial_state(
     """Build a fully-populated initial CommanderState."""
     return {
         "task_description": task_description,
+        "human_reply": "",
+        "task_intent": "",
+        "selected_object_index": 0,
+        "ai_reply": "",
+        "chat_history_buffer": [],
+        "node_execution_log": {},
         "current_observation": current_observation or {"description": "System initialising..."},
         "reasoning": "",
         "call_module": "",

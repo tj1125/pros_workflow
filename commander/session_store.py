@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from .state import LATEST_RESULT_KEYS, _keep_last_three
+from .state import LATEST_RESULT_KEYS, _keep_last_six, _keep_last_three
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,15 @@ class SessionMemoryStore:
             )
             self._latest_agent_result_artifact = raw_result_ref
 
+        node_execution_ref = None
+        if "node_execution_log" in state_update:
+            node_execution_ref = self._write_raw_result_artifact(
+                step=step,
+                node_name=node_name,
+                module=f"{node_name}_execution",
+                raw_result=state_update["node_execution_log"],
+            )
+
         sanitized_update = self._sanitize_value(
             copy.deepcopy(state_update),
             step=step,
@@ -72,6 +81,8 @@ class SessionMemoryStore:
         )
         if raw_result_ref is not None:
             sanitized_update["agent_result_artifact"] = raw_result_ref
+        if node_execution_ref is not None:
+            sanitized_update["node_execution_log_artifact"] = node_execution_ref
 
         self._append_jsonl(
             self.events_dir / "state_updates.jsonl",
@@ -85,6 +96,21 @@ class SessionMemoryStore:
                 "state_update": sanitized_update,
             },
         )
+
+        if node_execution_ref is not None:
+            self._append_jsonl(
+                self.events_dir / "node_execution_logs.jsonl",
+                {
+                    "iso_timestamp": self._iso_timestamp(),
+                    "context_id": self.context_id,
+                    "step": step,
+                    "node_name": node_name,
+                    "module": module,
+                    "current_status": status,
+                    "node_execution_log": sanitized_update.get("node_execution_log", {}),
+                    "artifact": node_execution_ref,
+                },
+            )
 
         if node_name == "update_memory_node":
             memory_entries = state_update.get("history_buffer") or []
@@ -111,6 +137,10 @@ class SessionMemoryStore:
             if key == "history_buffer":
                 existing = self.current_state.get("history_buffer", [])
                 self.current_state[key] = _keep_last_three(existing, copy.deepcopy(value))
+                continue
+            if key == "chat_history_buffer":
+                existing = self.current_state.get("chat_history_buffer", [])
+                self.current_state[key] = _keep_last_six(existing, copy.deepcopy(value))
                 continue
             self.current_state[key] = copy.deepcopy(value)
 
