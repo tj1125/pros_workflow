@@ -1,9 +1,9 @@
 """
-test_client.py — End-to-end test client for the VLM-RL system
+test_client.py — End-to-end test client for the VLM grasp system
 
 Tests two scenarios:
-1. Mock LangGraph loop: verifies the Orchestrator runs correctly end-to-end
-2. A2A connectivity check: verifies Agent nodes can reach the GPU inference servers
+1. Mock LangGraph loop: verifies the Orchestrator graph starts and terminates cleanly.
+2. A2A connectivity check: verifies configured RTX 3090 A2A servers expose AgentCards.
    (only runs when INF_xxx_URL env vars are set)
 
 Usage:
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 async def test_mock_langgraph_loop() -> bool:
     """
     Run the full Orchestrator graph in mock mode and verify it terminates cleanly.
-    Expected: Brain cycles through nav → grasp → approach → view → DONE
+    Expected: graph executes at least one full mock session path and exits cleanly.
     """
     from commander.logger import TraceLogger
     from commander.orchestrator import Orchestrator
@@ -115,9 +115,10 @@ async def test_all_a2a_servers() -> bool:
     print("=" * 50)
 
     servers = {
-        "Inference NAV":     os.getenv("INF_NAV_URL", ""),
-        "Inference GraspGen": os.getenv("INF_GRASP_URL", ""),
-        "Inference View":    os.getenv("INF_VIEW_URL", ""),
+        "Find Agent": os.getenv("INF_FIND_URL", ""),
+        "Get Item Info No SAM3D": os.getenv("INF_GET_ITEM_INFO_NO_SAM3D_URL", ""),
+        "Get Item Info Legacy SAM3D": os.getenv("INF_GET_ITEM_INFO_URL", ""),
+        "Grasp Agent": os.getenv("INF_GRASP_URL", ""),
     }
 
     configured = {k: v for k, v in servers.items() if v}
@@ -145,7 +146,7 @@ async def test_all_a2a_servers() -> bool:
     help="Only run mock LangGraph loop test (skip A2A server tests)",
 )
 def main(mock_only: bool) -> None:
-    """VLM-RL system end-to-end test client."""
+    """VLM grasp system end-to-end test client."""
     results = []
 
     async def _run():

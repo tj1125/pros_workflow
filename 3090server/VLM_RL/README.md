@@ -1,49 +1,69 @@
-# 3090 Server — VLM_RL Agent Services
+# 3090 Server — VLM_RL A2A Services
 
-這個資料夾包含所有在 **RTX 3090 伺服器**上執行的 A2A Agent Server 程式碼。
+這個資料夾包含 RTX 3090 端執行的 A2A Agent Server。Commander 在本機負責 LangGraph、VLM 決策與 ROS2 控制；3090 端只處理 GPU/深度學習或高成本感知推論。
+
+## 服務列表
+
+| 服務 | Port | 主流程狀態 | 功能 |
+|---|---:|---|---|
+| `find_agent` | 8005 | optional | 多相機 YOLO detection 與標註圖輸出。 |
+| `get_item_info_agent_no_sam3d` | 8006 | required | 現行主流程 item-info。使用多視角 RGB、bbox、`/world_position_data` 與 geometry/SAM，輸出目標中心與 ranked goal poses。 |
+| `grasp_agent` | 8007 | required | 使用 `Camera_Car` RGBD、YOLO、SAM、GraspGen 產生 6-DoF grasp poses。 |
+| `get_item_info_agent` | 8006 | legacy | SAM3D/full 3D pipeline。與 no-SAM3D 服務使用同一 port，不能同時啟動在同一 host port。 |
 
 ## 目錄結構
 
-此伺服器預期將運行多個專注於不同感知或決策任務的 Agent。
-
-```
+```text
 3090server/VLM_RL/
-├── README.md                    # 本文件 (總體架構概觀)
-├── a2a_utils/                   # 共用 A2A 回應與工具
-│   ├── __init__.py
-│   └── response.py
-│
-├── models/                      # 共用的模型權重存放區 (.pt, .onnx 等)
-│
-├── find_agent/                  # Find Server (YOLO 目標辨識)
-│   ├── README.md                # 專屬環境與啟動說明
-│   ├── requirements.txt
-│   └── ...
-│
-└── get_item_info_agent/         # Get Item Info Server (Stereo 3D 感知)
-    ├── README.md                # 專屬環境與啟動說明、A2A 訊息格式
-    ├── requirements.txt
-    └── pipeline/                # 獨立的感知流程
+├── a2a_utils/                         # A2A success/error response helpers
+├── models/                            # 共用模型權重目錄，實際權重不入庫
+├── tool/                              # 共用 YOLO/SAM/GraspGen/runtime helpers
+├── find_agent/                        # YOLO detection server
+├── get_item_info_agent_no_sam3d/      # 現行 item-info server
+├── get_item_info_agent/               # legacy SAM3D item-info server
+└── grasp_agent/                       # GraspGen server
 ```
 
----
+## 啟動方式
 
-## 虛擬環境與 Agent 列表
+在 3090 server 上進入本目錄：
 
-每個 Agent 擁有獨立的運作邏輯，有些 Agent 需要極為特定的深度學習套件（例如 CUDA extensions）。為了確保升級與維護的穩定性，部分 Agent 會被分配到**專屬的 Conda 環境**。
+```bash
+cd /path/to/VLM_RL/3090server/VLM_RL
+```
 
-| A2A Agent 模組名稱 | Conda 虛擬環境名稱 | 通訊 Port | 負責功能 / 推論內容 |
-|--------------------|--------------------|-----------|--------------------|
-| `find_agent` | **`a2a_vlm_find`** | 8005 | 接收多相機影像，進行 YOLO 目標辨識並畫框 |
-| `get_item_info_agent` | **`get_item_info_agent`** | 8006 | 針對所選目標，推算 3D 空間位置、邊界及抓取姿態 |
-| `nav_agent` *(未來規劃)* | **`a2a_vlm_nav`** | 待定 | 接收避障與相機資訊，推論底盤移動點 |
-| `grasp_agent` *(未來規劃)* | **`a2a_vlm_grasp`**| 待定 | 接收點雲，生成 6D 抓取姿態 |
-| `approach_agent` *(未來規劃)* | **`a2a_vlm_approach`**| 待定 | 接收抓取姿態，產生最後靠近的手臂控制策略 |
+依服務使用對應環境後啟動：
 
-## 個別 Agent 說明
+```bash
+python -m find_agent
+python -m get_item_info_agent_no_sam3d
+python -m grasp_agent
+```
 
-有關各個 Agent 的**環境安裝步驟**、**啟動方式**與 **A2A 傳入/傳出參數格式**的詳細資訊，請參見各個資料夾內的 `README.md`：
+`EXTERNAL_IP` 會寫入 A2A AgentCard 的 `url`，預設為程式內設定值；部署時建議明確指定：
 
-- [Find Agent 說明文件](./find_agent/README.md)
-- [Get Item Info Agent 說明文件](./get_item_info_agent/README.md)
+```bash
+EXTERNAL_IP=192.168.1.10 python -m grasp_agent
+```
 
+Commander `.env` 對應：
+
+```env
+INF_FIND_URL=http://192.168.1.10:8005
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://192.168.1.10:8006
+INF_GRASP_URL=http://192.168.1.10:8007
+```
+
+## 模型與資料
+
+- `models/` 只保留 `.gitkeep`，模型權重需部署時放入。
+- `get_item_info_agent_no_sam3d/configs/scene.default.yaml` 指向 camera parameters、SAM checkpoint、GraspGen runtime 與 Nav2 keepout map。
+- `grasp_agent/configs/runtime.default.yaml` 可由 `GRASP_*` 環境變數覆蓋。
+- `tool/` 是共用 runtime，不應複製多份到各 agent。
+
+## 個別文件
+
+- [find_agent/README.md](./find_agent/README.md)
+- [get_item_info_agent_no_sam3d/README.md](./get_item_info_agent_no_sam3d/README.md)
+- [get_item_info_agent/README.md](./get_item_info_agent/README.md)
+- [grasp_agent/README.md](./grasp_agent/README.md)

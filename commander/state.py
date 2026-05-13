@@ -22,7 +22,7 @@ LATEST_RESULT_KEYS = (
 
 class CommanderState(TypedDict):
     """
-    LangGraph global state for the VLM-RL grasping system.
+    LangGraph global state for the VLM grasping system.
     Tracks the full lifecycle of an observation-reason-act cycle.
     """
 

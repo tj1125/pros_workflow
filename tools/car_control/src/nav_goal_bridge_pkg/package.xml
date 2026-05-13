@@ -4,7 +4,7 @@
   <name>nav_goal_bridge_pkg</name>
   <version>0.0.0</version>
   <description>Bridge /goal_pose into Nav2 and pros car-control actions.</description>
-  <maintainer email="vlm_rl@project.local">VLM-RL Team</maintainer>
+  <maintainer email="vlm@project.local">VLM Team</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_python</buildtool_depend>

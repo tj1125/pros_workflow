@@ -1,35 +1,65 @@
 # Find Agent Server
 
-**Find Agent** 是一個 A2A Agent Server，負責接收相機影像，進行 YOLO 目標辨識並回傳畫框與辨識結果。
+`find_agent` 是 RTX 3090 端的 A2A YOLO detection server。它接收多相機 RGB 影像，對每張圖做 YOLO detection，回傳全域編號的 bbox metadata 與標註影像。
+
+目前 Commander 主流程主要直接使用 `/world_position_data` 做候選 instance 確認；此服務仍保留給需要純 YOLO 掃描或除錯的流程。
 
 ## 執行環境
 
-- **Conda 環境名稱**：`a2a_vlm_find`
-- **主要依賴**：`ultralytics`, `Pillow`, `a2a-sdk`
-- **服務 Port**：8005
-
-### 環境建置
+- Conda 環境建議：`a2a_vlm_find`
+- 主要依賴：`ultralytics`, `Pillow`, `a2a-sdk`
+- Port：8005
 
 ```bash
-# 建立專屬虛擬環境 (Python 3.11)
 conda create -n a2a_vlm_find python=3.11 -y
 conda activate a2a_vlm_find
-
-# 安裝所需依賴套件 (在 VLM_RL 目錄下)
 pip install -r find_agent/requirements.txt
 ```
 
-## 啟動服務
+## 啟動
 
-確認在 `a2a_vlm_find` 環境下，於 `VLM_RL` 目錄執行：
+在 `3090server/VLM_RL` 下：
 
 ```bash
 conda activate a2a_vlm_find
-python -m find_agent
+EXTERNAL_IP=192.168.1.10 python -m find_agent
 ```
 
-## 功能與 A2A 介面
+Commander `.env`：
 
-- **收到訊息**：多機影像。
-- **處理邏輯**：使用 `yolo_service.py` 封裝 YOLO 模型進行推論。
-- **回傳訊息**：目標的 2D Bounding Box 及畫框結果。
+```env
+INF_FIND_URL=http://192.168.1.10:8005
+```
+
+## A2A Request
+
+`parts[0].text` 是 JSON：
+
+```json
+{
+  "camera_images": {
+    "Camera_Room1_12": "...base64...",
+    "Camera_Room1_13": "...base64..."
+  },
+  "task_description": "抓取褐色小熊玩偶",
+  "target_object": {"id": "doll", "label": "褐色小熊玩偶"}
+}
+```
+
+## A2A Response
+
+回傳 JSON text，主要欄位：
+
+```json
+{
+  "yolo_detections": {
+    "1": {
+      "camera": "Camera_Room1_12",
+      "bbox": [100, 100, 300, 300],
+      "label": "doll",
+      "conf": 0.92,
+      "annotated_image_base64": "..."
+    }
+  }
+}
+```

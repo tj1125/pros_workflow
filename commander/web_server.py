@@ -823,7 +823,7 @@ def create_app() -> Any:
     if FastAPI is None:
         raise RuntimeError("fastapi is not installed. Run `uv sync` or install project dependencies.")
 
-    app = FastAPI(title="VLM-RL 居家機器人 Chat", version="1.0.0")
+    app = FastAPI(title="VLM 居家機器人 Chat", version="1.0.0")
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -1066,7 +1066,7 @@ _INDEX_HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>VLM-RL 居家機器人</title>
+  <title>VLM 居家機器人</title>
   <style>
     :root {
       color-scheme: light;

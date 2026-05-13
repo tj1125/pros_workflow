@@ -1,0 +1,695 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{xurl}
+
+\setCJKmainfont[
+  Path=fonts/,
+  UprightFont=edukai-5.1_20251208.ttf,
+  BoldFont=edukai-5.1_20251208.ttf,
+  BoldFeatures={FakeBold=2.5}
+]{TW-MOE-Std-Kai}
+\setCJKsansfont[
+  Path=fonts/,
+  UprightFont=edukai-5.1_20251208.ttf,
+  BoldFont=edukai-5.1_20251208.ttf,
+  BoldFeatures={FakeBold=2.5}
+]{TW-MOE-Std-Kai}
+\setCJKmonofont[
+  Path=fonts/,
+  UprightFont=edukai-5.1_20251208.ttf,
+  BoldFont=edukai-5.1_20251208.ttf,
+  BoldFeatures={FakeBold=2.5}
+]{TW-MOE-Std-Kai}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black,
+  citecolor=blue!55!black
+}
+
+\setlist[itemize]{leftmargin=2em,itemsep=0.25em,topsep=0.25em}
+\setlist[enumerate]{leftmargin=2em,itemsep=0.25em,topsep=0.25em}
+\emergencystretch=3em
+\titleformat{\section}{\Large\bfseries}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.7em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.7em}{}
+
+\title{基於視覺語言模型與多代理人協同架構之主動感知移動操作系統}
+\author{VLM Grasp Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本論文提出一套基於視覺語言模型與多代理人協同架構之主動感知移動操作系統，目標是在室內數位孿生與 ROS2 控制環境中，完成由自然語言指定的目標物抓取任務。系統以 LangGraph 作為中央狀態機，將對話理解、目標確認、多視角物體定位、導航候選點排序、視覺語言模型決策、抓取姿態生成與底盤/手臂收尾整合為可追蹤、可恢復的閉環流程。高層決策由視覺語言模型根據當前觀察、任務狀態與歷史行動輸出結構化決策；低層感知與抓取推論則透過 A2A 協議委派至 RTX 3090 端服務，包括物件偵測、no-SAM3D 物體資訊估計與 GraspGen 抓取姿態生成。導航與實體控制由 ROS2/Nav2、車體控制節點與手臂控制節點執行，使系統能在目標移動、候選導航點失效或抓取前狀態變化時重新估計並恢復任務。
+
+本文將此系統形式化為一個狀態驅動的多代理人移動操作問題，定義任務狀態、觀察、代理人動作、座標轉換、導航候選評分、抓取姿態選擇與閉環記憶更新等數學模型。相較於單次感知或單次大模型推理方法，本系統強調任務生命週期內的狀態持續性、模組邊界清晰性與部署可維護性。透過此架構，視覺語言模型不直接輸出低層控制命令，而是作為中央推理器選擇下一個可驗證的功能模組，降低大模型幻覺對機器人動作安全性的影響。
+\end{abstract}
+
+\noindent\textbf{關鍵詞：}視覺語言模型、多代理人系統、移動操作、主動感知、LangGraph、A2A、Nav2、GraspGen
+
+\newpage
+\tableofcontents
+\newpage
+
+\section{緒論}
+
+\subsection{研究背景與動機}
+
+具身智慧機器人若要在真實或數位孿生家庭環境中完成抓取任務，不能只依靠單次影像辨識或單次抓取姿態估計。使用者的指令通常是語意層級的，例如「幫我抓紅色蘋果」，但機器人真正需要的是可執行的操作序列：辨識目標類別、在多個相似物件中確認目標 instance、估計目標三維位置、選擇可導航觀察點、移動底盤、重新觀察、生成抓取姿態，最後控制底盤、手臂與夾爪完成動作。這些步驟跨越自然語言理解、視覺感知、三維幾何、導航規劃與機器人控制，任何一個步驟失敗都可能導致整體任務中斷。
+
+視覺語言模型（Vision-Language Model, VLM）具備跨模態理解能力，適合用於高層任務推理與狀態判斷。然而，VLM 並不適合直接輸出低層馬達命令，原因包括推理延遲、輸出不確定性、對幾何限制不敏感，以及缺乏與機器人控制器直接相容的安全約束。因此，本研究採取「VLM 做高層決策，專門代理人執行可驗證子任務」的系統設計。中央 Commander 以 LangGraph 維護任務狀態，並透過 A2A 協議呼叫 RTX 3090 上的推論服務，使大模型推理、GPU 感知與 ROS2 控制彼此解耦。
+
+\subsection{研究問題}
+
+本研究欲解決的問題可定義為：給定一個自然語言任務指令 $u$、一組可抓取物件清單 $\mathcal{O}$、多視角相機觀察 $\mathcal{I}_{t}$、世界座標資料 $\mathcal{W}_{t}$，以及機器人當前狀態 $x_{t}$，系統需在有限步數內產生一串可執行動作
+\begin{equation}
+  \tau = \left(a_0, a_1, \ldots, a_T\right),
+\end{equation}
+使目標物件 $o^\star \in \mathcal{O}$ 被成功抓取，且每一步動作皆可由對應模組驗證其成功或失敗。
+
+此問題的困難點在於，系統狀態不是靜態的。目標物可能在 Unity/ROS2 回報中移動，導航候選點可能因地圖或障礙物不可行而失效，抓取姿態也可能因相機觀察品質不足而不穩定。因此，本研究將抓取任務視為一個閉環決策問題，而非單次 pipeline 問題。
+
+\subsection{研究目標}
+
+本文的研究目標如下：
+
+\begin{enumerate}
+  \item 建立一個以 LangGraph 為核心的狀態化 Commander，使任務可在對話、感知、導航、推理與抓取之間循環。
+  \item 設計清楚的多代理人協同邊界，使 GPU 推論、ROS2 控制與 VLM 決策能獨立部署與維護。
+  \item 將多視角目標定位、Nav2 導航候選點、GraspGen 抓取姿態與底盤/手臂收尾串接成完整移動操作流程。
+  \item 形式化系統狀態、決策函數、座標轉換、候選點排序、抓取姿態選擇與評估指標，作為後續實驗與論文分析基礎。
+\end{enumerate}
+
+\subsection{研究貢獻}
+
+本研究的主要貢獻包括：
+
+\begin{itemize}
+  \item \textbf{狀態化多代理人移動操作架構：}提出一個由 LangGraph 管理的任務狀態圖，將自然語言任務、世界座標更新、導航結果、抓取結果與歷史記憶整合至同一個 CommanderState。
+  \item \textbf{VLM 安全調度策略：}VLM 僅輸出高層模組選擇，而不直接輸出低層控制命令；每個被呼叫模組皆回傳結構化成功狀態與結果資料。
+  \item \textbf{多視角物體資訊與導航候選整合：}利用 \texttt{/world\_position\_data}、room camera bbox 與 no-SAM3D item-info 服務產生 ranked goal poses，讓機器人能根據不同候選導航點進行主動感知與接近。
+  \item \textbf{部署導向之 A2A 解耦設計：}RTX 3090 上的 Find、ItemInfo 與 Grasp 服務以 A2A server 暴露，Commander 端以 A2A client 呼叫，使模型服務與機器人控制可分別更新。
+\end{itemize}
+
+\subsection{論文架構}
+
+第二章回顧視覺語言模型、多代理人工作流、三維物體定位、導航與抓取相關技術。第三章定義系統問題與數學符號。第四章介紹整體系統架構與資料流。第五章詳細說明任務分類、目標定位、候選點排序、VLM 決策、抓取姿態生成與底盤/手臂執行方法。第六章描述實作與部署。第七章提出實驗設計與評估指標。第八章討論限制與未來工作，最後第九章總結本文。
+
+\section{相關工作}
+
+\subsection{視覺語言模型於機器人任務}
+
+近年視覺語言模型被廣泛應用於機器人語意理解、任務分解與場景推理。其優勢在於能將影像內容、自然語言任務與歷史上下文共同納入推理。然而，在機器人控制場景中，VLM 輸出仍需受到嚴格約束。若模型直接輸出座標或控制量，可能因場景幾何理解不足而產生不可執行甚至危險的動作。本研究採用結構化輸出約束，使 VLM 僅在有限模組集合中選擇下一步：
+\begin{equation}
+  a_t \in \mathcal{A}
+  =
+  \{\texttt{major\_nav}, \texttt{grasp}, \texttt{car\_approach}, \texttt{done}\}.
+\end{equation}
+如此可將 VLM 的能力集中在高層語意與狀態判斷，而將幾何與控制交給專門模組處理。
+
+\subsection{狀態機與 Agentic Workflow}
+
+長程機器人任務往往需要循環與條件分支。傳統 pipeline 假設資料由前往後單向流動，一旦中間結果失敗，系統往往缺乏恢復機制。Agentic workflow 與狀態機設計則將任務拆成節點與邊，並依狀態決定下一個節點。本研究使用 LangGraph 形式化此流程，其核心可表示為有向狀態圖
+\begin{equation}
+  \mathcal{G} = (\mathcal{V}, \mathcal{E}, v_0, \rho),
+\end{equation}
+其中 $\mathcal{V}$ 為節點集合，$\mathcal{E}$ 為邊集合，$v_0$ 為入口節點，$\rho(s_t)$ 為根據當前狀態 $s_t$ 決定下一節點的路由函數。
+
+\subsection{多代理人協同與 A2A 協議}
+
+多代理人系統強調功能模組間的明確分工。對於本研究而言，Find Agent、ItemInfo Agent 與 Grasp Agent 分別處理偵測、三維資訊估計與抓取姿態生成。Commander 不需要知道每個模型的內部實作，只需遵守輸入輸出契約。令第 $i$ 個服務為函數
+\begin{equation}
+  y_i = f_i(q_i; \theta_i),
+\end{equation}
+其中 $q_i$ 為 A2A request，$\theta_i$ 為服務內部模型或設定，$y_i$ 為結構化回傳結果。此設計使服務部署與模型更新能獨立於 Commander 主程式。
+
+\subsection{三維目標定位與多視角融合}
+
+機器人抓取需要的不只是類別標籤，而是目標在世界中的位置、尺寸與可接近方向。多視角相機可提供較穩定的幾何觀測。一般而言，世界點 $\bm{p}_w=[x_w,y_w,z_w,1]^\top$ 投影到第 $i$ 個相機影像座標可寫為
+\begin{equation}
+  \lambda
+  \begin{bmatrix}
+    u_i \\ v_i \\ 1
+  \end{bmatrix}
+  =
+  \mathbf{K}_i
+  \left[
+    \mathbf{R}_i \mid \bm{t}_i
+  \right]
+  \bm{p}_w,
+\end{equation}
+其中 $\mathbf{K}_i$ 為內參矩陣，$\mathbf{R}_i,\bm{t}_i$ 為外參，$\lambda$ 為深度尺度。本文系統使用 Unity/ROS 提供的 \texttt{/world\_position\_data} 作為目標中心候選，再結合各 camera bbox 與 no-SAM3D 幾何估計取得導航與抓取所需資訊。
+
+\subsection{移動操作與抓取姿態生成}
+
+移動操作任務同時涉及底盤導航與手臂抓取。底盤必須先移動至可觀察、可接近且地圖可行的位置；手臂則需根據車載相機 RGBD 生成可行抓取姿態。本文使用 Nav2 執行地圖導航，GraspGen 生成候選抓取姿態，最後由 car approach runtime 完成底盤靠近與手臂/夾爪收尾。此方式避免將所有決策集中在單一模型，而是利用各模組的專長組合成可部署系統。
+
+\section{問題定義與數學符號}
+
+\subsection{任務狀態}
+
+令系統在時間步 $t$ 的全域狀態為
+\begin{equation}
+  s_t =
+  \left(
+    u,\,
+    o^\star_t,\,
+    \mathcal{W}_t,\,
+    \mathcal{I}_t,\,
+    \mathcal{G}_t,\,
+    h_t,\,
+    r_t
+  \right),
+\end{equation}
+其中 $u$ 為使用者任務指令，$o^\star_t$ 為目前確認的目標物件，$\mathcal{W}_t$ 為 world position database，$\mathcal{I}_t$ 為影像觀察，$\mathcal{G}_t$ 為 goal pose database，$h_t$ 為歷史行動記憶，$r_t$ 為 retry count 或任務進度。
+
+歷史記憶採用固定長度滑動視窗：
+\begin{equation}
+  h_t =
+  \operatorname{KeepLastK}
+  \left(
+    h_{t-1} \cup
+    \{(a_t, y_t, \sigma_t, \kappa_t)\}
+  \right),
+  \quad K=3,
+\end{equation}
+其中 $a_t$ 為執行模組，$y_t$ 為模組回傳摘要，$\sigma_t \in \{0,1\}$ 表示成功與否，$\kappa_t$ 為 key facts。
+
+\subsection{動作空間}
+
+本研究的高層動作空間定義為
+\begin{equation}
+  \mathcal{A}=
+  \{
+  a^{nav}, a^{grasp}, a^{approach}, a^{done}
+  \},
+\end{equation}
+分別對應 major navigation、抓取姿態生成、底盤/手臂接近與任務完成。VLM 決策器實作為受限策略
+\begin{equation}
+  \pi_{\text{VLM}}:
+  (s_t, P)
+  \rightarrow
+  (a_t, \eta_t, m_t),
+\end{equation}
+其中 $P$ 為 system prompt，$\eta_t$ 為自然語言 reasoning，$m_t$ 為模組參數。實作上，$\pi_{\text{VLM}}$ 必須輸出符合 schema 的 JSON，因此其可行輸出受到 $\mathcal{A}$ 限制。
+
+\subsection{任務成功條件}
+
+令 $z_t^{cube}$ 表示抓取驗證或目標高度相關的完成訊號，$\sigma_t^{approach}$ 表示 car approach 模組成功狀態。本文將任務完成條件定義為
+\begin{equation}
+  \mathbb{I}_{success}
+  =
+  \mathbb{I}
+  \left[
+    \sigma_t^{approach}=1
+    \land
+    \sigma_t^{arm}=1
+  \right],
+\end{equation}
+其中 $\sigma_t^{arm}$ 由手臂與夾爪 finish sequence 的回傳結果決定。當成功條件成立，下一次 VLM 決策應輸出 $a^{done}$，系統再執行 home navigation 或結束流程。
+
+\section{系統架構}
+
+\subsection{整體架構}
+
+本系統分成 Commander、RTX 3090 A2A Services 與 ROS2/Unity 三個部署邊界。Commander 為任務中樞，RTX 3090 負責 GPU 推論，ROS2/Unity 負責相機資料、世界座標與實體控制。此架構的核心設計原則是：任何高成本或模型相依的推論服務都應與 Commander 解耦；任何低層控制皆由 ROS2 節點或 action server 驗證執行。
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.24\linewidth}p{0.28\linewidth}p{0.38\linewidth}}
+\toprule
+\textbf{層級} & \textbf{主要模組} & \textbf{功能} \\
+\midrule
+Commander & 主流程、狀態圖、VLM 決策器 & 管理 LangGraph 狀態、A2A client、記憶與 trace。 \\
+RTX 3090 & Find、ItemInfo、Grasp 服務 & 執行 YOLO、三維資訊估計、GraspGen 抓取姿態生成。 \\
+ROS2/Unity & 導航橋接、車體控制、手臂控制 & 發布相機與 world position，執行 Nav2、底盤、手臂與夾爪控制。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{LangGraph 狀態圖}
+
+系統狀態圖包含對話入口、任務分類、目標確認、物體資訊估計、導航、觀察、推理、抓取、接近、記憶更新與結束節點。其路由函數可抽象為
+\begin{equation}
+  v_{t+1} = \rho(v_t, s_t),
+\end{equation}
+其中 $v_t$ 為目前節點，$s_t$ 為 CommanderState。例如，在 \texttt{reason\_node} 後：
+\begin{equation}
+  \rho(\texttt{reason}, s_t)=
+  \begin{cases}
+    \texttt{update\_item\_info\_1}, & a_t=a^{nav},\\
+    \texttt{update\_item\_info\_2}, & a_t=a^{grasp},\\
+    \texttt{nav\_home}, & a_t=a^{done}.
+  \end{cases}
+\end{equation}
+
+\subsection{A2A 服務契約}
+
+每個 A2A 服務皆遵守 request-response 契約。令 A2A request 為
+\begin{equation}
+  q_i = \left(
+    c,\,
+    \texttt{message\_id},\,
+    \texttt{context\_id},\,
+    \texttt{parts}
+  \right),
+\end{equation}
+其中 $c$ 為 agent card 描述，\texttt{context\_id} 用於同一任務生命週期追蹤。回傳結果為
+\begin{equation}
+  y_i =
+  \left(
+    \sigma_i,\,
+    d_i,\,
+    e_i
+  \right),
+\end{equation}
+其中 $\sigma_i$ 為成功狀態，$d_i$ 為資料 payload，$e_i$ 為錯誤訊息。Commander 僅依此結構更新 state，不依賴服務內部實作。
+
+\section{方法}
+
+\subsection{自然語言任務分類}
+
+使用者輸入 $u$ 後，系統先判斷其為一般聊天或抓取任務。令物件清單為
+\begin{equation}
+  \mathcal{O}=\{(id_j, label_j)\}_{j=1}^{N}.
+\end{equation}
+任務分類器輸出
+\begin{equation}
+  C(u,\mathcal{O}) =
+  \left(
+    z,\,
+    k,\,
+    \xi
+  \right),
+\end{equation}
+其中 $z \in \{\texttt{general\_chat},\texttt{specific\_task}\}$，$k \in \{0,1,\ldots,N\}$ 為 1-based 物件索引，$\xi$ 為分類理由。若 $k>0$，初始目標設定為
+\begin{equation}
+  o^\star_0 = (id_k, label_k).
+\end{equation}
+
+\subsection{目標 Instance 選擇}
+
+\texttt{find\_node} 從 \texttt{/world\_position\_data} 讀取場景候選集合
+\begin{equation}
+  \mathcal{D}_t =
+  \{d_1,d_2,\ldots,d_M\},
+\end{equation}
+每個候選包含類別、instance id、世界中心與 bbox：
+\begin{equation}
+  d_j =
+  \left(
+    id_j,\,
+    n_j,\,
+    \bm{p}^{U}_{j},\,
+    \mathcal{B}_j,\,
+    \mathcal{C}_j
+  \right),
+\end{equation}
+其中 $\bm{p}^{U}_{j}$ 為 Unity world 座標，$\mathcal{B}_j$ 為各相機 bbox，$\mathcal{C}_j$ 為可觀察到該物件的 camera 集合。系統先以目標類別過濾：
+\begin{equation}
+  \mathcal{D}^{\star}_t =
+  \{d_j \mid id_j=id(o^\star)\}.
+\end{equation}
+若集合非空，系統顯示候選 instance 給使用者確認，以避免同類物件混淆。
+
+\subsection{多視角物體資訊估計}
+
+選定 instance 後，no-SAM3D item-info 服務接收多視角影像與 world position data。對於第 $i$ 個相機，bbox 可表示為
+\begin{equation}
+  b_i = (u_i^{min}, v_i^{min}, u_i^{max}, v_i^{max}).
+\end{equation}
+其中心點為
+\begin{equation}
+  \bar{\bm{u}}_i =
+  \left[
+  \frac{u_i^{min}+u_i^{max}}{2},
+  \frac{v_i^{min}+v_i^{max}}{2},
+  1
+  \right]^\top .
+\end{equation}
+
+若取得目標中心 $\bm{p}^{U}$，系統將其轉為 Nav2 map 中的參考點。依目前實作，Unity 至 map 的平面轉換可寫為
+\begin{equation}
+  x^{M}=6-z^{U},\qquad
+  y^{M}=x^{U}-3,
+\end{equation}
+其中 $\bm{p}^{U}=(x^{U},y^{U},z^{U})$，$\bm{p}^{M}=(x^{M},y^{M})$。此轉換使 goal pose 能面向目標中心。
+
+\subsection{導航候選點排序}
+
+Item-info 服務輸出 ranked goal pose 集合
+\begin{equation}
+  \mathcal{P}=
+  \{g_1,g_2,\ldots,g_R\},
+\end{equation}
+其中每個 $g_r$ 包含 map frame 中的 goal position、orientation group、grasp confidence 與 map feasibility。可用一般化評分函數表示為
+\begin{equation}
+  S(g_r)
+  =
+  \alpha C_r
+  +
+  \beta F_r
+  -
+  \gamma D_r
+  -
+  \delta O_r,
+\end{equation}
+其中 $C_r$ 為 grasp 或觀察 confidence，$F_r \in \{0,1\}$ 為地圖可行性，$D_r$ 為底盤移動距離成本，$O_r$ 為障礙物或碰撞風險，$\alpha,\beta,\gamma,\delta$ 為權重。系統依 $S(g_r)$ 或服務端排序取得 rank，初始導航使用 $g_1$，major navigation 則嘗試 $g_{r+1}$。
+
+給定 goal position $\bm{g}^{M}=(x_g,y_g)$ 與目標 map position $\bm{p}^{M}=(x_o,y_o)$，底盤朝向角設定為
+\begin{equation}
+  \psi_g =
+  \operatorname{atan2}(y_o-y_g, x_o-x_g).
+\end{equation}
+對應四元數簡化為
+\begin{equation}
+  q_z=\sin\frac{\psi_g}{2},\qquad
+  q_w=\cos\frac{\psi_g}{2}.
+\end{equation}
+
+\subsection{導航執行與到位判定}
+
+Nav2 執行時，系統監聽 AMCL pose $\bm{x}^{M}_t=(x_t,y_t,\psi_t)$。若 goal pose 為 $\bm{g}^{M}=(x_g,y_g,\psi_g)$，到位條件定義為
+\begin{equation}
+  \left\|
+  \begin{bmatrix}
+  x_t-x_g\\
+  y_t-y_g
+  \end{bmatrix}
+  \right\|_2
+  \leq \epsilon_p
+  \quad \land \quad
+  |\operatorname{wrap}(\psi_t-\psi_g)|
+  \leq \epsilon_\psi,
+\end{equation}
+其中 $\epsilon_p$ 為位置容忍，$\epsilon_\psi$ 為朝向容忍。若在 timeout 內無法取得 global plan 或未到位，該次導航記為失敗。
+
+\subsection{目標移動偵測與資訊刷新}
+
+在 major navigation 或 grasp 前，系統重新讀取 \texttt{/world\_position\_data}。若目標中心從 $\bm{p}^{U}_{t-1}$ 移至 $\bm{p}^{U}_{t}$，移動距離為
+\begin{equation}
+  \Delta p_t =
+  \left\|
+  \bm{p}^{U}_{t}
+  -
+  \bm{p}^{U}_{t-1}
+  \right\|_2 .
+\end{equation}
+若
+\begin{equation}
+  \Delta p_t > \tau_{move},
+\end{equation}
+系統判定目標位置已顯著改變，清空舊的 goal pose 與 grasp 結果，重新執行 item-info。若目標 instance 從 world position 中消失，系統轉入 home navigation 或結束流程。
+
+\subsection{VLM 決策}
+
+VLM 的輸入不是原始完整系統，而是經整理後的狀態摘要：
+\begin{equation}
+  \phi(s_t)=
+  \left[
+    o^\star_t,\,
+    \mathcal{I}^{car}_t,\,
+    h_t,\,
+    r_t,\,
+    d_t
+  \right],
+\end{equation}
+其中 $\mathcal{I}^{car}_t$ 為 Camera\_Car 觀察，$d_t$ 為目前任務描述。VLM 根據 system prompt 產生
+\begin{equation}
+  (a_t,\eta_t,m_t)=\pi_{\text{VLM}}(\phi(s_t)).
+\end{equation}
+實作上，輸出必須滿足 JSON schema：
+\begin{equation}
+  a_t \in
+  \{\texttt{major\_nav\_node},\texttt{grasp\_agent},
+  \texttt{car\_approach\_agent},\texttt{DONE}\}.
+\end{equation}
+
+決策優先序可寫為規則化策略：
+\begin{equation}
+  a_t =
+  \begin{cases}
+    \texttt{DONE}, & \sigma^{approach}_{t-1}=1,\\
+    \texttt{major\_nav\_node}, & \Omega_t=1,\\
+    \texttt{grasp\_agent}, & \Omega_t=0 \land G_t=\emptyset,\\
+    \texttt{car\_approach\_agent}, & G_t\neq\emptyset,
+  \end{cases}
+\end{equation}
+其中 $\Omega_t$ 表示目標與夾爪間是否存在阻擋或不可接近狀態，$G_t$ 為最新 grasp result。
+
+\subsection{抓取姿態生成}
+
+Grasp Agent 接收 Camera\_Car RGBD 與目標類別，輸出候選抓取姿態集合
+\begin{equation}
+  \mathcal{T}_g =
+  \{(\mathbf{T}^{C}_{g,k}, c_k)\}_{k=1}^{K},
+\end{equation}
+其中 $\mathbf{T}^{C}_{g,k}\in SE(3)$ 為第 $k$ 個 grasp pose 在 camera frame 下的齊次變換，$c_k$ 為 confidence。最佳抓取可表示為
+\begin{equation}
+  k^\star =
+  \arg\max_{k}
+  \left[
+    c_k
+    -
+    \lambda_d d_k
+    -
+    \lambda_c \chi_k
+  \right],
+\end{equation}
+其中 $d_k$ 可表示抓取點與參考點距離，$\chi_k$ 表示碰撞或不可行懲罰。系統保存 $\mathbf{T}^{C}_{g,k^\star}$ 與候選集合供 car approach 使用。
+
+\subsection{底盤靠近與手臂收尾}
+
+car approach runtime 以最新 grasp result 為輸入，先根據抓取姿態與地圖資訊取樣可行底盤 pose。令候選底盤 pose 集合為
+\begin{equation}
+  \mathcal{B}=
+  \{\bm{b}_1,\bm{b}_2,\ldots,\bm{b}_L\},
+  \quad
+  \bm{b}_l=(x_l,y_l,\psi_l).
+\end{equation}
+系統可用成本函數選擇靠近 pose：
+\begin{equation}
+  J(\bm{b}_l)
+  =
+  w_1\|\bm{b}_l-\bm{b}_{cur}\|_2
+  +
+  w_2 e_{\psi,l}
+  +
+  w_3 \mathbb{I}_{collision,l}
+  +
+  w_4 e_{reach,l},
+\end{equation}
+其中 $e_{\psi,l}$ 為朝向誤差，$e_{reach,l}$ 為手臂可達性誤差。選擇
+\begin{equation}
+  \bm{b}^\star = \arg\min_{\bm{b}_l\in\mathcal{B}} J(\bm{b}_l).
+\end{equation}
+
+手臂收尾可形式化為逆運動學問題。令手臂關節為 $\bm{q}$，正運動學為
+\begin{equation}
+  \mathbf{T}_{ee}=F_{kin}(\bm{q}).
+\end{equation}
+目標為讓末端執行器接近抓取姿態 $\mathbf{T}_{g}$：
+\begin{equation}
+  \bm{q}^\star =
+  \arg\min_{\bm{q}}
+  \left(
+    \left\|
+      \bm{p}_{ee}(\bm{q})-\bm{p}_{g}
+    \right\|_2^2
+    +
+    \lambda_R
+    d_R
+    \left(
+      \mathbf{R}_{ee}(\bm{q}),
+      \mathbf{R}_{g}
+    \right)^2
+  \right),
+\end{equation}
+並需滿足關節限制
+\begin{equation}
+  \bm{q}_{min}\leq \bm{q}\leq \bm{q}_{max}.
+\end{equation}
+實際執行包含預開夾爪、移動至目標姿態、閉合夾爪與必要的完成驗證。
+
+\section{實作與部署}
+
+\subsection{Commander 端}
+
+Commander 由 \texttt{main.py} 啟動，並建立追蹤紀錄器、會話記憶、流程編排器與初始 \texttt{CommanderState}。在 mock mode 下，系統不呼叫真實 VLM、GPU 或 ROS2；在 real mode 下，需設定 VLM provider、A2A server URL 與 ROS2 runtime。
+
+\subsection{A2A 推論服務}
+
+RTX 3090 端包含三個主服務：
+\begin{itemize}
+  \item \texttt{find\_agent}：接收多相機影像，回傳 YOLO detection 與標註結果。
+  \item \texttt{get\_item\_info\_agent\_no\_sam3d}：接收選定 instance、多相機影像、bbox 與 world position，回傳目標資訊與 ranked goal poses。
+  \item \texttt{grasp\_agent}：接收 Camera\_Car RGBD 與目標類別，回傳 6-DoF grasp poses。
+\end{itemize}
+
+\subsection{ROS2 與 Nav2}
+
+導航由 \texttt{nav\_goal\_bridge\_pkg} 接收 Commander 發布的 \texttt{/goal\_pose}，再轉送至 Nav2。車體控制與手臂控制分別由 \texttt{car\_control\_pkg} 與 \texttt{arm\_control\_pkg} 提供 action server。Commander 透過子程序呼叫 ROS2 runner，可避免 Python 版本與 ROS2 overlay 對主環境造成污染。
+
+\subsection{日誌與可追蹤性}
+
+每次節點執行都會產生 trace entry，包含節點名稱、延遲、成功狀態、reasoning、context id 與原始結果。令第 $t$ 次事件延遲為
+\begin{equation}
+  \ell_t = t^{end}_t - t^{start}_t.
+\end{equation}
+整體任務延遲可拆解為
+\begin{equation}
+  L =
+  \sum_{t=1}^{T}
+  \left(
+    \ell^{VLM}_t+
+    \ell^{A2A}_t+
+    \ell^{Nav}_t+
+    \ell^{Ctrl}_t
+  \right).
+\end{equation}
+此拆解可用於分析瓶頸，例如 VLM 推理、GPU 推論或 Nav2 到位時間。
+
+\section{實驗設計}
+
+\subsection{實驗場景}
+
+實驗場景為室內 Unity/ROS2 數位孿生環境，包含 room cameras、車載 Camera\_Car、可導航地圖、目標物與障礙物。目標物清單由 \texttt{config/objects.yaml} 定義，例如玩偶、蘋果與玻璃瓶等可抓取物。
+
+\subsection{評估指標}
+
+\subsubsection{任務成功率}
+
+若第 $i$ 次任務成功為 $S_i=1$，失敗為 $S_i=0$，共執行 $N$ 次任務，任務成功率定義為
+\begin{equation}
+  R_{success}
+  =
+  \frac{1}{N}
+  \sum_{i=1}^{N}
+  S_i.
+\end{equation}
+
+\subsubsection{目標確認準確率}
+
+若系統列出的候選集合包含正確目標 instance，記為 $Q_i=1$，否則為 $0$，則候選覆蓋率為
+\begin{equation}
+  R_{target}
+  =
+  \frac{1}{N}
+  \sum_{i=1}^{N}
+  Q_i.
+\end{equation}
+若使用者確認後的 instance 正確，記為 $U_i=1$，則確認準確率為
+\begin{equation}
+  R_{confirm}
+  =
+  \frac{1}{N}
+  \sum_{i=1}^{N}
+  U_i.
+\end{equation}
+
+\subsubsection{導航成功率}
+
+對於每次導航 attempt，若 Nav2 在 timeout 前產生 plan 並到位，記為 $N_i=1$。導航成功率為
+\begin{equation}
+  R_{nav}
+  =
+  \frac{1}{M}
+  \sum_{i=1}^{M}
+  N_i.
+\end{equation}
+平均導航時間為
+\begin{equation}
+  \bar{T}_{nav}
+  =
+  \frac{1}{M_s}
+  \sum_{i:N_i=1}
+  T^{nav}_i,
+\end{equation}
+其中 $M_s$ 為成功導航次數。
+
+\subsubsection{抓取姿態品質}
+
+Grasp Agent 對第 $i$ 次任務輸出的最佳 confidence 為 $c_i^\star$，有效 grasp 數量為 $K_i^{valid}$。平均 confidence 與平均有效候選數可表示為
+\begin{equation}
+  \bar{c}
+  =
+  \frac{1}{N}
+  \sum_{i=1}^{N}
+  c_i^\star,
+  \qquad
+  \bar{K}_{valid}
+  =
+  \frac{1}{N}
+  \sum_{i=1}^{N}
+  K_i^{valid}.
+\end{equation}
+
+\subsubsection{恢復能力}
+
+恢復能力評估系統遇到目標移動、目標消失、navigation failure 或 rank exhaustion 時是否進入正確路由。令第 $j$ 個異常案例的正確恢復指標為 $H_j$，則
+\begin{equation}
+  R_{recover}
+  =
+  \frac{1}{J}
+  \sum_{j=1}^{J}
+  H_j.
+\end{equation}
+
+\subsection{消融實驗}
+
+建議進行以下消融實驗：
+
+\begin{itemize}
+  \item \textbf{無歷史記憶：}移除 \texttt{history\_buffer}，觀察 VLM 是否容易重複選擇同一動作。
+  \item \textbf{無 world position refresh：}不在 grasp/navigation 前刷新 \texttt{/world\_position\_data}，觀察目標移動時的失敗率。
+  \item \textbf{只用第一個 goal pose：}關閉 major navigation rank 切換，觀察候選點耗盡前的成功率差異。
+  \item \textbf{無結構化輸出約束：}比較 VLM 自由文字輸出與 schema 約束輸出的可執行率。
+\end{itemize}
+
+\section{討論}
+
+\subsection{系統優點}
+
+本系統的主要優點在於可維護性與可恢復性。LangGraph 使每個節點的輸入輸出清楚，A2A 服務使 GPU 推論可以獨立部署，ROS2 子程序則隔離了機器人控制環境。VLM 不直接控制硬體，而是在有限動作集合內進行高層判斷，降低不可控輸出的風險。
+
+\subsection{限制}
+
+目前系統仍有幾項限制：
+
+\begin{itemize}
+  \item 多視角物體資訊仰賴 camera calibration 與 \texttt{/world\_position\_data} 的品質；若上游資料不穩定，goal pose ranking 也會受影響。
+  \item VLM 對遮擋與可達性的判斷仍依賴輸入影像與 prompt，若觀察不完整，可能需要多次導航或重新觀察。
+  \item GraspGen 產生的 camera frame grasp pose 仍需由後續 approach runtime 正確轉換與執行，座標系一致性是部署關鍵。
+  \item 系統元件多，部署需同時維護 A2A server、ROS2 overlay、Nav2 map、相機 topic 與模型權重。
+\end{itemize}
+
+\subsection{未來工作}
+
+未來可朝以下方向擴充：
+
+\begin{enumerate}
+  \item 將 item-info 的不確定性明確量化，使 goal pose ranking 能納入估計信心區間。
+  \item 加入更完整的碰撞與可達性預檢，減少 car approach 階段才發現不可行的情況。
+  \item 建立自動化實驗腳本，系統性蒐集不同物件、遮擋程度與初始位置的成功率。
+  \item 將 trace log 轉換為可視化分析報告，用於檢查 VLM 決策與各 agent latency。
+\end{enumerate}
+
+\section{結論}
+
+本文提出一套基於視覺語言模型與多代理人協同架構之主動感知移動操作系統。透過 LangGraph 狀態機、A2A 推論服務、ROS2/Nav2 控制與 GraspGen 抓取姿態生成，系統能將自然語言任務轉換為可執行、可追蹤且可恢復的移動抓取流程。本文也以數學形式定義了任務狀態、動作空間、座標轉換、候選導航點排序、VLM 決策、抓取姿態選擇、靠近控制與實驗指標，為後續正式實驗、消融分析與論文撰寫奠定基礎。
+
+\end{document}

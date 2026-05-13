@@ -1,4 +1,4 @@
-"""Callable runtime entry for the base approach policy."""
+"""Callable runtime entry for the base approach sequence."""
 
 import logging
 from pathlib import Path

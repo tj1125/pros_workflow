@@ -1,5 +1,5 @@
 """
-main.py — VLM-RL Grasping System Entry Point
+main.py — VLM Grasping System Entry Point
 
 Starts the LangGraph orchestration loop.
 All four agent nodes run within this single process.
@@ -82,10 +82,10 @@ def main(
     log_file: str,
 ) -> None:
     """
-    VLM-RL Multi-Agent Active Perception Grasping System.
+    VLM multi-agent grasping system.
 
     Runs a LangGraph stateful loop where Brain (VLM) orchestrates
-    Nav / GraspGen / Approach / View agent nodes to complete a grasping task.
+    navigation, GraspGen, and car approach nodes to complete a grasping task.
     """
     # Resolve mock mode: CLI flag > env var > default True
     if no_mock_mode:
@@ -109,7 +109,7 @@ def main(
 async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
     """Async main loop for the LangGraph orchestration."""
     mode_label = "MOCK" if use_mock else "REAL"
-    logger.info(f"Starting VLM-RL system [{'MOCK' if use_mock else 'REAL'} MODE]")
+    logger.info(f"Starting VLM grasp system [{'MOCK' if use_mock else 'REAL'} MODE]")
 
     trace_logger = TraceLogger(log_file=log_path)
     context_id = uuid.uuid4().hex

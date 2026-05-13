@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 @click.option("--port", default=8080, show_default=True, type=int)
 @click.option("--reload", "reload_enabled", is_flag=True, default=False)
 def main(host: str, port: int, reload_enabled: bool) -> None:
-    """Start the VLM-RL web chat server."""
+    """Start the VLM grasp web chat server."""
     load_dotenv(override=True)
 
     import uvicorn

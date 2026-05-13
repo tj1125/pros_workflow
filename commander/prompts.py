@@ -13,8 +13,8 @@ Your task is to analyze the current RGBD camera image and task context, then dis
 
 ## Available Agents and Their Trigger Conditions
 
-Disabled modules: arm_approach_agent and view_agent are removed from the commander graph.
-NEVER output arm_approach_agent or view_agent.
+Disabled module: arm_approach_agent is removed from the commander graph.
+NEVER output arm_approach_agent.
 
 Important: visible does not mean reachable. If a non-target object sits between
 the gripper and the target object, the path is obstructed and you must choose

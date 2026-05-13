@@ -1,5 +1,5 @@
 # =============================================================================
-# VLM-RL Nav2 + Rosbridge Docker Compose
+# VLM Nav2 + Rosbridge Docker Compose
 # =============================================================================
 # 使用方式：
 #   ./launch_nav.sh           # 前景模式（看 log）
@@ -7,7 +7,7 @@
 #   ./launch_nav.sh --stop    # 停止所有服務
 #
 # 啟動的服務：
-#   nav2       — VLM-RL 導航系統 (scan matcher + localization + Nav2 planning)
+#   nav2       — VLM 導航系統 (scan matcher + localization + Nav2 planning)
 #   rosbridge  — optional Unity WebSocket 橋接 (only when pros_cameraapi is NOT running)
 #
 # 恢復雙網路架構：
@@ -34,7 +34,7 @@ services:
     restart: "unless-stopped"
 
   # ------------------------------------
-  # Nav2：VLM-RL 導航基礎設施 (scan matcher + localization + planning servers)
+  # Nav2：VLM 導航基礎設施 (scan matcher + localization + planning servers)
   # ------------------------------------
   nav2:
     build:

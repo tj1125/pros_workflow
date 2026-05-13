@@ -1,208 +1,169 @@
-# 多代理人主動感知抓取系統 (VLM-RL) 規格文件
+# VLM 多代理人抓取系統部署規格
 
-本文件描述基於 A2A 架構與 LangGraph 狀態機框架的具身智慧機器人系統架構。
+本文件描述目前可部署版本的系統架構。主流程以 [langgraph_flow.png](langgraph_flow.png) 為準；導航由本機 ROS2/Nav2 執行，RTX 3090 端只保留找物、item-info 與 grasp 相關 A2A 服務。
 
-## 1. 架構與選型
+## 1. 架構概觀
 
 ```mermaid
 graph TD
-  subgraph Commander [Docker Container: Commander]
-    LG[LangGraph Orchestrator]
-    Memory[滑動窗口緩衝記憶體 x3]
-    Brain[Brain: Gemini/Ollama]
-    Logger[TraceLogger: JSONL]
+  subgraph Commander["本機 Commander / Docker"]
+    Main[main.py / web_main.py]
+    Graph[LangGraph Orchestrator]
+    Brain[Brain: Gemini or Ollama]
+    State[CommanderState]
+    Trace[TraceLogger + SessionMemoryStore]
+    NavRunner[nav_move_runner.py]
+    CarApproach[agents.car_approach subprocess]
   end
 
-  subgraph Executors [RTX 3090 Server]
-    Find[Find Agent: 8005]
-    Nav[Nav Agent: 8001]
-    Grasp[GraspGen Agent: 8007]
-    Approach[Approach Agent: 8003]
-    View[View Agent: 8004]
+  subgraph RTX["RTX 3090 A2A Services"]
+    Find[find_agent :8005]
+    ItemInfo[get_item_info_agent_no_sam3d :8006]
+    Grasp[grasp_agent :8007]
   end
 
-  subgraph Unity [Unity Simulation]
-    Cam1[Camera_Car]
-    Cam2[Camera_Overview]
+  subgraph ROS["ROS2 / Unity"]
+    World[/world_position_data]
+    RoomCams[Camera_Room1_12..15]
+    CarCam[Camera_Car RGBD]
+    Nav2[Nav2 + nav_goal_bridge_pkg]
+    Control[car_control_pkg + arm_control_pkg]
   end
 
-  subgraph Config [config/]
-    cameras.yaml
-    objects.yaml
-  end
-
-  LG --> Brain
-  LG <--> Memory
-  LG --> Logger
-  LG <--> Find
-  LG <--> Nav
-  LG <--> Grasp
-  LG <--> Approach
-  LG <--> View
-  LG -- ROS Trigger --> Cam1
-  LG -- ROS Trigger --> Cam2
-  LG -- 讀取 --> Config
+  Main --> Graph
+  Graph --> Brain
+  Graph <--> State
+  Graph --> Trace
+  Graph --> Find
+  Graph --> ItemInfo
+  Graph --> Grasp
+  Graph --> NavRunner
+  Graph --> CarApproach
+  Find --> RoomCams
+  ItemInfo --> RoomCams
+  ItemInfo --> World
+  Grasp --> CarCam
+  NavRunner --> Nav2
+  CarApproach --> Control
 ```
 
-## 2. 資料模型
+## 2. LangGraph 節點
 
-```mermaid
-classDiagram
-  class CommanderState {
-    +str task_description
-    +dict current_observation
-    +str reasoning
-    +str call_module
-    +dict module_params
-    +list history_buffer
-    +str current_status
-    +str context_id
-    +int retry_count
-    +float decision_latency
-    +str agent_result
-    +bool task_complete
-    +dict target_object
-    +list candidate_objects
-    +bool find_complete
-  }
-  class A2AAgentExecutor {
-    +execute(RequestContext, EventQueue)
-    +cancel(RequestContext, EventQueue)
-  }
-  class TraceLogEntry {
-    +string timestamp
-    +string agent_called
-    +float decision_latency
-    +float execution_latency
-    +string reasoning
-  }
+| 節點 | 責任 |
+|---|---|
+| `greeting_node` | 啟動對話。 |
+| `human_reply_node` | 讀取 stdin 或 web 介面輸入。 |
+| `task_classification_node` | 判斷一般聊天或抓取任務，並對應 `config/objects.yaml`。 |
+| `ai_reply_node` / `chat_memory_node` | 一般聊天回覆與短期聊天記憶。 |
+| `input_node` | 確認抓取任務與目標 label。 |
+| `find_node` | 讀取 `/world_position_data`，擷取 room cameras，列出候選 instance 給使用者確認。 |
+| `get_item_info_no_sam3d_node` | 呼叫 no-SAM3D item-info A2A 服務，取得目標資訊與 ranked goal poses。 |
+| `nav_move_node` | 發布 Nav2 goal pose，等待 plan 與 AMCL 到位。 |
+| `observe_node` | 擷取 `Camera_Car` 觀察。 |
+| `reason_node` | 呼叫 Brain，輸出下一步 `call_module`。 |
+| `update_item_info_1_node` | major navigation 前刷新 world position，目標移動時重算 item info。 |
+| `major_nav_node` | 切到下一個 ranked goal pose。 |
+| `update_item_info_2_node` | grasp 前刷新 world position，目標移動時重算 item info。 |
+| `car_grasp_node` | 呼叫 Grasp Agent，保存 `latest_grasp_result`。 |
+| `car_approach_node` | 啟動 car approach subprocess，完成底盤靠近與手臂/夾爪收尾。 |
+| `update_memory_node` | 將最近 3 次行動摘要、key facts、latest result 寫回 state。 |
+| `nav_home_node` / `goodbye_node` | 任務完成、失敗或結束時回 home 並結束 graph。 |
+
+## 3. 決策輸出契約
+
+`commander/brain.py` 會驗證 VLM 輸出為 `BrainDecision`：
+
+```json
+{
+  "reasoning": "short reason",
+  "call_module": "major_nav_node|grasp_agent|car_approach_agent|DONE",
+  "module_params": {}
+}
 ```
 
-## 3. 關鍵流程
+`nav_agent` 仍被視為 backward-compatible alias，但 prompt 要求優先輸出 `major_nav_node`。`arm_approach_agent` 不由目前主流程直接呼叫。
+
+## 4. 主序列
 
 ```mermaid
 sequenceDiagram
-  participant H as Human Operator
+  participant H as Human
   participant C as Commander
+  participant R as ROS2/Unity
+  participant A as RTX 3090 A2A
   participant V as VLM Brain
-  participant A as Agents (RTX 3090)
-  participant U as Unity Cameras
 
-  H->>C: 輸入任務指令
-  C->>U: 向所有相機觸發拍照 (find_node)
-  U-->>C: 回傳多視角影像
-  C->>A: 送圖至 Find Agent (A2A)
-  A-->>C: 回傳候選物品清單
-  C->>H: 顯示候選物品，等待確認
-  H->>C: 選擇目標物
+  H->>C: 任務或聊天輸入
+  C->>C: task_classification_node
+  C->>R: find_node 讀 /world_position_data 與 room cameras
+  C->>H: 顯示候選 instance / preview
+  H->>C: 選定目標
+  C->>A: get_item_info_no_sam3d_node
+  A-->>C: center_world + group_ranking + goal_pose
+  C->>R: nav_move_node 發布 /goal_pose
+  R-->>C: plan / AMCL / result
   loop Observe-Reason-Act
-    C->>U: 觸發 Camera_Car 拍照 (observe_node)
-    U-->>C: 回傳當前影像
-    C->>V: 提供影像、目標物、歷史動作
-    V-->>C: 回傳 JSON 決策
-    C->>A: 呼叫對應 Agent
-    A-->>C: 回傳執行結果
-    C->>C: 更新記憶與日誌
+    C->>R: observe_node 擷取 Camera_Car
+    C->>V: reason_node 提供觀察與 memory
+    V-->>C: BrainDecision JSON
+    alt obstruction
+      C->>R: update_item_info_1_node
+      C->>R: major_nav_node / nav_move_node
+    else clear path
+      C->>R: update_item_info_2_node
+      C->>A: car_grasp_node
+      A-->>C: 6-DoF grasp result
+      C->>R: car_approach_node
+    else done
+      C->>R: nav_home_node
+    end
+    C->>C: update_memory_node
   end
 ```
 
-## 4. 系統脈絡圖
+## 5. 狀態資料
 
-```mermaid
-C4Context
-  Person(user, "User / 測試者")
-  System(vlm_rl, "VLM RL 抓取系統", "LangGraph 狀態機控制平台")
-  System_Ext(ollama, "Ollama (gemma4:26b)", "多模態推理引擎")
-  System_Ext(agent_server, "Agent Server (RTX3090)", "物件偵測、GraspNet、導航推論")
-  System_Ext(unity, "Unity Simulation", "相機影像與機器人物理環境")
+主要 state 欄位：
 
-  Rel(user, vlm_rl, "下任務指令、確認目標物")
-  Rel(vlm_rl, ollama, "影像+提示詞→決策 JSON", "HTTPS")
-  Rel(vlm_rl, agent_server, "A2A 雙向通訊", "HTTPS / JSON")
-  Rel(vlm_rl, unity, "ROS Trigger 取得相機影像", "ROS2 / rosbridge")
-```
+| 欄位 | 說明 |
+|---|---|
+| `context_id` | A2A 與 session artifact 共用任務 ID。 |
+| `target_object` | 使用者確認後的目標資料，後續合併 item-info 結果。 |
+| `selected_target` | find/update item-info 使用的 instance metadata。 |
+| `world_position_db` | 最新 `/world_position_data` snapshot。 |
+| `goal_pose_db` | `group_ranking` 展開後的 ranked goal pose 資料。 |
+| `nav_goal_pose` | 下一次 Nav2 要執行的目標 pose。 |
+| `latest_grasp_result` | Grasp Agent 輸出的最佳與候選 grasp poses。 |
+| `latest_approach_result` | car approach 的底盤、手臂與夾爪結果。 |
+| `history_buffer` | 最近 3 次行動摘要與 key facts。 |
 
-## 5. 容器/部署概觀
+## 6. 失敗與恢復策略
 
-```mermaid
-graph TD
-  subgraph "Commander Container (Docker)"
-    Main[main.py]
-    LangGraph[LangGraph 狀態機]
-  end
+- 找不到目標 instance：`find_node` 設為 `TARGET_NOT_FOUND`，路由到 `goodbye_node`。
+- item-info 失敗或沒有 goal pose：路由 `nav_home_node`。
+- world position 中目標消失：清空 goal pose，回 home。
+- world position 中目標移動超過 `WORLD_POSITION_UPDATE_THRESHOLD_M`：重跑 `get_item_info_no_sam3d_node`。
+- navigation 失敗：寫入 `NAV_FAILED` 與 `nav_move_events`，後續 memory 讓 Brain 或路由選擇下一步。
+- major navigation rank 耗盡：標記 task complete，回 home。
+- car approach 成功且 `arm_result.success=true`：Brain 下次應輸出 `DONE`。
 
-  subgraph "RTX 3090 Agent Services"
-    S0[FastAPI: 8005 Find]
-    S1[FastAPI: 8001 Nav]
-    S2[FastAPI: 8007 GraspGen]
-    S3[FastAPI: 8003 Approach]
-    S4[FastAPI: 8004 View]
-  end
+## 7. 部署邊界
 
-  Main --> LangGraph
-  LangGraph <--> S0
-  LangGraph <--> S1
-  LangGraph <--> S2
-  LangGraph <--> S3
-  LangGraph <--> S4
-```
+本機 Commander 負責：
 
-## 6. 模組關係圖
+- LangGraph 狀態機與 VLM 決策。
+- 讀取 ROS2 topic、相機 topic、Nav2 result。
+- 本機底盤/手臂/夾爪 subprocess。
+- trace、session artifact 與 web UI。
 
-```mermaid
-graph LR
-  Orchestrator --> FindAgent
-  Orchestrator --> Brain
-  Orchestrator --> NavAgent
-  Orchestrator --> GraspAgent
-  Orchestrator --> ApproachAgent
-  Orchestrator --> ViewAgent
-  FindAgent --> CameraModule[camera.py]
-  FindAgent --> Config[config/cameras.yaml]
-  Brain --> Prompts[prompts.py]
-  Orchestrator -. 寫入 .-> State[state.py]
-  Orchestrator -. 寫入 .-> TraceLog[TraceLogger]
-```
+RTX 3090 負責：
 
-## 7. 流程圖
+- YOLO 找物與標註。
+- no-SAM3D item-info 與 ranked goal pose。
+- Camera_Car RGBD grasp pose generation。
 
-```mermaid
-flowchart TD
-  Start[啟動系統] --> Input[接收任務指令 input_node]
-  Input --> Find[多相機掃描物品 find_node]
-  Find --> Confirm[等待人類確認目標物]
-  Confirm --> Loop[進入 Observe-Reason-Act 迴圈]
-  Loop --> Obs[拍照 observe_node]
-  Obs --> Reason[VLM 推理 reason_node]
-  Reason --> Route{決定動作}
-  Route -- 遮擋 / major_nav_node --> UpdateInfoMajor[update_item_info_1_node: 檢查 /world_position_data]
-  UpdateInfoMajor -- 目標移動 --> ItemInfo
-  ItemInfo -- 有 goal_pose --> NavMove[nav_move_node: 執行導航]
-  ItemInfo -- 失敗/無 goal_pose --> Home
-  UpdateInfoMajor -- 目標消失 --> Home[nav_home_node]
-  UpdateInfoMajor -- major --> MajorNav[major_nav_node: 下一 rank best goal_pose]
-  MajorNav -- 有下一 rank --> NavMove
-  MajorNav -- 無下一 rank --> Done
-  Route -- 路徑暢通 --> Grasp[grasp_node: 生成抓取位姿]
-  Route -- 位姿確定 --> Approach[approach_node: 引導夾爪]
-  Route -- 任務完成 --> Done[結束]
-  NavMove --> Memory[update_memory_node]
-  Home --> Done
-  Grasp --> Memory
-  Approach --> Memory
-  Memory --> Loop
-```
+ROS2/Unity 負責：
 
-## 8. 狀態圖
-
-```mermaid
-stateDiagram-v2
-  [*] --> INPUT_RECEIVED
-  INPUT_RECEIVED --> TARGET_FOUND : find_node 完成並取得人類確認
-  TARGET_FOUND --> OBSERVED : observe_node 取得相機影像
-  OBSERVED --> REASONED : VLM 推論產生行動計畫
-  REASONED --> EXECUTED : 執行對應 Agent
-  EXECUTED --> MEMORY_UPDATED
-  MEMORY_UPDATED --> OBSERVED : 繼續迴圈
-  MEMORY_UPDATED --> [*] : 任務完成/終止
-```
+- `/world_position_data`、room camera、Camera_Car RGBD。
+- Nav2 導航與 AMCL。
+- 車體、手臂與夾爪 action server。

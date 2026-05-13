@@ -798,7 +798,7 @@ class Orchestrator:
             }
 
         print("\n" + "=" * 60)
-        print("  VLM-RL 多代理人抓取系統")
+        print("  VLM 多代理人抓取系統")
         print("=" * 60)
         print("請選擇你要抓取的目標物：")
         for i, obj in enumerate(objects, 1):
@@ -1776,7 +1776,7 @@ class Orchestrator:
             "approach_agent":     "car_grasp_node",
             "car_approach_agent": "car_grasp_node",
         }
-        if module in {"arm_approach_agent", "view_agent"}:
+        if module == "arm_approach_agent":
             logger.warning("%s is disabled; ending without executing it.", module)
             return "end"
         return mapping.get(module, "end")
@@ -2308,38 +2308,18 @@ class Orchestrator:
 
         params = dict(state.get("module_params", {}) or {})
         latest_grasp = state.get("latest_grasp_result", {}) or {}
-        latest_nav = state.get("latest_nav_result", {}) or {}
-        last_car_approach_amcl_pose = state.get("last_car_approach_amcl_pose", {}) or {}
-        previous_nav_goal_pose = (
-            state.get("nav_goal_pose")
-            or latest_nav.get("goal_pose")
-            or {}
-        )
-        if last_car_approach_amcl_pose:
-            print("\n📍 [car_approach_node] 偵測到上一次 car_approach 結束的 /amcl_pose，保留為狀態紀錄，不作為 /initialpose publish...")
-            logger.info(
-                "[car_approach_node] last_car_approach_amcl_pose=%s",
-                last_car_approach_amcl_pose,
-            )
-        elif previous_nav_goal_pose:
-            print("\n📍 [car_approach_node] 第一次 car_approach，偵測到上一個 Nav2 /goal_pose，但不會拿來 publish /initialpose...")
-            logger.info("[car_approach_node] previous_nav_goal_pose=%s", previous_nav_goal_pose)
-        else:
-            logger.warning(
-                "[car_approach_node] no previous car_approach AMCL pose or Nav2 goal_pose available; "
-                "car_approach will use capture-time /amcl_pose only as an internal reference if available."
-            )
 
-        # Inject grasp result and keep prior pose snapshots for internal reference only.
+        # Inject the grasp result; commander no longer forwards prior pose snapshots.
         self._set_default_grasp_result(params, latest_grasp)
-        if previous_nav_goal_pose:
-            params["previous_nav_goal_pose"] = previous_nav_goal_pose
-        if last_car_approach_amcl_pose:
-            params["last_car_approach_amcl_pose"] = last_car_approach_amcl_pose
 
+        print("\n🚗 [car_approach_node] 啟動 car_approach_agent...", flush=True)
         agent = CarApproachAgent()
         result = await self._run_agent(agent, state, has_http=False, params_override=params)
         result["call_module"] = "car_approach_agent"
+        print(
+            f"\n✅ [car_approach_node] car_approach_agent 結束：success={result.get('agent_success', False)}",
+            flush=True,
+        )
         return result
 
     async def _run_agent(
