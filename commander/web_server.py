@@ -1223,27 +1223,6 @@ _INDEX_HTML = r"""<!doctype html>
       display: grid;
       gap: 10px;
     }
-    .candidate-file-card {
-      display: grid;
-      gap: 8px;
-      padding: 8px;
-      border: 2px solid var(--line);
-      border-radius: 15px;
-      background: #f8fbff;
-    }
-    .candidate-file-title {
-      color: var(--ink);
-      font-weight: 700;
-      font-size: 13px;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
-    }
-    .candidate-file-meta {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
-    }
     .messages {
       flex: 1;
       padding: 40px 56px;
@@ -1700,9 +1679,7 @@ _INDEX_HTML = r"""<!doctype html>
     let activeInterruptCard = null;
     let activeInterruptSignature = "";
     let currentInterruptValue = null;
-    let latestCandidateFiles = [];
     let candidateMenuSuppressed = false;
-    let candidatePollTimer = null;
     let streamInFlight = false;
     let loadingIndicator = null;
     let stateEvents = null;
@@ -1942,44 +1919,6 @@ _INDEX_HTML = r"""<!doctype html>
       return gallery;
     }
 
-    function groupedCandidateFiles() {
-      const groups = new Map();
-      for (const file of latestCandidateFiles) {
-        const key = file.instance_key || file.name || file.path || "candidate";
-        if (!groups.has(key)) {
-          groups.set(key, {
-            instance_key: key,
-            files: [],
-            cameras: []
-          });
-        }
-        const group = groups.get(key);
-        group.files.push(file);
-        if (file.camera && !group.cameras.includes(file.camera)) group.cameras.push(file.camera);
-      }
-      return Array.from(groups.values());
-    }
-
-    function makeCandidateFileCard(group) {
-      const card = document.createElement("div");
-      card.className = "candidate-file-card";
-      card.appendChild(makePreviewGallery({
-        instance_key: group.instance_key,
-        preview_urls: group.files.map((file) => file.preview_url).filter(Boolean)
-      }));
-
-      const title = document.createElement("div");
-      title.className = "candidate-file-title";
-      title.textContent = group.instance_key;
-      card.appendChild(title);
-
-      const meta = document.createElement("div");
-      meta.className = "candidate-file-meta";
-      meta.textContent = group.cameras.length ? group.cameras.join(", ") : `${group.files.length} image${group.files.length > 1 ? "s" : ""}`;
-      card.appendChild(meta);
-      return card;
-    }
-
     function renderCandidateMenu(value = currentInterruptValue) {
       candidateList.replaceChildren();
       const detections = (value && value.detections) || [];
@@ -2001,29 +1940,7 @@ _INDEX_HTML = r"""<!doctype html>
         return;
       }
 
-      const groups = groupedCandidateFiles();
-      for (const group of groups) {
-        candidateList.appendChild(makeCandidateFileCard(group));
-      }
-      candidateMenu.hidden = groups.length === 0;
-    }
-
-    async function refreshCandidateFiles() {
-      if (!sessionId) return;
-      try {
-        const response = await fetch(`/api/sessions/${sessionId}/find-candidates`);
-        if (!response.ok) return;
-        const data = await response.json();
-        latestCandidateFiles = data.items || [];
-        if (!currentInterruptValue) renderCandidateMenu(null);
-      } catch (error) {
-      }
-    }
-
-    function startCandidatePolling() {
-      if (candidatePollTimer) window.clearInterval(candidatePollTimer);
-      refreshCandidateFiles();
-      candidatePollTimer = window.setInterval(refreshCandidateFiles, 5000);
+      candidateMenu.hidden = true;
     }
 
     function makeManualInput(value) {
@@ -2155,7 +2072,6 @@ _INDEX_HTML = r"""<!doctype html>
           activeInterruptSignature = "";
         }
         currentInterruptValue = null;
-        latestCandidateFiles = [];
         candidateMenuSuppressed = true;
         renderCandidateMenu(null);
         updateSendButtonState();
@@ -2210,7 +2126,6 @@ _INDEX_HTML = r"""<!doctype html>
 
     window.addEventListener("beforeunload", () => {
       if (stateEvents) stateEvents.close();
-      if (candidatePollTimer) window.clearInterval(candidatePollTimer);
     });
 
     form.addEventListener("submit", (event) => {
@@ -2233,7 +2148,6 @@ _INDEX_HTML = r"""<!doctype html>
         addMessage("system", `Restored session. Logs: ${data.logs_path}`);
         syncState(data, {showChat: true});
         connectStateEvents();
-        startCandidatePolling();
         return true;
 	      } catch (error) {
 	        return false;
@@ -2255,7 +2169,6 @@ _INDEX_HTML = r"""<!doctype html>
       addMessage("assistant", data.greeting);
       addMessage("system", `Logs: ${data.logs_path}`);
       connectStateEvents();
-      startCandidatePolling();
     }
 	    init();
 	  </script>
