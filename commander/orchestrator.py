@@ -288,11 +288,26 @@ class Orchestrator:
 
     async def _greeting_node(self, state: CommanderState) -> Dict[str, Any]:
         started_at = time.time()
+        if state.get("greeting_sent", False):
+            status = "GREETING_SKIPPED"
+            return {
+                "current_status": status,
+                "node_execution_log": self._node_execution_log(
+                    state,
+                    "greeting_node",
+                    status,
+                    started_at,
+                    reasoning="Greeting was already displayed before graph execution.",
+                    extra_info={"source": "greeting_sent"},
+                ),
+            }
+
         status = "GREETING_SENT"
         message = "嗨～有什麼需要幫忙的嗎？"
         print("\n嗨～有什麼需要幫忙的嗎？", flush=True)
         return {
             "current_status": status,
+            "greeting_sent": True,
             "node_execution_log": self._node_execution_log(
                 state,
                 "greeting_node",
@@ -1149,7 +1164,7 @@ class Orchestrator:
             previous_target.get("center_world", []),
             refreshed_target.get("center_world", []),
         )
-        threshold_m = float(os.getenv("WORLD_POSITION_UPDATE_THRESHOLD_M", "0.05"))
+        threshold_m = float(os.getenv("WORLD_POSITION_UPDATE_THRESHOLD_M", "0.3"))
         if moved_distance <= threshold_m:
             return {
                 **base_update,

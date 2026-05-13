@@ -29,7 +29,16 @@ mock() {
 
 run() {
     cd "$VLM_RL_ROOT" || return 1
+    if [ -n "${WEB_PORT:-}" ]; then
+        uv run python web_main.py --host "${WEB_HOST:-0.0.0.0}" --port "$WEB_PORT" "$@"
+        return $?
+    fi
     uv run python main.py --no-mock "$@"
+}
+
+web() {
+    cd "$VLM_RL_ROOT" || return 1
+    uv run python web_main.py --host "${WEB_HOST:-0.0.0.0}" --port "${WEB_PORT:-8080}" "$@"
 }
 
 t() {

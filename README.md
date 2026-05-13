@@ -87,6 +87,17 @@ uv run python test_client.py --mock-only # 僅 Mock 閉環測試
 ./enter_docker.sh --rebuild
 ```
 
+如果要從本機瀏覽器開 repo 內建的 FastAPI + SSE 聊天介面，請把 web port publish 出來：
+
+```bash
+./enter_docker.sh --web-port 8080
+
+# 容器內
+run
+```
+
+接著在本機瀏覽器開 `http://localhost:8080`。
+
 如果你要在 Linux 桌面主機上開 PyBullet GUI 或其他 X11 視窗，請用獨立入口：
 
 ```bash

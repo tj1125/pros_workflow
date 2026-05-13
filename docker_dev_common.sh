@@ -11,15 +11,33 @@ ARCH="$(uname -m)"
 OS="$(uname -s)"
 GPU_FLAGS=()
 DOCKER_ARGS=()
+WEB_PORT_SPEC=""
 
 parse_common_docker_args() {
-    for arg in "$@"; do
-        case "$arg" in
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
             -b|--rebuild)
                 FORCE_REBUILD=true
+                shift
+                ;;
+            --web-port)
+                if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                    echo "--web-port requires a port, for example: --web-port 8080" >&2
+                    exit 1
+                fi
+                WEB_PORT_SPEC="$2"
+                shift 2
+                ;;
+            --web-port=*)
+                WEB_PORT_SPEC="${1#*=}"
+                if [ -z "$WEB_PORT_SPEC" ]; then
+                    echo "--web-port requires a port, for example: --web-port=8080" >&2
+                    exit 1
+                fi
+                shift
                 ;;
             *)
-                echo "Unknown argument: $arg" >&2
+                echo "Unknown argument: $1" >&2
                 exit 1
                 ;;
         esac
@@ -79,6 +97,28 @@ build_base_docker_args() {
         -w
         /workspaces/VLM_RL
     )
+
+    if [ -n "$WEB_PORT_SPEC" ]; then
+        local web_host_port="$WEB_PORT_SPEC"
+        local web_container_port="$WEB_PORT_SPEC"
+
+        if [[ "$WEB_PORT_SPEC" == *:* ]]; then
+            web_host_port="${WEB_PORT_SPEC%%:*}"
+            web_container_port="${WEB_PORT_SPEC##*:}"
+        fi
+
+        if [ -z "$web_host_port" ] || [ -z "$web_container_port" ]; then
+            echo "Invalid --web-port value: $WEB_PORT_SPEC" >&2
+            exit 1
+        fi
+
+        DOCKER_ARGS+=(
+            -p
+            "${web_host_port}:${web_container_port}"
+            --env
+            WEB_PORT="$web_container_port"
+        )
+    fi
 
     if [ -f "$SCRIPT_DIR/.env" ]; then
         DOCKER_ARGS+=(--env-file "$SCRIPT_DIR/.env")

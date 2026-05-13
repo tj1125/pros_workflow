@@ -6,7 +6,7 @@ import time
 from typing import Any, Dict, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .state import CommanderState
 
@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 class BrainDecision(BaseModel):
     """Structured JSON output from the VLM reasoning step."""
+
+    model_config = ConfigDict(extra="forbid")
 
     reasoning: str = Field(
         description="Step-by-step reasoning about the current scene and why this action is chosen"
@@ -50,6 +52,7 @@ class Brain:
 
     def __init__(self, use_mock: bool = False):
         self.use_mock = use_mock
+        self._raw_model = None
         self._model = None
 
         if not use_mock:
@@ -63,24 +66,27 @@ class Brain:
             from langchain_google_genai import ChatGoogleGenerativeAI
 
             model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-            self._model = ChatGoogleGenerativeAI(
+            self._raw_model = ChatGoogleGenerativeAI(
                 model=model_name,
                 google_api_key=os.getenv("GOOGLE_API_KEY"),
-            ).with_structured_output(BrainDecision)
+            )
+            self._model = self._raw_model.with_structured_output(BrainDecision)
             logger.info(f"[Brain] Using Google Gemini: {model_name}")
 
         elif provider == "ollama":
             from langchain_openai import ChatOpenAI
 
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            model_name = os.getenv("OLLAMA_MODEL", "gemma4:31b")
+            model_name = os.getenv("OLLAMA_MODEL", "gemma4:26b")
             # Ollama exposes OpenAI-compatible API
-            self._model = ChatOpenAI(
+            self._raw_model = ChatOpenAI(
                 model=model_name,
                 openai_api_key="ollama",
                 openai_api_base=f"{base_url}/v1",
                 temperature=0,
-            ).with_structured_output(BrainDecision)
+                extra_body={"format": "json"},
+            )
+            self._model = self._raw_model
             logger.info(f"[Brain] Using Ollama: {model_name} @ {base_url}")
 
         else:
@@ -106,7 +112,9 @@ class Brain:
             f"## Current Observation\n{obs_desc}\n\n"
             f"## Action History (last 3)\n{history_summary}\n\n"
             f"## Retry Count\n{retry}\n\n"
-            "Decide the next action. Output valid JSON."
+            "Decide the next action. Output exactly one JSON object with this schema:\n"
+            '{"reasoning":"short reason","call_module":"major_nav_node|grasp_agent|car_approach_agent|DONE","module_params":{}}\n'
+            "Do not output markdown. Do not add extra keys."
         )
 
         image_b64 = obs.get("image_base64")
@@ -158,7 +166,7 @@ class Brain:
         return {"prediction": decision, "latency": latency}
 
     async def _llm_reason(self, state: CommanderState) -> BrainDecision:
-        """Real VLM call via LangChain structured output."""
+        """Real VLM call. Ollama uses JSON mode; Google uses native structured output."""
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=self._build_prompt(state)),
@@ -166,7 +174,35 @@ class Brain:
         result = await asyncio.get_event_loop().run_in_executor(
             None, self._model.invoke, messages
         )
-        return result
+        if isinstance(result, BrainDecision):
+            return result
+        if hasattr(result, "content"):
+            return self._parse_raw_decision(result)
+        return BrainDecision.model_validate(result)
+
+    @classmethod
+    def _parse_raw_decision(cls, raw_result: Any) -> BrainDecision:
+        text = cls._raw_message_text(raw_result).strip()
+        return BrainDecision.model_validate_json(text)
+
+    @staticmethod
+    def _raw_message_text(raw_result: Any) -> str:
+        content = getattr(raw_result, "content", raw_result)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if text:
+                        parts.append(str(text))
+                else:
+                    parts.append(str(item))
+            return "\n".join(parts)
+        return str(content)
 
     async def _mock_reason(self, state: CommanderState) -> BrainDecision:
         """Deterministic mock sequence for local testing without GPU/VLM."""

@@ -64,5 +64,8 @@ major_nav_node instead of grasp_agent.
 Use the Action History KeyFacts as authoritative memory of prior stages.
 Choose the next module by reasoning over those facts and the current observation.
 
-You MUST respond with valid JSON matching the BrainDecision schema.
+You MUST respond with exactly one raw JSON object matching this schema:
+{"reasoning":"short reason","call_module":"major_nav_node|grasp_agent|car_approach_agent|DONE","module_params":{}}
+Do not wrap the JSON in markdown fences. Do not output ```json or ```.
+Do not use "decision"; the module field is named "call_module".
 """

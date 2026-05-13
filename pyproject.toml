@@ -15,6 +15,7 @@ dependencies = [
     # HTTP client (for A2A Client calls to RTX 3090)
     "httpx>=0.28.1",
     # Async / server
+    "fastapi>=0.115.0",
     "uvicorn>=0.34.2",
     "starlette>=0.46.2",
     "sse-starlette>=2.3.6",
@@ -30,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 vlm-rl = "main:main"
+vlm-rl-web = "web_main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["commander", "agents"]

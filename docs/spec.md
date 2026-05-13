@@ -112,7 +112,7 @@ sequenceDiagram
 C4Context
   Person(user, "User / 測試者")
   System(vlm_rl, "VLM RL 抓取系統", "LangGraph 狀態機控制平台")
-  System_Ext(ollama, "Ollama (gemma3:12b)", "多模態推理引擎")
+  System_Ext(ollama, "Ollama (gemma4:26b)", "多模態推理引擎")
   System_Ext(agent_server, "Agent Server (RTX3090)", "物件偵測、GraspNet、導航推論")
   System_Ext(unity, "Unity Simulation", "相機影像與機器人物理環境")
 

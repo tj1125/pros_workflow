@@ -30,6 +30,7 @@ class CommanderState(TypedDict):
     task_description: str
 
     # General chat loop state before entering a specific robot task
+    greeting_sent: bool
     human_reply: str
     task_intent: str
     selected_object_index: int
@@ -146,6 +147,7 @@ def create_initial_state(
     """Build a fully-populated initial CommanderState."""
     return {
         "task_description": task_description,
+        "greeting_sent": False,
         "human_reply": "",
         "task_intent": "",
         "selected_object_index": 0,
