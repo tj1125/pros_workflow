@@ -40,12 +40,12 @@ agent_card = AgentCard(
             description="Generate the highest-confidence grasp pose from a single RGBD observation.",
             tags=["grasp", "rgbd", "yolo", "sam"],
             examples=["generate grasp pose for object 'doll' from Camera_Car RGBD"],
-            input_modes=["text"],
-            output_modes=["text"],
+            input_modes=["data", "file"],
+            output_modes=["data"],
         )
     ],
-    default_input_modes=["text"],
-    default_output_modes=["text"],
+    default_input_modes=["data", "file"],
+    default_output_modes=["data"],
 )
 
 

@@ -1,199 +1,85 @@
-from typing import Annotated, TypedDict, List, Dict, Any
+from __future__ import annotations
+
+from typing import Annotated, Any, Dict, List, TypedDict
 
 
-def _keep_last_three(existing: List, new: List) -> List:
-    """Reducer: append new items and keep only the last 3 entries."""
-    combined = existing + new
-    return combined[-3:]
+def _append_history(existing: List, new: List) -> List:
+    return existing + new
 
 
-def _keep_last_six(existing: List, new: List) -> List:
-    """Reducer: append new chat turns and keep only the last 6 entries."""
-    combined = existing + new
-    return combined[-6:]
-
-
-LATEST_RESULT_KEYS = (
-    "latest_nav_result",
-    "latest_grasp_result",
-    "latest_approach_result",
-)
+def _merge_dict(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing or {})
+    merged.update(new or {})
+    return merged
 
 
 class CommanderState(TypedDict):
-    """
-    LangGraph global state for the VLM grasping system.
-    Tracks the full lifecycle of an observation-reason-act cycle.
-    """
+    """Narrow LangGraph state. Large data lives in ArtifactStore."""
 
-    # Human task description: set once at the start by the operator
-    task_description: str
+    context_id: str
+    interface_mode: str
+    current_status: str
+    task_complete: bool
 
-    # General chat loop state before entering a specific robot task
     greeting_sent: bool
     human_reply: str
     task_intent: str
     selected_object_index: int
     ai_reply: str
-    chat_history_buffer: Annotated[List[Dict[str, Any]], _keep_last_six]
-
-    # Last non-agent node execution payload persisted by SessionMemoryStore
-    node_execution_log: Dict[str, Any]
-
-    # Current environment observation (image data or mock description)
-    current_observation: Dict[str, Any]
-
-    # VLM reasoning output
-    reasoning: str
-
-    # Target module/node to invoke (major_nav_node / grasp_agent / car_approach_agent / DONE)
-    call_module: str
-
-    # Parameters to pass into the target agent
+    task: Dict[str, Any]
+    requested_object: Dict[str, Any]
+    selected_instance: Dict[str, Any]
+    world_position: Dict[str, Any]
+    room_cameras: Dict[str, Any]
+    item_info: Dict[str, Any]
+    navigation: Annotated[Dict[str, Any], _merge_dict]
+    observation: Dict[str, Any]
+    decision: Dict[str, Any]
     module_params: Dict[str, Any]
+    grasp_result: Dict[str, Any]
+    approach_result: Dict[str, Any]
+    last_execution: Dict[str, Any]
 
-    # Sliding window memory: last 3 action records
-    # operator.add causes LangGraph to APPEND new entries
-    history_buffer: Annotated[List[Dict[str, Any]], _keep_last_three]
-
-    # Current pipeline status string (INIT / OBSERVED / REASONED / EXECUTED / DONE)
-    current_status: str
-
-    # Shared context ID for A2A session tracking
-    context_id: str
-
-    # Number of action cycles completed
+    session_summary: str
+    history_buffer: Annotated[List[Dict[str, Any]], _append_history]
     retry_count: int
 
-    # Latency measured during the reasoning step (seconds)
-    decision_latency: float
 
-    # Result payload returned by the last executed agent
-    agent_result: Any
-
-    # Whether the task has been marked complete
-    task_complete: bool
-
-    # Confirmed target object (set by find_node after user confirmation)
-    # Contains: id, label, position_3d, camera
-    target_object: Dict[str, Any]
-
-    # Candidate objects returned by find_node (before user confirmation)
-    candidate_objects: List[Dict[str, Any]]
-
-    # Fully-prepared target selected by find_node for get_item_info_no_sam3d_node
-    selected_target: Dict[str, Any]
-
-    # Latest /world_position_data snapshot DB keyed by instance_key
-    world_position_db: Dict[str, Any]
-    world_position_db_updated_at: float
-    world_position_target_changed: bool
-    world_position_update_source_node: str
-    world_position_update_distance_m: float
-    world_position_update_reason: str
-    item_info_refresh_count: int
-    goal_pose_db: Dict[str, Any]
-    goal_pose_db_updated_at: float
-
-    # 1-based index pointing to the rank of the current goal pose to attempt
-    current_goal_rank: int
-
-    # Whether find_node has been completed (prevents re-running)
-    find_complete: bool
-
-    # Candidate detections from find_node: key = display number (1-based)
-    # Value: {instance_key, center_world, camsrc, bboxes_by_camera, preview_path, ...}
-    yolo_detections: Dict[int, Dict[str, Any]]
-
-    # User-selected detection ID (0 = user typed "no")
-    selected_detection_id: int
-
-    # nav_move routing source: bootstrap, major_nav, nav_home, or reason_loop
-    nav_move_source: str
-
-    # Computed goal pose for navigation runner
-    nav_goal_pose: Dict[str, Any]
-    current_goal_pose_index: int
-    nav_goal_pose_source: str
-
-    # Last AMCL pose recorded after car_approach finished moving the base
-    last_car_approach_amcl_pose: Dict[str, Any]
-
-    # Last arm base joint angle recorded after car_approach aligned the arm base
-    last_arm_base_alignment_result: Dict[str, Any]
-
-    # nav_move execution flags
-    nav_plan_ready: bool
-    nav_arrived: bool
-    nav_attempt: int
-    force_initialpose: bool
-
-    # Navigation and action execution feedback
-    nav_move_events: List[Dict[str, Any]]
-    agent_success: bool
-
-    # Latest structured results for downstream nodes and debugging
-    latest_nav_result: Dict[str, Any]
-    latest_grasp_result: Dict[str, Any]
-    latest_approach_result: Dict[str, Any]
-
-
-def create_initial_state(
-    context_id: str,
-    *,
-    task_description: str = "",
-    current_observation: Dict[str, Any] | None = None,
-) -> CommanderState:
-    """Build a fully-populated initial CommanderState."""
+def create_initial_state(context_id: str) -> CommanderState:
+    """Build a fully-populated initial CommanderState for a new session."""
     return {
-        "task_description": task_description,
+        "context_id": context_id,
+        "interface_mode": "cli",
+        "current_status": "INIT",
+        "task_complete": False,
         "greeting_sent": False,
         "human_reply": "",
         "task_intent": "",
         "selected_object_index": 0,
         "ai_reply": "",
-        "chat_history_buffer": [],
-        "node_execution_log": {},
-        "current_observation": current_observation or {"description": "System initialising..."},
-        "reasoning": "",
-        "call_module": "",
+        "task": {},
+        "requested_object": {},
+        "selected_instance": {},
+        "world_position": {},
+        "room_cameras": {},
+        "item_info": {},
+        "navigation": {
+            "current_goal_rank": 1,
+            "current_goal_pose_index": 0,
+            "goal_pose_db": {},
+            "nav_goal": {},
+            "nav_goal_pose_source": "",
+            "nav_move_source": "",
+            "force_initialpose": False,
+            "result": {},
+        },
+        "observation": {"description": "System initialising..."},
+        "decision": {},
         "module_params": {},
+        "grasp_result": {},
+        "approach_result": {},
+        "last_execution": {},
+        "session_summary": "",
         "history_buffer": [],
-        "current_status": "INIT",
-        "context_id": context_id,
         "retry_count": 0,
-        "decision_latency": 0.0,
-        "agent_result": "",
-        "task_complete": False,
-        "target_object": {},
-        "candidate_objects": [],
-        "selected_target": {},
-        "world_position_db": {},
-        "world_position_db_updated_at": 0.0,
-        "world_position_target_changed": False,
-        "world_position_update_source_node": "",
-        "world_position_update_distance_m": 0.0,
-        "world_position_update_reason": "",
-        "item_info_refresh_count": 0,
-        "goal_pose_db": {},
-        "goal_pose_db_updated_at": 0.0,
-        "find_complete": False,
-        "yolo_detections": {},
-        "selected_detection_id": 0,
-        "current_goal_rank": 1,
-        "nav_move_source": "",
-        "nav_goal_pose": {},
-        "current_goal_pose_index": 0,
-        "nav_goal_pose_source": "",
-        "last_car_approach_amcl_pose": {},
-        "last_arm_base_alignment_result": {},
-        "nav_plan_ready": False,
-        "nav_arrived": False,
-        "nav_attempt": 0,
-        "force_initialpose": False,
-        "nav_move_events": [],
-        "agent_success": False,
-        "latest_nav_result": {},
-        "latest_grasp_result": {},
-        "latest_approach_result": {},
     }

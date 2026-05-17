@@ -9,7 +9,7 @@
 | `find_agent` | 8005 | optional | 多相機 YOLO detection 與標註圖輸出。 |
 | `get_item_info_agent_no_sam3d` | 8006 | required | 現行主流程 item-info。使用多視角 RGB、bbox、`/world_position_data` 與 geometry/SAM，輸出目標中心與 ranked goal poses。 |
 | `grasp_agent` | 8007 | required | 使用 `Camera_Car` RGBD、YOLO、SAM、GraspGen 產生 6-DoF grasp poses。 |
-| `get_item_info_agent` | 8006 | legacy | SAM3D/full 3D pipeline。與 no-SAM3D 服務使用同一 port，不能同時啟動在同一 host port。 |
+| `get_item_info_agent` | 8008 | legacy | SAM3D/full 3D pipeline。預設移出 8006，避免佔用現行 no-SAM3D 服務。 |
 
 ## 目錄結構
 

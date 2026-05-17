@@ -26,6 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover - lets py_compile work before uv
     FastAPI = None  # type: ignore[assignment]
     HTTPException = RuntimeError  # type: ignore[assignment]
 
+from .contracts import NodeExecution, dump_model
 from .logger import TraceLogger
 from .orchestrator import Orchestrator, _load_graspable_objects
 from .session_store import SessionMemoryStore
@@ -50,7 +51,6 @@ class MessageRequest(BaseModel):
 
 class ResumeRequest(BaseModel):
     selected_detection_id: int | None = None
-    selected_object_index: int | None = None
     value: Any | None = None
 
 
@@ -106,37 +106,55 @@ def _sse(event: str, data: Dict[str, Any]) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+
 def _state_summary(state: Dict[str, Any]) -> Dict[str, Any]:
+    task = state.get("task", {}) or {}
+    decision = state.get("decision", {}) or {}
+    chat_history = [entry for entry in state.get("history_buffer", []) if isinstance(entry, dict) and entry.get("type") == "chat_turn"]
     return {
         "current_status": state.get("current_status", ""),
         "task_intent": state.get("task_intent", ""),
         "selected_object_index": state.get("selected_object_index", 0),
-        "task_description": state.get("task_description", ""),
-        "target_object": state.get("target_object", {}),
-        "call_module": state.get("call_module", ""),
+        "task": task,
+        "requested_object": state.get("requested_object", {}),
+        "selected_instance": state.get("selected_instance", {}),
+        "item_info": state.get("item_info", {}),
+        "navigation": state.get("navigation", {}),
+        "observation": state.get("observation", {}),
+        "decision": decision,
+        "grasp_result": state.get("grasp_result", {}),
+        "approach_result": state.get("approach_result", {}),
         "retry_count": state.get("retry_count", 0),
         "task_complete": state.get("task_complete", False),
-        "awaiting_input_type": state.get("awaiting_input_type", ""),
         "pending_interrupt": state.get("pending_interrupt", {}),
-        "chat_history_buffer": state.get("chat_history_buffer", []),
+        "chat_history": chat_history,
+        "history_buffer": state.get("history_buffer", []),
+        "session_summary": state.get("session_summary", ""),
+        "task_label": task.get("normalized_task") or task.get("original_user_request", ""),
+        "call_module": decision.get("call_module", ""),
     }
 
 
+
 def _event_state_update_summary(state_update: Dict[str, Any]) -> Dict[str, Any]:
-    omitted = {"camera_images", "image_base64", "world_position_db"}
-    summary: Dict[str, Any] = {}
-    for key, value in state_update.items():
-        if key in omitted:
-            summary[key] = "<omitted>"
-        elif key == "selected_target" and isinstance(value, dict):
-            summary[key] = {
-                item_key: item_value
-                for item_key, item_value in value.items()
-                if item_key not in {"camera_images", "world_position_data"}
-            }
-        else:
-            summary[key] = value
-    return summary
+    omitted_suffixes = ("_base64",)
+    omitted_keys = {"camera_images", "world_position_data"}
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, dict):
+            cleaned: Dict[str, Any] = {}
+            for key, item in value.items():
+                key_text = str(key)
+                if key_text in omitted_keys or key_text.endswith(omitted_suffixes):
+                    cleaned[key_text] = "<omitted>"
+                else:
+                    cleaned[key_text] = scrub(item)
+            return cleaned
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+
+    return scrub(state_update)
 
 
 def _node_logs_path(session: WebSession) -> str:
@@ -342,24 +360,21 @@ def _publish_session_state(session: WebSession) -> None:
             pass
 
 
+
 def _assistant_message_from_update(node_name: str, state_update: Dict[str, Any]) -> str:
+    execution = state_update.get("last_execution", {}) or {}
     if node_name == "greeting_node" and state_update.get("current_status") == "GREETING_SENT":
-        return (
-            state_update.get("node_execution_log", {})
-            .get("extra_info", {})
-            .get("message", "")
-        )
+        return str(execution.get("message", "") or "嗨～有什麼需要幫忙的嗎？")
     if node_name == "ai_reply_node":
         return str(state_update.get("ai_reply", "") or "")
     if node_name == "goodbye_node":
-        return (
-            state_update.get("node_execution_log", {})
-            .get("extra_info", {})
-            .get("message", "")
-        )
-    if node_name == "input_node" and state_update.get("task_description"):
-        return f"任務已確認：{state_update['task_description']}"
+        return str(execution.get("message", "") or "對話及任務結束，祝您有美好的一天～")
+    if node_name == "input_node" and state_update.get("task"):
+        task = state_update.get("task", {}) or {}
+        label = task.get("normalized_task") or task.get("original_user_request", "")
+        return f"任務已確認：{label}" if label else ""
     return ""
+
 
 
 def _progress_message_from_update(
@@ -378,10 +393,7 @@ def _progress_message_from_update(
         intent = str(state_update.get("task_intent", "") or "")
         if intent == "general_chat":
             return "已判斷為一般聊天。接下來產生聊天回覆。"
-        try:
-            selected = int(state_update.get("selected_object_index", 0) or 0)
-        except (TypeError, ValueError):
-            selected = 0
+        selected = int(state_update.get("selected_object_index", 0) or 0)
         selected_text = f"目標編號 {selected}" if selected else "目標物尚未完全確認"
         return f"已判斷為機器人抓取任務，{selected_text}。接下來確認任務目標。"
 
@@ -390,14 +402,15 @@ def _progress_message_from_update(
 
     if node_name == "input_node":
         if status == "INPUT_RECEIVED":
-            task = state_update.get("task_description", merged_state.get("task_description", ""))
-            return f"已確認任務：{task}。接下來搜尋偵測到的候選目標 instance。"
+            task = state_update.get("task", merged_state.get("task", {})) or {}
+            task_label = task.get("normalized_task") or task.get("original_user_request", "這個任務")
+            return f"已確認任務：{task_label}。接下來搜尋 world_position 裡的目標 instance。"
         return "尚未確認合法的任務目標。接下來會結束這輪任務。"
 
     if node_name == "find_node":
         if status == "TARGET_SELECTED_FROM_WORLD_POSITION":
-            target = state_update.get("selected_target", {}) or {}
-            name = target.get("instance_key") or target.get("label") or "目標 instance"
+            target = state_update.get("selected_instance", {}) or {}
+            name = target.get("instance_key") or target.get("item_id") or "目標 instance"
             return f"已選定候選目標：{name}。接下來整理目標的 3D 資訊與導航候選位置。"
         return "沒有找到可用的目標 instance。接下來返回結束流程。"
 
@@ -415,7 +428,8 @@ def _progress_message_from_update(
         return "已取得目前環境觀察。接下來由模型推理下一步行動。"
 
     if node_name == "reason_node":
-        module = str(state_update.get("call_module", "") or "")
+        decision = state_update.get("decision", merged_state.get("decision", {})) or {}
+        module = str(decision.get("call_module", "") or "")
         if module == "DONE":
             return "已完成推理，任務達成結束條件。接下來返回 home。"
         if module in {"nav_agent", "major_nav_agent", "major_nav_node"}:
@@ -424,25 +438,22 @@ def _progress_message_from_update(
             return "已完成推理，決定進入抓取/靠近流程。接下來更新目標資訊。"
         return "已完成推理。接下來依照模型決策執行下一個節點。"
 
-    if node_name == "update_item_info_1_node":
-        if merged_state.get("world_position_target_changed", False):
+    if node_name in {"update_item_info_1_node", "update_item_info_2_node"}:
+        world = state_update.get("world_position", merged_state.get("world_position", {})) or {}
+        if world.get("target_changed"):
             return "已更新目標位置，且偵測到目標位置改變。接下來重新整理 3D 資訊。"
-        if merged_state.get("world_position_update_reason", "") == "target_missing":
+        if world.get("update_reason") == "target_missing":
             return "已更新目標位置，但目標消失。接下來返回 home。"
-        return "已更新目標位置資訊。接下來準備下一個導航候選點。"
+        if node_name == "update_item_info_1_node":
+            return "已更新目標位置資訊。接下來準備下一個導航候選點。"
+        return "已更新目標位置資訊。接下來執行抓取與靠近流程。"
 
     if node_name == "major_nav_node":
         if status == "MAJOR_NAV_CONTEXT_READY":
-            rank = merged_state.get("current_goal_rank", "")
+            navigation = state_update.get("navigation", merged_state.get("navigation", {})) or {}
+            rank = navigation.get("current_goal_rank", "")
             return f"已準備第 {rank} 組導航候選點。接下來執行導航移動。"
         return "已沒有更多導航候選點。接下來返回 home 並結束任務。"
-
-    if node_name == "update_item_info_2_node":
-        if merged_state.get("world_position_target_changed", False):
-            return "已更新目標位置，且偵測到目標位置改變。接下來重新整理 3D 資訊。"
-        if merged_state.get("world_position_update_reason", "") == "target_missing":
-            return "已更新目標位置，但目標消失。接下來返回 home。"
-        return "已更新目標位置資訊。接下來執行抓取與靠近流程。"
 
     if node_name == "car_grasp_node":
         return "已完成抓取規劃。接下來依照抓取結果控制車體與手臂靠近。"
@@ -464,9 +475,7 @@ def _progress_message_from_update(
 def _progress_message_from_interrupt(pending: Dict[str, Any]) -> str:
     interrupt_type = str(pending.get("type", "") or "")
     if interrupt_type == "detection_selection":
-        return "已找到候選目標 instance。接下來需要你在聊天卡片中選擇正確目標，或選擇 No valid target。"
-    if interrupt_type == "object_selection":
-        return "目前還沒有確認要抓取的物品。接下來需要你在聊天卡片中選擇目標物。"
+        return "已找到候選目標照片。接下來需要你在聊天卡片中選擇正確照片，或選擇 No valid target。"
     return "流程暫停等待你的輸入。接下來請在聊天卡片中完成選擇。"
 
 
@@ -479,18 +488,19 @@ def _interrupt_to_dict(item: Any) -> Dict[str, Any]:
     }
 
 
+
 def _record_session_greeting(session: WebSession, state: CommanderState) -> str:
     message = "嗨～有什麼需要幫忙的嗎？"
     state_update = {
         "current_status": "GREETING_SENT",
         "greeting_sent": True,
-        "node_execution_log": session.orchestrator._node_execution_log(
-            state,
-            "greeting_node",
-            "GREETING_SENT",
-            time.time(),
-            reasoning="Greeting displayed to the web user during session creation.",
-            extra_info={"message": message, "interface_mode": "api"},
+        "last_execution": dump_model(
+            NodeExecution(
+                node_name="greeting_node",
+                status="GREETING_SENT",
+                success=True,
+                message=message,
+            )
         ),
     }
     session.step += 1
@@ -502,6 +512,7 @@ def _record_session_greeting(session: WebSession, state: CommanderState) -> str:
     return message
 
 
+
 def _prepare_message_state(session: WebSession, message: str) -> Dict[str, Any]:
     state = copy.deepcopy(session.store.current_state)
     state.update(
@@ -511,24 +522,24 @@ def _prepare_message_state(session: WebSession, message: str) -> Dict[str, Any]:
             "task_intent": "",
             "selected_object_index": 0,
             "ai_reply": "",
-            "awaiting_input_type": "",
-            "pending_interrupt": {},
             "current_status": "API_MESSAGE_RECEIVED",
-            "task_description": "",
-            "target_object": {},
-            "candidate_objects": [],
-            "selected_target": {},
-            "yolo_detections": {},
-            "selected_detection_id": 0,
-            "find_complete": False,
-            "call_module": "",
+            "task": {},
+            "requested_object": {},
+            "selected_instance": {},
+            "world_position": {},
+            "room_cameras": {},
+            "item_info": {},
+            "navigation": {},
+            "observation": {},
+            "decision": {},
             "module_params": {},
-            "reasoning": "",
-            "agent_result": "",
-            "agent_success": False,
+            "grasp_result": {},
+            "approach_result": {},
+            "last_execution": {},
             "task_complete": False,
             "retry_count": 0,
             "history_buffer": [],
+            "session_summary": "",
         }
     )
     return state
@@ -536,31 +547,49 @@ def _prepare_message_state(session: WebSession, message: str) -> Dict[str, Any]:
 
 def _legacy_prompt_type(prompt: str) -> str:
     prompt_text = str(prompt or "")
-    if "輸入 no" in prompt_text or "未找到" in prompt_text:
+    if (
+        "候選照片" in prompt_text
+        or "候選目標" in prompt_text
+        or "或 no" in prompt_text
+        or "輸入 no" in prompt_text
+        or "未找到" in prompt_text
+    ):
         return "detection_selection"
-    if "目標物編號" in prompt_text:
-        return "object_selection"
     return "legacy_input"
 
 
 def _legacy_detection_items(session_id: str) -> list[Dict[str, Any]]:
-    find_candidates_dir = (_REPO_ROOT / "logs" / "find_candidates").resolve()
-    if not find_candidates_dir.exists():
-        return []
+    session_candidates_dir = (_REPO_ROOT / "logs" / "sessions" / session_id / "find_candidates").resolve()
+    legacy_candidates_dir = (_REPO_ROOT / "logs" / "find_candidates").resolve()
+    candidate_dirs = [session_candidates_dir] if session_candidates_dir.exists() else [legacy_candidates_dir]
 
     now = time.time()
     recent_files: list[Path] = []
-    for path in find_candidates_dir.iterdir():
-        if not path.is_file() or path.suffix.lower() not in _ALLOWED_PREVIEW_SUFFIXES:
+    for directory in candidate_dirs:
+        if not directory.exists():
             continue
-        if now - path.stat().st_mtime <= 120.0:
-            recent_files.append(path)
+        for path in directory.iterdir():
+            if not path.is_file() or path.suffix.lower() not in _ALLOWED_PREVIEW_SUFFIXES:
+                continue
+            if now - path.stat().st_mtime <= 120.0:
+                recent_files.append(path)
 
     items: list[Dict[str, Any]] = []
-    for index, path in enumerate(sorted(recent_files, key=lambda item: item.stat().st_mtime), start=1):
+    def sort_key(path: Path) -> tuple[int, float, str]:
+        prefix = path.stem.split("__", 1)[0]
+        return (int(prefix) if prefix.isdigit() else 9999, path.stat().st_mtime, path.name)
+
+    for fallback_index, path in enumerate(sorted(recent_files, key=sort_key), start=1):
         stem = path.stem
-        instance_key = stem.split("__", 1)[0]
-        camera_name = stem.split("__", 1)[1] if "__" in stem else ""
+        parts = stem.split("__")
+        if parts and parts[0].isdigit():
+            index = int(parts[0])
+            instance_key = parts[1] if len(parts) > 1 else stem
+            camera_name = parts[2] if len(parts) > 2 else ""
+        else:
+            index = fallback_index
+            instance_key = parts[0] if parts else stem
+            camera_name = parts[1] if len(parts) > 1 else ""
         try:
             relative_path = str(path.relative_to(_REPO_ROOT))
         except ValueError:
@@ -583,7 +612,7 @@ def _legacy_pending_interrupt(session: WebSession, prompt: str) -> Dict[str, Any
     prompt_text = str(prompt or "").strip() or "請輸入回覆。"
     prompt_type = _legacy_prompt_type(prompt_text)
     display_message = (
-        "請於左側欄位選擇目標物"
+        "請選擇正確的目標候選照片，或選擇 No valid target"
         if prompt_type == "detection_selection"
         else prompt_text
     )
@@ -594,16 +623,7 @@ def _legacy_pending_interrupt(session: WebSession, prompt: str) -> Dict[str, Any
         "legacy_prompt_text": prompt_text,
     }
 
-    if prompt_type == "object_selection":
-        value["objects"] = [
-            {
-                "index": index,
-                "id": obj.get("id", ""),
-                "label": obj.get("label", obj.get("id", "")),
-            }
-            for index, obj in enumerate(_load_graspable_objects(), start=1)
-        ]
-    elif prompt_type == "detection_selection":
+    if prompt_type == "detection_selection":
         value["detections"] = _legacy_detection_items(session.session_id)
 
     return {
@@ -632,8 +652,6 @@ def _legacy_input_answer(request: ResumeRequest, pending: Dict[str, Any]) -> str
         if pending_type == "detection_selection" and selected == 0:
             return "no"
         return str(selected)
-    if request.selected_object_index is not None:
-        return str(int(request.selected_object_index))
     return ""
 
 
@@ -842,7 +860,7 @@ def create_app() -> Any:
         session_id = uuid.uuid4().hex
         use_mock = _resolve_mock_mode(request.mock)
         trace_logger = TraceLogger(log_file=_trace_log_file(request.log_file))
-        orchestrator = Orchestrator(trace_logger=trace_logger, use_mock=use_mock)
+        orchestrator = await Orchestrator.create(trace_logger=trace_logger, use_mock=use_mock)
         initial_state = create_initial_state(session_id)
         initial_state.update(
             {
@@ -1735,8 +1753,8 @@ _INDEX_HTML = r"""<!doctype html>
       if (event.node_name === "task_classification_node") {
         task.textContent = `intent=${update.task_intent || ""}, selected=${update.selected_object_index || 0}`;
       }
-      if (event.node_name === "input_node" && update.task_description) {
-        task.textContent = update.task_description;
+      if (event.node_name === "input_node" && update.task) {
+        task.textContent = update.task.normalized_task || update.task.original_user_request || "";
       }
     }
 
@@ -1922,10 +1940,9 @@ _INDEX_HTML = r"""<!doctype html>
     function renderCandidateMenu(value = currentInterruptValue) {
       candidateList.replaceChildren();
       const detections = (value && value.detections) || [];
-      const objects = (value && value.objects) || [];
       const hasPrompt = Boolean(value && value.type);
 
-      if (detections.length || objects.length || hasPrompt) {
+      if (detections.length || hasPrompt) {
         const card = document.createElement("div");
         card.className = "interrupt-card";
         fillInterruptCard(card, value);
@@ -1950,7 +1967,7 @@ _INDEX_HTML = r"""<!doctype html>
       manual.type = "text";
       manual.placeholder = value.type === "detection_selection"
         ? "輸入編號或 no"
-        : (value.type === "object_selection" ? "輸入編號" : "輸入回覆");
+        : "輸入回覆";
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = "送出";
@@ -1995,13 +2012,8 @@ _INDEX_HTML = r"""<!doctype html>
       }
 
       button.className = "choice";
-      if (mode === "object") {
-        button.textContent = `[${item.index}] ${item.label || item.id}`;
-        button.onclick = () => submitInterruptChoice({selected_object_index: item.index}, button);
-      } else {
-        button.textContent = "No valid target";
-        button.onclick = () => submitInterruptChoice({selected_detection_id: 0, selected_object_index: 0}, button);
-      }
+      button.textContent = "No valid target";
+      button.onclick = () => submitInterruptChoice({selected_detection_id: 0}, button);
       return button;
     }
 
@@ -2012,14 +2024,13 @@ _INDEX_HTML = r"""<!doctype html>
       card.appendChild(title);
 
       const detections = value.detections || [];
-      const objects = value.objects || [];
 
       if (value.type === "legacy_input") {
         card.appendChild(makeManualInput(value));
         return;
       }
 
-      if (value.type === "detection_selection" || value.type === "object_selection") {
+      if (value.type === "detection_selection") {
         card.appendChild(makeManualInput(value));
       }
 
@@ -2028,10 +2039,9 @@ _INDEX_HTML = r"""<!doctype html>
       card.appendChild(grid);
 
       for (const item of detections) grid.appendChild(makeChoiceButton(item, "detection"));
-      for (const item of objects) grid.appendChild(makeChoiceButton(item, "object"));
-      if (value.type !== "object_selection") grid.appendChild(makeChoiceButton({}, "none"));
+      grid.appendChild(makeChoiceButton({}, "none"));
 
-      if (!detections.length && !objects.length) {
+      if (!detections.length) {
         const note = document.createElement("div");
         note.className = "empty-choice-note";
         note.textContent = "目前沒有可顯示的候選項。";
@@ -2099,7 +2109,7 @@ _INDEX_HTML = r"""<!doctype html>
 
     function syncState(data, options = {}) {
 	      const state = data.state || {};
-	      if (state.task_description) task.textContent = state.task_description;
+      if (state.task) task.textContent = state.task.normalized_task || state.task.original_user_request || state.task_label || task.textContent;
       const hasPending = Object.prototype.hasOwnProperty.call(data, "pending_interrupt");
       const pending = hasPending ? data.pending_interrupt : (state.pending_interrupt || null);
       if (pending && pending.interrupts && pending.interrupts.length) {

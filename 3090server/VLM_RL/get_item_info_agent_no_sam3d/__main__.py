@@ -52,12 +52,12 @@ agent_card = AgentCard(
             ),
             tags=["3d", "spatial", "grasp", "multiview", "sam", "geometry"],
             examples=["get 3D goal pose for object class 'doll' from /world_position_data"],
-            input_modes=["text", "data"],
-            output_modes=["text"],
+            input_modes=["data", "file"],
+            output_modes=["data"],
         )
     ],
-    default_input_modes=["text", "data"],
-    default_output_modes=["text"],
+    default_input_modes=["data", "file"],
+    default_output_modes=["data"],
 )
 
 

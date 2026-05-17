@@ -49,13 +49,15 @@ async def test_mock_langgraph_loop() -> bool:
     print("=" * 50)
 
     trace_logger = TraceLogger(log_file="test_trace.jsonl")
-    orchestrator = Orchestrator(trace_logger=trace_logger, use_mock=True)
+    orchestrator = await Orchestrator.create(trace_logger=trace_logger, use_mock=True)
 
     context_id = uuid.uuid4().hex
-    initial_state = create_initial_state(
-        context_id,
-        task_description="Test: grab the red cup on the table",
-        current_observation={"description": "Test scene: red cup on white table"},
+    initial_state = create_initial_state(context_id)
+    initial_state.update(
+        {
+            "human_reply": "Test: grab apple on the table",
+            "observation": {"description": "Test scene: apple on white table"},
+        }
     )
     session_store = SessionMemoryStore(context_id=context_id, initial_state=initial_state)
 
@@ -63,11 +65,11 @@ async def test_mock_langgraph_loop() -> bool:
     try:
         async for event in orchestrator.graph.astream(
             initial_state,
-            config={"recursion_limit": 40},
+            config={"configurable": {"thread_id": context_id}, "recursion_limit": 40},
         ):
             for node_name, state_update in event.items():
                 status = state_update.get("current_status", "")
-                module = state_update.get("call_module", "")
+                module = (state_update.get("decision", {}) or {}).get("call_module", "")
                 steps_executed.append(node_name)
                 session_store.record_event(
                     step=len(steps_executed),

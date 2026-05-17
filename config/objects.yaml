@@ -4,10 +4,32 @@
 graspable_objects:
   - id: doll
     label: 褐色小熊玩偶
+    aliases:
+      - brown teddy bear
+      - teddy bear
+      - brown bear
+      - bear doll
+      - bear toy
+      - doll
+      - 小熊
+      - 小熊玩偶
+      - 玩偶
   - id: apple
     label: 紅色蘋果
+    aliases:
+      - apple
+      - red apple
+      - 蘋果
   - id: wine
     label: 綠色玻璃酒瓶
+    aliases:
+      - wine bottle
+      - green wine bottle
+      - glass bottle
+      - green glass bottle
+      - bottle
+      - 酒瓶
+      - 玻璃酒瓶
   # - id: banana
   #   label: 香蕉
   # - id: water

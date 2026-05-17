@@ -113,7 +113,7 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
 
     trace_logger = TraceLogger(log_file=log_path)
     context_id = uuid.uuid4().hex
-    orchestrator = Orchestrator(trace_logger=trace_logger, use_mock=use_mock)
+    orchestrator = await Orchestrator.create(trace_logger=trace_logger, use_mock=use_mock)
 
     # Build initial LangGraph state
     initial_state = create_initial_state(context_id)
@@ -125,11 +125,11 @@ async def _run(use_mock: bool, max_steps: int, log_path: str) -> None:
     try:
         async for event in orchestrator.graph.astream(
             initial_state,
-            config={"recursion_limit": max_steps * 4},
+            config={"configurable": {"thread_id": context_id}, "recursion_limit": max_steps * 8},
         ):
             for node_name, state_update in event.items():
                 status = state_update.get("current_status", "")
-                module = state_update.get("call_module", "")
+                module = (state_update.get("decision", {}) or {}).get("call_module", "")
                 step += 1
                 session_store.record_event(
                     step=step,

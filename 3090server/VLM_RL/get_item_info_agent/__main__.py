@@ -30,7 +30,7 @@ from get_item_info_agent.agent_executor import GetItemInfoExecutor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PORT = 8006
+PORT = int(os.getenv("GET_ITEM_INFO_LEGACY_PORT", "8008"))
 EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
 
 agent_card = AgentCard(

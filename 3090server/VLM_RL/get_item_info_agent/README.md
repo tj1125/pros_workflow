@@ -7,13 +7,13 @@ RGB images -> YOLO -> SAM -> Triangulation -> DepthAnything -> SAM3D
   -> Pose Alignment -> GraspGen -> Goal Pose
 ```
 
-現行 Commander 主流程改用 `get_item_info_agent_no_sam3d`。本服務保留給需要 SAM3D mesh reconstruction 的實驗。兩者預設都使用 port `8006`，同一台 host 上不能同時用同一 port 啟動。
+現行 Commander 主流程改用 `get_item_info_agent_no_sam3d`。本服務保留給需要 SAM3D mesh reconstruction 的實驗。本 legacy 服務預設使用 port `8008`，避免佔用現行 no-SAM3D 服務的 `8006`。
 
 ## 執行環境
 
 - Conda 環境建議：`get_item_info_agent`
 - 主要依賴：`torch`, `segment_anything`, `ultralytics`, `pytorch3d`, `GraspGen`
-- Port：8006
+- Port：8008
 
 ```bash
 conda create -n get_item_info_agent python=3.11 -y
@@ -34,10 +34,10 @@ conda activate get_item_info_agent
 EXTERNAL_IP=192.168.1.10 python -m get_item_info_agent
 ```
 
-Commander `.env` legacy fallback：
+只有刻意跑 legacy client 時才設定：
 
 ```env
-INF_GET_ITEM_INFO_URL=http://192.168.1.10:8006
+INF_GET_ITEM_INFO_URL=http://192.168.1.10:8008
 ```
 
 ## A2A Request

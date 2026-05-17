@@ -24,8 +24,8 @@ class CarApproachAgent:
 
     AGENT_NAME = "Car Approach Agent"
 
-    def __init__(self):
-        self._use_mock = os.getenv("MOCK_MODE", "true").lower() == "true"
+    def __init__(self, use_mock: bool | None = None):
+        self._use_mock = bool(use_mock) if use_mock is not None else os.getenv("MOCK_MODE", "true").lower() == "true"
 
     async def execute(
         self,

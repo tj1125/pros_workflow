@@ -123,7 +123,7 @@ def _run_rule_navigation_from_params(params: Dict[str, Any]) -> bool:
 
 
 def _grasp_payload_from_params(params: Dict[str, Any]) -> dict[str, object] | None:
-    for key in ("grasp_result_payload", "grasp_result", "latest_grasp_result"):
+    for key in ("grasp_result_payload", "grasp_result"):
         payload = params.get(key)
         if isinstance(payload, dict):
             nested_result = payload.get("result")
