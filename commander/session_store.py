@@ -86,12 +86,16 @@ class SessionMemoryStore:
     def _record_domain_rows(self, *, step: int, node_name: str, update: Dict[str, Any]) -> None:
         world_position = update.get("world_position") or {}
         if world_position:
-            raw_ref = world_position.get("raw_payload_ref") or {}
             self.artifact_store.record_world_snapshot(
                 step=step,
-                raw_artifact_id=artifact_ref_id(raw_ref) or "",
+                snapshot_id=str(world_position.get("snapshot_id", "") or ""),
                 candidate_count=int(world_position.get("candidate_count", 0) or 0),
                 selected_instance_key=world_position.get("selected_instance_key", ""),
+                target_changed=bool(world_position.get("target_changed", False)),
+                update_source_node=world_position.get("update_source_node", node_name),
+                update_reason=world_position.get("update_reason", ""),
+                update_distance_m=float(world_position.get("update_distance_m", 0.0) or 0.0),
+                updated_at=float(world_position.get("updated_at", 0.0) or 0.0),
             )
 
         observation = update.get("observation") or {}
@@ -123,6 +127,17 @@ class SessionMemoryStore:
         navigation = update.get("navigation") or {}
         nav_result = navigation.get("result") or {}
         nav_goal = navigation.get("nav_goal") or nav_result.get("goal") or {}
+        goal_pose_db = navigation.get("goal_pose_db") or {}
+        if node_name in {"get_item_info_no_sam3d_node", "major_nav_node"} and (nav_goal or goal_pose_db):
+            self.artifact_store.record_goal_pose(
+                step=step,
+                source_node=node_name,
+                rank=int(navigation.get("current_goal_rank", nav_goal.get("goal_rank", 0) if isinstance(nav_goal, dict) else 0) or 0),
+                goal_pose_index=int(navigation.get("current_goal_pose_index", nav_goal.get("goal_pose_index", 0) if isinstance(nav_goal, dict) else 0) or 0),
+                goal=nav_goal if isinstance(nav_goal, dict) else {},
+                goal_pose_db=goal_pose_db if isinstance(goal_pose_db, dict) else {},
+                nav_goal_pose_source=navigation.get("nav_goal_pose_source", ""),
+            )
         if nav_result:
             self.artifact_store.record_nav_run(
                 step=step,

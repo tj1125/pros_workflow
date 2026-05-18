@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import builtins
 import json
 import sqlite3
 import tempfile
@@ -11,6 +13,7 @@ from a2a.types import DataPart, Part
 from a2a.utils import completed_task, new_agent_parts_message, new_data_artifact
 
 from agents.a2a_adapter import extract_result_payload, require_agent_card_modes
+from commander.brain import Brain, BrainDecision
 from commander.artifact_store import ArtifactStore
 from commander.session_store import SessionMemoryStore
 from commander.orchestrator import Orchestrator, _load_graspable_objects
@@ -69,6 +72,54 @@ def test_artifact_store_json_text_bytes_and_db_rows() -> None:
         assert all(row[1] and row[2] >= 3 for row in rows)
 
 
+def test_world_snapshot_raw_and_goal_pose_are_sqlite_rows() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ArtifactStore(context_id="ctx-db", base_dir=tmp)
+        snapshot_id = store.save_world_snapshot_raw(
+            {"data": "world-position-json"},
+            candidate_count=3,
+            selected_instance_key="doll_1",
+            created_by_node="find_node",
+            update_reason="db_created",
+        )
+        assert store.load_world_snapshot_raw(snapshot_id) == {"data": "world-position-json"}
+
+        store.record_world_snapshot(
+            step=5,
+            snapshot_id=snapshot_id,
+            candidate_count=3,
+            selected_instance_key="doll_1",
+            update_source_node="find_node",
+            update_reason="db_created",
+        )
+        store.record_goal_pose(
+            step=6,
+            source_node="get_item_info_no_sam3d_node",
+            rank=1,
+            goal_pose_index=0,
+            goal={"x": 1.0, "y": 2.0, "qz": 0.0, "qw": 1.0},
+            goal_pose_db={"target_instance_key": "doll_1"},
+            nav_goal_pose_source="rank_best",
+        )
+
+        con = sqlite3.connect(Path(tmp) / "sessions" / "ctx-db" / "session.sqlite")
+        world_row = con.execute(
+            "select step, raw_payload_json, selected_instance_key, update_reason from world_snapshots where snapshot_id=?",
+            (snapshot_id,),
+        ).fetchone()
+        artifact_rows = con.execute("select count(*) from artifacts where kind='world_position_raw'").fetchone()[0]
+        goal_row = con.execute("select goal_json, goal_pose_db_json from goal_poses").fetchone()
+        con.close()
+
+        assert world_row[0] == 5
+        assert json.loads(world_row[1]) == {"data": "world-position-json"}
+        assert world_row[2] == "doll_1"
+        assert world_row[3] == "db_created"
+        assert artifact_rows == 0
+        assert json.loads(goal_row[0])["x"] == 1.0
+        assert json.loads(goal_row[1])["target_instance_key"] == "doll_1"
+
+
 def test_session_store_rejects_raw_state_blobs() -> None:
     state = create_initial_state("ctx-raw")
     with tempfile.TemporaryDirectory() as tmp:
@@ -86,6 +137,23 @@ def test_session_store_rejects_raw_state_blobs() -> None:
             assert "Forbidden raw data key" in str(exc)
         else:
             raise AssertionError("nested image_base64 state was not rejected")
+
+
+def test_brain_accepts_only_structured_decisions() -> None:
+    decision = Brain._coerce_structured_decision({
+        "reasoning": "ready",
+        "call_module": "grasp_agent",
+        "module_params": {"object_id": "doll"},
+    })
+    assert isinstance(decision, BrainDecision)
+    assert decision.call_module == "grasp_agent"
+
+    try:
+        Brain._coerce_structured_decision(SimpleNamespace(content='```json\n{"reasoning":"ready","call_module":"grasp_agent","module_params":{}}\n```'))
+    except ValueError as exc:
+        assert "free-form message content" in str(exc)
+    else:
+        raise AssertionError("free-form Brain output was accepted")
 
 
 def test_a2a_card_validation_rejects_wrong_service() -> None:
@@ -141,17 +209,151 @@ def test_a2a_adapter_accepts_direct_message_and_task_artifact() -> None:
     assert task_id == "task-2"
 
 
+def test_brain_prompt_marks_occlusion_and_failed_attempts_as_major_nav_policy() -> None:
+    state = create_initial_state("ctx-prompt")
+    state["navigation"]["current_goal_rank"] = 1
+    state["item_info"] = {
+        "center_world": [2.0, 0.5, 4.0],
+        "group_ranking": [
+            {"rank": 1, "best_goal_pose_ros_map": [1.0, 0.0]},
+            {"rank": 2, "best_goal_pose_ros_map": [1.5, 0.5]},
+        ],
+    }
+    state["approach_result"] = {
+        "success": False,
+        "phase": "grasp_verification_failed",
+        "message": "target still free after grasp",
+    }
+
+    prompt = Brain(use_mock=True)._build_prompt(state)
+    assert isinstance(prompt, str)
+    assert "Visual Safety Checklist" in prompt
+    assert "Next major_nav rank available: True" in prompt
+    assert "partly hidden by a cup" in prompt
+    assert "latest approach failed at current rank" in prompt
+
+
+def test_decision_safety_guard_forces_major_nav_after_failed_attempt_when_next_rank_exists() -> None:
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    state = create_initial_state("ctx-guard")
+    state["navigation"]["current_goal_rank"] = 1
+    state["item_info"] = {
+        "center_world": [2.0, 0.5, 4.0],
+        "group_ranking": [
+            {"rank": 1, "best_goal_pose_ros_map": [1.0, 0.0]},
+            {"rank": 2, "best_goal_pose_ros_map": [1.5, 0.5]},
+        ],
+    }
+    state["approach_result"] = {"success": False, "phase": "grasp_verification_failed"}
+    decision = BrainDecision(reasoning="path clear", call_module="grasp_agent", module_params={"object_id": "doll"})
+
+    guarded = orchestrator._apply_decision_safety_guard(state, decision)
+    assert guarded.call_module == "major_nav_node"
+    assert guarded.module_params["overridden_from"] == "grasp_agent"
+
+    state["item_info"]["group_ranking"] = [{"rank": 1, "best_goal_pose_ros_map": [1.0, 0.0]}]
+    unguarded = orchestrator._apply_decision_safety_guard(state, decision)
+    assert unguarded.call_module == "grasp_agent"
+
+
+def test_langgraph_general_chat_returns_to_input_without_replaying_reply() -> None:
+    async def _run() -> list[str]:
+        orchestrator = await Orchestrator.create(
+            trace_logger=SimpleNamespace(log_trace=lambda **kwargs: None),
+            use_mock=True,
+        )
+        original_input = builtins.input
+        builtins.input = lambda prompt="": "bye"
+        context_id = uuid.uuid4().hex
+        state = create_initial_state(context_id)
+        state.update({"human_reply": "hello"})
+        nodes: list[str] = []
+        try:
+            async for event in orchestrator.graph.astream(
+                state,
+                config={"configurable": {"thread_id": context_id}, "recursion_limit": 20},
+            ):
+                nodes.extend(event.keys())
+        finally:
+            builtins.input = original_input
+            await orchestrator.aclose()
+        return nodes
+
+    nodes = asyncio.run(_run())
+    assert nodes == [
+        "greeting_node",
+        "human_reply_node",
+        "task_classification_node",
+        "ai_reply_node",
+        "chat_memory_node",
+        "human_reply_node",
+        "goodbye_node",
+    ]
+
+
+def test_langgraph_route_matrix() -> None:
+    async def _run() -> None:
+        orchestrator = await Orchestrator.create(
+            trace_logger=SimpleNamespace(log_trace=lambda **kwargs: None),
+            use_mock=True,
+        )
+        try:
+            cases = [
+                ("human_reply.goodbye", orchestrator._route_human_reply({"human_reply": "bye"}), "goodbye_node"),
+                ("human_reply.continue", orchestrator._route_human_reply({"human_reply": "hello"}), "task_classification_node"),
+                ("task_classification.specific_selected", orchestrator._route_task_classification({"task_intent": "specific_task", "selected_object_index": 1}), "input_node"),
+                ("task_classification.specific_missing", orchestrator._route_task_classification({"task_intent": "specific_task", "selected_object_index": 0}), "ai_reply_node"),
+                ("task_classification.general", orchestrator._route_task_classification({"task_intent": "general_chat", "selected_object_index": 0}), "ai_reply_node"),
+                ("find.selected", orchestrator._route_find({"selected_instance": {"instance_key": "apple_1"}}), "get_item_info_no_sam3d_node"),
+                ("find.empty", orchestrator._route_find({"selected_instance": {}}), "end"),
+                ("item_info.ready", orchestrator._route_get_item_info_no_sam3d({"current_status": "ITEM_INFO_NO_SAM3D_READY", "navigation": {"nav_goal": {"x": 1}}}), "nav_move_node"),
+                ("item_info.no_goal", orchestrator._route_get_item_info_no_sam3d({"current_status": "ITEM_INFO_NO_SAM3D_READY", "navigation": {}}), "nav_home_node"),
+                ("item_info.failed", orchestrator._route_get_item_info_no_sam3d({"current_status": "ITEM_INFO_NO_SAM3D_FAILED", "navigation": {"nav_goal": {"x": 1}}}), "nav_home_node"),
+                ("update_info_1.missing", orchestrator._route_update_item_info_1({"world_position": {"update_reason": "target_missing"}}), "nav_home_node"),
+                ("update_info_1.changed", orchestrator._route_update_item_info_1({"world_position": {"target_changed": True}}), "get_item_info_no_sam3d_node"),
+                ("update_info_1.unchanged", orchestrator._route_update_item_info_1({"world_position": {"target_changed": False}}), "major_nav_node"),
+                ("update_info_2.missing", orchestrator._route_update_item_info_2({"world_position": {"update_reason": "target_missing"}}), "nav_home_node"),
+                ("update_info_2.changed", orchestrator._route_update_item_info_2({"world_position": {"target_changed": True}}), "get_item_info_no_sam3d_node"),
+                ("update_info_2.unchanged", orchestrator._route_update_item_info_2({"world_position": {"target_changed": False}}), "car_grasp_node"),
+                ("decision.done", orchestrator._route_decision({"decision": {"call_module": "DONE"}}), "end"),
+                ("decision.task_complete", orchestrator._route_decision({"task_complete": True, "decision": {"call_module": "nav_agent"}}), "end"),
+                ("decision.nav_agent", orchestrator._route_decision({"decision": {"call_module": "nav_agent"}}), "major_nav_node"),
+                ("decision.major_nav_node", orchestrator._route_decision({"decision": {"call_module": "major_nav_node"}}), "major_nav_node"),
+                ("decision.grasp_agent", orchestrator._route_decision({"decision": {"call_module": "grasp_agent"}}), "car_grasp_node"),
+                ("decision.approach_agent", orchestrator._route_decision({"decision": {"call_module": "approach_agent"}}), "car_grasp_node"),
+                ("decision.unknown", orchestrator._route_decision({"decision": {"call_module": "noop"}}), "end"),
+                ("major_nav.exhausted", orchestrator._route_major_nav({"current_status": "MAJOR_NAV_EXHAUSTED"}), "nav_home_node"),
+                ("major_nav.task_complete", orchestrator._route_major_nav({"task_complete": True}), "nav_home_node"),
+                ("major_nav.ready", orchestrator._route_major_nav({"current_status": "MAJOR_NAV_CONTEXT_READY"}), "nav_move_node"),
+                ("nav_move.bootstrap", orchestrator._route_nav_move({"navigation": {"nav_move_source": "bootstrap"}}), "observe_node"),
+                ("nav_move.major_nav", orchestrator._route_nav_move({"navigation": {"nav_move_source": "major_nav"}}), "update_memory_node"),
+                ("nav_move.empty", orchestrator._route_nav_move({"navigation": {}}), "update_memory_node"),
+            ]
+            for name, got, expected in cases:
+                assert got == expected, f"{name}: got {got}, expected {expected}"
+        finally:
+            await orchestrator.aclose()
+
+    asyncio.run(_run())
+
+
 def run_all() -> None:
     test_history_reducer_appends_all_entries()
     test_task_classifier_matches_alias_and_keeps_chat_general()
     test_legacy_prompt_type_only_uses_detection_selection()
     test_artifact_store_json_text_bytes_and_db_rows()
+    test_world_snapshot_raw_and_goal_pose_are_sqlite_rows()
     test_session_store_rejects_raw_state_blobs()
+    test_brain_accepts_only_structured_decisions()
     test_a2a_card_validation_rejects_wrong_service()
     test_a2a_card_validation_accepts_required_modes()
     test_a2a_adapter_accepts_direct_message_and_task_artifact()
+    test_brain_prompt_marks_occlusion_and_failed_attempts_as_major_nav_policy()
+    test_decision_safety_guard_forces_major_nav_after_failed_attempt_when_next_rank_exists()
+    test_langgraph_general_chat_returns_to_input_without_replaying_reply()
+    test_langgraph_route_matrix()
 
 
 if __name__ == "__main__":
     run_all()
-    print(json.dumps({"ok": True, "tests": 8, "run_id": uuid.uuid4().hex}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "tests": 14, "run_id": uuid.uuid4().hex}, ensure_ascii=False))

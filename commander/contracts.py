@@ -56,7 +56,7 @@ class SelectedInstance(StrictModel):
 
 
 class WorldPositionSnapshot(StrictModel):
-    raw_payload_ref: ArtifactRef | None = None
+    snapshot_id: str = ""
     candidate_count: int = 0
     selected_instance_key: str = ""
     updated_at: float = 0.0
@@ -69,8 +69,10 @@ class WorldPositionSnapshot(StrictModel):
 class RoomCameraSnapshot(StrictModel):
     camera_name: str
     topic: str = ""
-    rgb_ref: ArtifactRef
+    image_key: str = ""
+    rgb_ref: ArtifactRef | None = None
     bbox: list[float] = Field(default_factory=list)
+    preview_path: str = ""
     preview_ref: ArtifactRef | None = None
 
 
@@ -82,7 +84,6 @@ class ItemInfoResult(StrictModel):
     target_topic_key: str = ""
     group_ranking: list[dict[str, Any]] = Field(default_factory=list)
     goal_pose_path: str = ""
-    goal_pose_path_ref: ArtifactRef | None = None
     raw_result_ref: ArtifactRef | None = None
     a2a_task_id: str = ""
 
@@ -129,6 +130,7 @@ class NavigationState(StrictModel):
 
 class Observation(StrictModel):
     description: str = ""
+    image_key: str = ""
     image_ref: ArtifactRef | None = None
 
 

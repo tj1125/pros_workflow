@@ -50,8 +50,9 @@ class Brain:
                 model=model_name,
                 google_api_key=os.getenv("GOOGLE_API_KEY"),
             )
-            self._model = self._raw_model.with_structured_output(BrainDecision)
-            logger.info("[Brain] Using Google Gemini: %s", model_name)
+            method = os.getenv("GOOGLE_STRUCTURED_METHOD", "json_schema")
+            self._model = self._raw_model.with_structured_output(BrainDecision, method=method)
+            logger.info("[Brain] Using Google Gemini: %s structured_method=%s", model_name, method)
         elif provider == "ollama":
             from langchain_openai import ChatOpenAI
 
@@ -62,14 +63,14 @@ class Brain:
                 openai_api_key="ollama",
                 openai_api_base=f"{base_url}/v1",
                 temperature=0,
-                extra_body={"format": "json"},
             )
-            self._model = self._raw_model
-            logger.info("[Brain] Using Ollama: %s @ %s", model_name, base_url)
+            method = os.getenv("OLLAMA_STRUCTURED_METHOD", "json_schema")
+            self._model = self._raw_model.with_structured_output(BrainDecision, method=method)
+            logger.info("[Brain] Using Ollama: %s @ %s structured_method=%s", model_name, base_url, method)
         else:
             raise ValueError(f"[Brain] Unknown VLM_PROVIDER: {provider}")
 
-    def _build_prompt(self, state: CommanderState, artifact_store: Any | None = None) -> list | str:
+    def _build_prompt(self, state: CommanderState, artifact_store: Any | None = None, image_loader: Any | None = None) -> list | str:
         task = state.get("task", {}) or {}
         requested = state.get("requested_object", {}) or {}
         selected = state.get("selected_instance", {}) or {}
@@ -84,6 +85,14 @@ class Brain:
         success_criteria = task.get("success_criteria") or []
         success_text = "\n".join(f"- {item}" for item in success_criteria) or "- Complete the requested robot task safely."
         nav_result = navigation.get("result") or {}
+        current_rank = int(navigation.get("current_goal_rank", 1) or 1)
+        groups = item_info.get("group_ranking", []) or []
+        available_goal_ranks = []
+        for idx, group in enumerate(groups, 1):
+            if isinstance(group, dict):
+                available_goal_ranks.append(int(group.get("rank", idx) or idx))
+        next_rank_available = any(rank > current_rank for rank in available_goal_ranks)
+        failure_hint = self._failure_hint(state)
 
         text_content = (
             "## Task\n"
@@ -99,8 +108,18 @@ class Brain:
             f"Center world: {selected.get('center_world', item_info.get('center_world', []))}\n"
             f"Primary camera: {selected.get('primary_camera', item_info.get('primary_camera_id', ''))}\n\n"
             "## Navigation\n"
-            f"Current rank: {navigation.get('current_goal_rank', '')}\n"
+            f"Current rank: {current_rank}\n"
+            f"Available ranked goal poses: {available_goal_ranks or 'unknown'}\n"
+            f"Next major_nav rank available: {next_rank_available}\n"
+            f"Current nav goal source: {navigation.get('nav_goal_pose_source', '')}\n"
             f"Last result: {json.dumps(nav_result, ensure_ascii=False)}\n\n"
+            "## Visual Safety Checklist\n"
+            "Before choosing grasp_agent, inspect the image for foreground blockers. "
+            "If the target is partly hidden by a cup, bottle, container, table edge, wall, chair part, "
+            "or the gripper itself, choose major_nav_node when Next major_nav rank available is True. "
+            "If recent grasp or approach failed at this rank, choose major_nav_node instead of repeating grasp_agent. "
+            "Only choose grasp_agent when the target body and gripper approach corridor are clearly unobstructed.\n"
+            f"Recent failure hint: {failure_hint or '(none)'}\n\n"
             "## Current Observation\n"
             f"{observation.get('description', 'Camera image unavailable.')}\n\n"
             "## Session Summary\n"
@@ -113,18 +132,38 @@ class Brain:
             "Use DONE only when the task success criteria and done policy are satisfied."
         )
 
+        image_b64 = ""
+        image_key = str(observation.get("image_key", "") or "")
         image_ref = observation.get("image_ref")
-        if artifact_store is not None and image_ref:
+        if image_key and image_loader is not None:
+            try:
+                image_b64 = image_loader(image_key)
+            except Exception as exc:
+                logger.warning("[Brain] Failed to load transient observation image: %s", exc)
+        elif artifact_store is not None and image_ref:
             try:
                 image_b64 = artifact_store.load_base64(image_ref)
             except Exception as exc:
                 logger.warning("[Brain] Failed to load observation image artifact: %s", exc)
-            else:
-                return [
-                    {"type": "text", "text": text_content},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                ]
+        if image_b64:
+            return [
+                {"type": "text", "text": text_content},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ]
         return text_content
+
+
+    @staticmethod
+    def _failure_hint(state: CommanderState) -> str:
+        approach = state.get("approach_result", {}) or {}
+        if approach and approach.get("success") is False:
+            phase = str(approach.get("phase", "") or "unknown")
+            message = str(approach.get("message", "") or approach.get("status_code", "") or "approach failed")
+            return f"latest approach failed at current rank: phase={phase}; message={message}"
+        grasp = state.get("grasp_result", {}) or {}
+        if grasp and grasp.get("success") is False:
+            return "latest grasp failed at current rank; do not repeat the same view if another ranked goal exists"
+        return ""
 
     @staticmethod
     def _format_history_entry(entry: Dict[str, Any]) -> str:
@@ -137,12 +176,12 @@ class Brain:
             facts_text = " | KeyFacts: " + ", ".join(f"{key}={value}" for key, value in key_facts.items())
         return f"  - Action: {entry.get('action')}, Result: {result}, Success: {entry.get('success')}{facts_text}"
 
-    async def reason(self, state: CommanderState, artifact_store: Any | None = None) -> Dict[str, Any]:
+    async def reason(self, state: CommanderState, artifact_store: Any | None = None, image_loader: Any | None = None) -> Dict[str, Any]:
         start = time.time()
         if self.use_mock:
             decision = await self._mock_reason(state)
         else:
-            decision = await self._llm_reason(state, artifact_store=artifact_store)
+            decision = await self._llm_reason(state, artifact_store=artifact_store, image_loader=image_loader)
         latency = time.time() - start
         logger.info("[Brain] Decision: call_module=%s, latency=%.2fs", decision.call_module, latency)
         return {"prediction": decision, "latency": latency, "model": self._model_name()}
@@ -152,41 +191,27 @@ class Brain:
             return "mock"
         return os.getenv("GEMINI_MODEL") or os.getenv("OLLAMA_MODEL") or "configured-vlm"
 
-    async def _llm_reason(self, state: CommanderState, artifact_store: Any | None = None) -> BrainDecision:
+    async def _llm_reason(self, state: CommanderState, artifact_store: Any | None = None, image_loader: Any | None = None) -> BrainDecision:
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=self._build_prompt(state, artifact_store=artifact_store)),
+            HumanMessage(content=self._build_prompt(state, artifact_store=artifact_store, image_loader=image_loader)),
         ]
         result = await asyncio.get_event_loop().run_in_executor(None, self._model.invoke, messages)
-        if isinstance(result, BrainDecision):
-            return result
-        if hasattr(result, "content"):
-            return self._parse_raw_decision(result)
-        return BrainDecision.model_validate(result)
-
-    @classmethod
-    def _parse_raw_decision(cls, raw_result: Any) -> BrainDecision:
-        text = cls._raw_message_text(raw_result).strip()
-        return BrainDecision.model_validate_json(text)
+        return self._coerce_structured_decision(result)
 
     @staticmethod
-    def _raw_message_text(raw_result: Any) -> str:
-        content = getattr(raw_result, "content", raw_result)
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if isinstance(item, str):
-                    parts.append(item)
-                elif isinstance(item, dict):
-                    text = item.get("text") or item.get("content")
-                    if text:
-                        parts.append(str(text))
-                else:
-                    parts.append(str(item))
-            return "\n".join(parts)
-        return str(content)
+    def _coerce_structured_decision(result: Any) -> BrainDecision:
+        if isinstance(result, BrainDecision):
+            return result
+        if isinstance(result, dict):
+            return BrainDecision.model_validate(result)
+        if hasattr(result, "content"):
+            raise ValueError(
+                "VLM provider returned free-form message content instead of BrainDecision structured output. "
+                "Check OLLAMA_STRUCTURED_METHOD/GOOGLE_STRUCTURED_METHOD and model support."
+            )
+        return BrainDecision.model_validate(result)
+
 
     async def _mock_reason(self, state: CommanderState) -> BrainDecision:
         await asyncio.sleep(0.5)

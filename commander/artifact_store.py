@@ -40,6 +40,20 @@ class ArtifactStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        self._ensure_column(conn, "world_snapshots", "raw_payload_json", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "world_snapshots", "target_changed", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "world_snapshots", "update_source_node", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "world_snapshots", "update_reason", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "world_snapshots", "update_distance_m", "REAL NOT NULL DEFAULT 0.0")
+        self._ensure_column(conn, "world_snapshots", "updated_at", "REAL NOT NULL DEFAULT 0.0")
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(
@@ -97,10 +111,15 @@ class ArtifactStore:
                 CREATE TABLE IF NOT EXISTS world_snapshots (
                     snapshot_id TEXT PRIMARY KEY,
                     context_id TEXT NOT NULL,
-                    step INTEGER NOT NULL,
-                    raw_artifact_id TEXT,
+                    step INTEGER NOT NULL DEFAULT 0,
+                    raw_payload_json TEXT NOT NULL DEFAULT '',
                     candidate_count INTEGER NOT NULL,
                     selected_instance_key TEXT NOT NULL DEFAULT '',
+                    target_changed INTEGER NOT NULL DEFAULT 0,
+                    update_source_node TEXT NOT NULL DEFAULT '',
+                    update_reason TEXT NOT NULL DEFAULT '',
+                    update_distance_m REAL NOT NULL DEFAULT 0.0,
+                    updated_at REAL NOT NULL DEFAULT 0.0,
                     created_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS observations (
@@ -140,6 +159,18 @@ class ArtifactStore:
                     events_json TEXT NOT NULL,
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS goal_poses (
+                    goal_pose_id TEXT PRIMARY KEY,
+                    context_id TEXT NOT NULL,
+                    step INTEGER NOT NULL,
+                    source_node TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    goal_pose_index INTEGER NOT NULL,
+                    goal_json TEXT NOT NULL,
+                    goal_pose_db_json TEXT NOT NULL,
+                    nav_goal_pose_source TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS decisions (
                     decision_id TEXT PRIMARY KEY,
                     context_id TEXT NOT NULL,
@@ -153,6 +184,7 @@ class ArtifactStore:
                 );
                 """
             )
+            self._migrate_schema(conn)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO sessions(context_id, started_at)
@@ -181,6 +213,60 @@ class ArtifactStore:
                     time.time(),
                 ),
             )
+
+    def save_world_snapshot_raw(
+        self,
+        raw_payload: Any,
+        *,
+        candidate_count: int,
+        selected_instance_key: str = "",
+        created_by_node: str,
+        target_changed: bool = False,
+        update_reason: str = "",
+        update_distance_m: float = 0.0,
+        updated_at: float | None = None,
+    ) -> str:
+        snapshot_id = uuid.uuid4().hex
+        timestamp = time.time() if updated_at is None else float(updated_at)
+        raw_payload_json = json.dumps(raw_payload, ensure_ascii=False, default=str)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO world_snapshots(
+                    snapshot_id, context_id, step, raw_payload_json, candidate_count,
+                    selected_instance_key, target_changed, update_source_node,
+                    update_reason, update_distance_m, updated_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    self.context_id,
+                    0,
+                    raw_payload_json,
+                    int(candidate_count),
+                    selected_instance_key,
+                    1 if target_changed else 0,
+                    created_by_node,
+                    update_reason,
+                    float(update_distance_m),
+                    timestamp,
+                    time.time(),
+                ),
+            )
+        return snapshot_id
+
+    def load_world_snapshot_raw(self, snapshot_id: str) -> Any:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT raw_payload_json FROM world_snapshots
+                WHERE context_id = ? AND snapshot_id = ?
+                """,
+                (self.context_id, snapshot_id),
+            ).fetchone()
+        if row is None or not row["raw_payload_json"]:
+            raise KeyError(f"world snapshot raw payload not found: {snapshot_id}")
+        return json.loads(row["raw_payload_json"])
 
     def save_json(
         self,
@@ -373,25 +459,60 @@ class ArtifactStore:
         self,
         *,
         step: int,
-        raw_artifact_id: str,
-        candidate_count: int,
-        selected_instance_key: str,
+        snapshot_id: str = "",
+        candidate_count: int = 0,
+        selected_instance_key: str = "",
+        target_changed: bool = False,
+        update_source_node: str = "",
+        update_reason: str = "",
+        update_distance_m: float = 0.0,
+        updated_at: float = 0.0,
     ) -> None:
         with self._connect() as conn:
+            if snapshot_id:
+                cursor = conn.execute(
+                    """
+                    UPDATE world_snapshots
+                    SET step = ?, candidate_count = ?, selected_instance_key = ?,
+                        target_changed = ?, update_source_node = ?, update_reason = ?,
+                        update_distance_m = ?, updated_at = ?
+                    WHERE context_id = ? AND snapshot_id = ?
+                    """,
+                    (
+                        step,
+                        int(candidate_count),
+                        selected_instance_key,
+                        1 if target_changed else 0,
+                        update_source_node,
+                        update_reason,
+                        float(update_distance_m),
+                        float(updated_at or time.time()),
+                        self.context_id,
+                        snapshot_id,
+                    ),
+                )
+                if cursor.rowcount:
+                    return
             conn.execute(
                 """
                 INSERT INTO world_snapshots(
-                    snapshot_id, context_id, step, raw_artifact_id,
-                    candidate_count, selected_instance_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    snapshot_id, context_id, step, raw_payload_json, candidate_count,
+                    selected_instance_key, target_changed, update_source_node,
+                    update_reason, update_distance_m, updated_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    uuid.uuid4().hex,
+                    snapshot_id or uuid.uuid4().hex,
                     self.context_id,
                     step,
-                    raw_artifact_id,
+                    "",
                     int(candidate_count),
                     selected_instance_key,
+                    1 if target_changed else 0,
+                    update_source_node,
+                    update_reason,
+                    float(update_distance_m),
+                    float(updated_at or time.time()),
                     time.time(),
                 ),
             )
@@ -494,6 +615,39 @@ class ArtifactStore:
                     1 if plan_ready else 0,
                     int(attempt),
                     json.dumps(_filter_tracking_events(events), ensure_ascii=False, default=str),
+                    time.time(),
+                ),
+            )
+
+    def record_goal_pose(
+        self,
+        *,
+        step: int,
+        source_node: str,
+        rank: int,
+        goal_pose_index: int,
+        goal: dict[str, Any],
+        goal_pose_db: dict[str, Any],
+        nav_goal_pose_source: str = "",
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO goal_poses(
+                    goal_pose_id, context_id, step, source_node, rank, goal_pose_index,
+                    goal_json, goal_pose_db_json, nav_goal_pose_source, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    self.context_id,
+                    step,
+                    source_node,
+                    int(rank),
+                    int(goal_pose_index),
+                    json.dumps(goal or {}, ensure_ascii=False, default=str),
+                    json.dumps(goal_pose_db or {}, ensure_ascii=False, default=str),
+                    nav_goal_pose_source,
                     time.time(),
                 ),
             )

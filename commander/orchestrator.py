@@ -20,8 +20,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, Field
 
-from .artifact_store import ArtifactStore, artifact_ref_json
-from .brain import Brain
+from .artifact_store import ArtifactStore
+from .brain import Brain, BrainDecision
 from .contracts import (
     ApproachResult,
     DecisionRecord,
@@ -97,6 +97,7 @@ class Orchestrator:
         self._classifier_model = None
         self._chat_model = None
         self._artifact_stores: dict[str, ArtifactStore] = {}
+        self._transient_base64: dict[str, dict[str, str]] = {}
         if not use_mock:
             self._init_ollama_chat_models()
 
@@ -113,6 +114,20 @@ class Orchestrator:
             store = ArtifactStore(context_id=context_id)
             self._artifact_stores[context_id] = store
         return store
+
+    def _context_id(self, state: CommanderState | dict[str, Any]) -> str:
+        return str(state.get("context_id", "") or "default")
+
+    def _remember_transient_base64(self, state: CommanderState | dict[str, Any], kind: str, encoded: str) -> str:
+        key = f"{kind}:{uuid.uuid4().hex}"
+        self._transient_base64.setdefault(self._context_id(state), {})[key] = encoded
+        return key
+
+    def _load_transient_base64(self, state: CommanderState | dict[str, Any], key: str) -> str:
+        try:
+            return self._transient_base64[self._context_id(state)][key]
+        except KeyError as exc:
+            raise KeyError(f"transient payload not found: {key}") from exc
 
     def _init_ollama_chat_models(self) -> None:
         from langchain_openai import ChatOpenAI
@@ -316,7 +331,12 @@ class Orchestrator:
             "trace_id": uuid.uuid4().hex,
         }
         status = "CHAT_MEMORY_UPDATED"
-        return {"history_buffer": [entry], "current_status": status, "last_execution": self._execution(state, "chat_memory_node", status, started)}
+        return {
+            "human_reply": "",
+            "history_buffer": [entry],
+            "current_status": status,
+            "last_execution": self._execution(state, "chat_memory_node", status, started),
+        }
 
     async def _goodbye_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
@@ -478,7 +498,6 @@ class Orchestrator:
         from .camera_groups import room_camera_topic
         from .room_topics import get_compressed_image_topic_base64
 
-        store = self._artifact_store(state)
         snapshots: dict[str, dict[str, Any]] = {}
         seen: set[str] = set()
         ordered = []
@@ -497,8 +516,8 @@ class Orchestrator:
         for (camera_name, topic), encoded in zip(ordered, results):
             if not encoded:
                 continue
-            ref = store.save_base64_image("room_camera_rgb", encoded, created_by_node="capture_room_camera_images", metadata={"camera_name": camera_name, "topic": topic})
-            snapshots[camera_name] = dump_model(RoomCameraSnapshot(camera_name=camera_name, topic=topic, rgb_ref=ref))
+            image_key = self._remember_transient_base64(state, "room_camera_rgb", encoded)
+            snapshots[camera_name] = dump_model(RoomCameraSnapshot(camera_name=camera_name, topic=topic, image_key=image_key))
         return snapshots
 
     @staticmethod
@@ -550,34 +569,23 @@ class Orchestrator:
             primary_camera, primary_bbox = self._pick_primary_room_camera(candidate, room_cameras)
             if not primary_camera or not primary_bbox or primary_camera not in room_cameras:
                 continue
-            image_ref = (room_cameras.get(primary_camera) or {}).get("rgb_ref")
-            if not image_ref:
+            image_key = str((room_cameras.get(primary_camera) or {}).get("image_key", ""))
+            if not image_key:
                 continue
             try:
-                image_b64 = store.load_base64(image_ref)
+                image_b64 = self._load_transient_base64(state, image_key)
             except Exception as exc:
-                logger.warning("[find_node] Failed to load room camera artifact for preview: %s", exc)
+                logger.warning("[find_node] Failed to load transient room camera image for preview: %s", exc)
                 continue
             safe_camera = re.sub(r"[^A-Za-z0-9_.-]+", "_", primary_camera)
             safe_instance = re.sub(r"[^A-Za-z0-9_.-]+", "_", instance_key)
             preview_file = preview_dir / f"{idx:02d}__{safe_instance}__{safe_camera}.jpg"
             if not save_preview_bbox_annotated(image_b64, primary_bbox, preview_file):
                 continue
-            preview_ref = store.save_file(
-                "preview_image",
-                preview_file,
-                created_by_node="find_node",
-                metadata={
-                    "selection_index": idx,
-                    "instance_key": instance_key,
-                    "camera_name": primary_camera,
-                },
-            )
             prepared[instance_key] = {
                 "selection_index": idx,
                 "primary_camera": primary_camera,
                 "primary_bbox": primary_bbox,
-                "preview_ref": preview_ref,
                 "preview_path": str(preview_file),
             }
         return prepared
@@ -602,12 +610,13 @@ class Orchestrator:
                 return {"selected_instance": {}, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, error="/world_position_data read failed")}
             raw_payload = {"data": raw}
             candidates = parse_world_position_payload(raw_payload)
-        raw_ref = store.save_json("world_position_raw", raw_payload, created_by_node="find_node")
         room_cameras = {} if self.use_mock else await self._capture_room_camera_images(state, self._world_position_camera_names(candidates), timeout_sec=10.0)
         matches = [candidate for candidate in candidates if candidate.get("item_id") == wanted]
         if not matches:
             status = "TARGET_NOT_FOUND"
-            world = WorldPositionSnapshot(raw_payload_ref=raw_ref, candidate_count=len(candidates), updated_at=time.time(), update_source_node="find_node", update_reason="no_matching_instance")
+            updated_at = time.time()
+            snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="no_matching_instance", updated_at=updated_at)
+            world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), updated_at=updated_at, update_source_node="find_node", update_reason="no_matching_instance")
             return {"selected_instance": {}, "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message=f"No instance for {label}")}
 
         candidate_previews = self._prepare_candidate_previews(
@@ -630,7 +639,10 @@ class Orchestrator:
                 choice = await loop.run_in_executor(None, lambda: input(f"\n請輸入候選照片編號 (1-{len(matches)}) 或 no：\n> "))
                 if choice.strip().lower() == "no":
                     status = "TARGET_NOT_FOUND"
-                    return {"selected_instance": {}, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message="User selected no target")}
+                    updated_at = time.time()
+                    snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="user_rejected", updated_at=updated_at)
+                    world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), updated_at=updated_at, update_source_node="find_node", update_reason="user_rejected")
+                    return {"selected_instance": {}, "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message="User selected no target")}
                 try:
                     selected_idx = int(choice)
                     if 1 <= selected_idx <= len(matches):
@@ -642,13 +654,14 @@ class Orchestrator:
         preview = candidate_previews.get(str(candidate.get("instance_key", "")), {})
         primary_camera = str(preview.get("primary_camera", ""))
         primary_bbox = preview.get("primary_bbox", []) or []
-        preview_ref = preview.get("preview_ref")
+        preview_ref = None
+        preview_path = str(preview.get("preview_path", ""))
         if not primary_camera:
             primary_camera, primary_bbox = self._pick_primary_room_camera(candidate, room_cameras)
         if primary_camera and primary_camera in room_cameras:
             room_cameras[primary_camera]["bbox"] = primary_bbox
-            if preview_ref:
-                room_cameras[primary_camera]["preview_ref"] = artifact_ref_json(preview_ref)
+            if preview_path:
+                room_cameras[primary_camera]["preview_path"] = preview_path
         selected = SelectedInstance(
             item_id=str(candidate.get("item_id", "")),
             instance_id=int(candidate.get("instance_id", -1)),
@@ -661,7 +674,9 @@ class Orchestrator:
             primary_bbox=primary_bbox,
             preview_ref=preview_ref,
         )
-        world = WorldPositionSnapshot(raw_payload_ref=raw_ref, candidate_count=len(candidates), selected_instance_key=selected.instance_key, updated_at=time.time(), update_source_node="find_node", update_reason="db_created")
+        updated_at = time.time()
+        snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), selected_instance_key=selected.instance_key, created_by_node="find_node", update_reason="db_created", updated_at=updated_at)
+        world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), selected_instance_key=selected.instance_key, updated_at=updated_at, update_source_node="find_node", update_reason="db_created")
         status = "TARGET_SELECTED_FROM_WORLD_POSITION"
         return {"selected_instance": dump_model(selected), "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, message=selected.instance_key)}
 
@@ -676,15 +691,19 @@ class Orchestrator:
         selected = state.get("selected_instance", {}) or {}
         world = state.get("world_position", {}) or {}
         room_cameras = state.get("room_cameras", {}) or {}
-        if not selected or not world.get("raw_payload_ref"):
+        if not selected or not world.get("snapshot_id"):
             status = "ITEM_INFO_NO_SAM3D_FAILED"
-            return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="missing selected instance or world ref")}
+            return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="missing selected instance or world snapshot")}
         camera_names = [name for name in selected.get("camsrc", []) if name in room_cameras]
         if not self.use_mock and not camera_names:
             status = "ITEM_INFO_NO_SAM3D_FAILED"
             return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="no target room camera refs")}
-        camera_images = {name: store.load_base64(room_cameras[name]["rgb_ref"]) for name in camera_names}
-        raw_world = store.load_json(world["raw_payload_ref"])
+        try:
+            camera_images = {name: self._load_transient_base64(state, str(room_cameras[name].get("image_key", ""))) for name in camera_names}
+        except Exception as exc:
+            status = "ITEM_INFO_NO_SAM3D_FAILED"
+            return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error=f"missing transient room camera image: {exc}")}
+        raw_world = store.load_world_snapshot_raw(str(world["snapshot_id"]))
         params = {
             "target_item_id": selected.get("item_id"),
             "target_instance_id": selected.get("instance_id"),
@@ -698,15 +717,13 @@ class Orchestrator:
             "bboxes_by_camera": selected.get("bboxes_by_camera", {}),
             "world_position_data": raw_world,
         }
-        request_ref = store.save_json("a2a_raw_request", {**params, "camera_images": {k: room_cameras[k]["rgb_ref"] for k in camera_names}}, created_by_node="get_item_info_no_sam3d_node")
         agent = GetItemInfoNoSam3DAgent(http_client=self.http_client, use_mock=self.use_mock)
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}
-        raw_ref = store.save_json("a2a_raw_result", payload, created_by_node="get_item_info_no_sam3d_node", metadata={"request_artifact_id": request_ref.artifact_id})
         if not success or not payload:
             status = "ITEM_INFO_NO_SAM3D_FAILED"
-            return {"item_info": dump_model(ItemInfoResult(raw_result_ref=raw_ref)), "current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="empty item-info result")}
+            return {"item_info": dump_model(ItemInfoResult()), "current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="empty item-info result")}
         group_ranking = payload.get("group_ranking", []) or []
         item_info = ItemInfoResult(
             center_world=[float(v) for v in payload.get("center_world", selected.get("center_world", []))],
@@ -716,7 +733,6 @@ class Orchestrator:
             target_topic_key=str(payload.get("target_topic_key", selected.get("topic_key", ""))),
             group_ranking=group_ranking,
             goal_pose_path=str(payload.get("goal_pose_path", "")),
-            raw_result_ref=raw_ref,
             a2a_task_id=str(result.get("a2a_task_id", "")),
         )
         goal_pose_db = self._goal_pose_db_from_item_info(item_info.model_dump(mode="json"), 1)
@@ -747,6 +763,7 @@ class Orchestrator:
         if self.use_mock:
             status = "WORLD_POSITION_UNCHANGED"
             world = dict(state.get("world_position", {}) or {})
+            world["snapshot_id"] = ""
             world.update({"target_changed": False, "update_source_node": source_node, "update_reason": "unchanged", "update_distance_m": 0.0})
             return {"world_position": world, "current_status": status, "last_execution": self._execution(state, source_node, status, started)}
         from .room_topics import get_topic_string_message
@@ -758,17 +775,21 @@ class Orchestrator:
             return {"world_position": dump_model(world), "current_status": status, "last_execution": self._execution(state, source_node, status, started, success=False)}
         store = self._artifact_store(state)
         raw_payload = {"data": raw}
-        raw_ref = store.save_json("world_position_raw", raw_payload, created_by_node=source_node)
         candidates = parse_world_position_payload(raw_payload)
         refreshed = self._find_selected_candidate(candidates, selected)
         if not refreshed:
             status = "TARGET_LOST_IN_WORLD_POSITION"
-            world = WorldPositionSnapshot(raw_payload_ref=raw_ref, candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), updated_at=time.time(), target_changed=False, update_source_node=source_node, update_reason="target_missing")
+            world = WorldPositionSnapshot(candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), updated_at=time.time(), target_changed=False, update_source_node=source_node, update_reason="target_missing")
             return {"world_position": dump_model(world), "navigation": {"nav_goal": {}, "goal_pose_db": {}, "result": {}}, "grasp_result": {}, "current_status": status, "last_execution": self._execution(state, source_node, status, started, success=False, message="target missing")}
         moved = self._center_world_distance_m(selected.get("center_world", []), refreshed.get("center_world", []))
         threshold = float(os.getenv("WORLD_POSITION_UPDATE_THRESHOLD_M", "0.3"))
         target_changed = moved > threshold
-        world = WorldPositionSnapshot(raw_payload_ref=raw_ref, candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), updated_at=time.time(), target_changed=target_changed, update_source_node=source_node, update_distance_m=moved, update_reason="target_moved" if target_changed else "unchanged")
+        updated_at = time.time()
+        update_reason = "target_moved" if target_changed else "unchanged"
+        snapshot_id = ""
+        if target_changed:
+            snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), created_by_node=source_node, target_changed=True, update_reason=update_reason, update_distance_m=moved, updated_at=updated_at)
+        world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), updated_at=updated_at, target_changed=target_changed, update_source_node=source_node, update_distance_m=moved, update_reason=update_reason)
         update: dict[str, Any] = {"world_position": dump_model(world), "current_status": "WORLD_POSITION_TARGET_MOVED" if target_changed else "WORLD_POSITION_UNCHANGED", "last_execution": self._execution(state, source_node, "WORLD_POSITION_TARGET_MOVED" if target_changed else "WORLD_POSITION_UNCHANGED", started)}
         if target_changed:
             selected_updated = dict(selected)
@@ -805,24 +826,85 @@ class Orchestrator:
     async def _observe_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
         task = state.get("task", {}) or {}
-        description = task.get("normalized_task") or task.get("original_user_request") or "抓取目標物件"
+        base_description = task.get("normalized_task") or task.get("original_user_request") or "抓取目標物件"
+        description = str(base_description)
+        image_key = ""
         image_ref = None
+        status = "OBSERVED"
+        success = True
+        message = "Camera_Car observation captured"
         if not self.use_mock:
             from .camera import get_camera_image_base64
             image_b64 = await get_camera_image_base64("Camera_Car", timeout_sec=15.0)
             if image_b64:
-                image_ref = self._artifact_store(state).save_base64_image("camera_car_rgb", image_b64, created_by_node="observe_node", metadata={"camera_name": "Camera_Car"})
-        observation = Observation(description=description, image_ref=image_ref)
-        status = "OBSERVED"
-        return {"observation": dump_model(observation), "current_status": status, "last_execution": self._execution(state, "observe_node", status, started)}
+                image_key = self._remember_transient_base64(state, "camera_car_rgb", image_b64)
+            else:
+                status = "OBSERVED_WITHOUT_IMAGE"
+                success = False
+                message = "Camera_Car capture timed out or returned no image"
+                description = f"{description}. Camera_Car image unavailable; reason over typed task/navigation/result state only."
+        observation = Observation(description=description, image_key=image_key, image_ref=image_ref)
+        return {"observation": dump_model(observation), "current_status": status, "last_execution": self._execution(state, "observe_node", status, started, success=success, message=message)}
 
     async def _reason_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
-        out = await self.brain.reason(state, artifact_store=self._artifact_store(state))
-        decision = out["prediction"]
+        try:
+            out = await self.brain.reason(state, artifact_store=self._artifact_store(state), image_loader=lambda key: self._load_transient_base64(state, key))
+        except Exception as exc:
+            logger.error("[reason_node] structured Brain decision failed: %s", exc, exc_info=True)
+            status = "REASON_FAILED"
+            record = DecisionRecord(
+                reasoning=f"Brain structured output failed: {exc}",
+                call_module="",
+                module_params={},
+                latency_sec=time.time() - started,
+                model=self.brain._model_name(),
+            )
+            return {
+                "decision": dump_model(record),
+                "module_params": {},
+                "current_status": status,
+                "last_execution": self._execution(state, "reason_node", status, started, success=False, error=str(exc)),
+            }
+        decision = self._apply_decision_safety_guard(state, out["prediction"])
         record = DecisionRecord(reasoning=decision.reasoning, call_module=decision.call_module, module_params=decision.module_params, latency_sec=float(out["latency"]), model=out.get("model", ""))
         status = "REASONED"
         return {"decision": dump_model(record), "module_params": decision.module_params, "current_status": status, "last_execution": self._execution(state, "reason_node", status, started, message=decision.reasoning)}
+
+
+    def _apply_decision_safety_guard(self, state: CommanderState, decision: BrainDecision) -> BrainDecision:
+        if decision.call_module not in {"grasp_agent", "car_approach_agent"}:
+            return decision
+        should_override, reason = self._should_force_major_nav_after_failed_attempt(state)
+        if not should_override:
+            return decision
+        params = dict(decision.module_params or {})
+        params["overridden_from"] = decision.call_module
+        params["override_reason"] = reason
+        return BrainDecision(
+            reasoning=f"Safety override: {reason}",
+            call_module="major_nav_node",
+            module_params=params,
+        )
+
+    def _should_force_major_nav_after_failed_attempt(self, state: CommanderState) -> tuple[bool, str]:
+        navigation = state.get("navigation", {}) or {}
+        item_info = state.get("item_info", {}) or {}
+        current_rank = int(navigation.get("current_goal_rank", 1) or 1)
+        _, next_goal_error = self._goal_pose_for_rank(item_info, current_rank + 1)
+        if next_goal_error:
+            return False, ""
+
+        approach = state.get("approach_result", {}) or {}
+        if approach and approach.get("success") is False:
+            phase = str(approach.get("phase", "") or approach.get("status_code", "") or "approach_failed")
+            return True, f"latest approach attempt failed at rank {current_rank} ({phase}); use next ranked goal pose before repeating grasp"
+
+        grasp = state.get("grasp_result", {}) or {}
+        if grasp and grasp.get("success") is False:
+            return True, f"latest grasp attempt failed at rank {current_rank}; use next ranked goal pose before repeating grasp"
+
+        return False, ""
 
     def _route_decision(self, state: CommanderState) -> Literal["major_nav_node", "car_grasp_node", "end"]:
         module = (state.get("decision", {}) or {}).get("call_module", "")
@@ -922,12 +1004,10 @@ class Orchestrator:
         from agents.grasp_agent import GraspAgent
         from commander.camera import get_camera_rgbd_base64
 
-        store = self._artifact_store(state)
         object_id = (state.get("requested_object", {}) or {}).get("id", "")
         if not object_id:
             status = "GRASP_FAILED"
             return {"grasp_result": dump_model(GraspResult(success=False)), "current_status": status, "last_execution": self._execution(state, "car_grasp_node", status, started, success=False, error="missing object id")}
-        rgb_ref = depth_ref = None
         rgbd: dict[str, str] = {}
         if self.use_mock:
             rgbd = {"camera_name": "Camera_Car", "rgb_base64": "", "depth_base64": ""}
@@ -936,18 +1016,11 @@ class Orchestrator:
             if not rgbd:
                 status = "GRASP_FAILED"
                 return {"grasp_result": dump_model(GraspResult(object_id=object_id, success=False)), "current_status": status, "last_execution": self._execution(state, "car_grasp_node", status, started, success=False, error="missing RGBD")}
-            rgb_ref = store.save_base64_image("camera_car_rgb", rgbd["rgb_base64"], created_by_node="car_grasp_node", metadata={"camera_name": "Camera_Car"})
-            depth_ref = store.save_base64_image("camera_car_depth", rgbd["depth_base64"], created_by_node="car_grasp_node", metadata={"camera_name": "Camera_Car"})
         params = {**(state.get("module_params", {}) or {}), "object_id": object_id, "camera_name": "Camera_Car", "rgb_base64": rgbd.get("rgb_base64", ""), "depth_base64": rgbd.get("depth_base64", "")}
-        request_ref = store.save_json("a2a_raw_request", {"object_id": object_id, "camera_name": "Camera_Car", "rgb_ref": artifact_ref_json(rgb_ref), "depth_ref": artifact_ref_json(depth_ref)}, created_by_node="car_grasp_node")
         agent = GraspAgent(http_client=self.http_client, use_mock=self.use_mock)
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}
-        raw_ref = store.save_json("a2a_raw_result", payload, created_by_node="car_grasp_node", metadata={"request_artifact_id": request_ref.artifact_id})
-        valid_ref = None
-        if payload.get("valid_grasp_poses_camera"):
-            valid_ref = store.save_json("debug_payload", payload.get("valid_grasp_poses_camera", []), created_by_node="car_grasp_node", metadata={"kind": "valid_grasp_poses_camera"})
         grasp = GraspResult(
             object_id=payload.get("object_id") or object_id,
             camera_name=payload.get("camera_name", "Camera_Car"),
@@ -956,11 +1029,7 @@ class Orchestrator:
             num_candidate_grasps=payload.get("num_candidate_grasps"),
             num_valid_grasps=payload.get("num_valid_grasps"),
             best_grasp_pose_camera=payload.get("best_grasp_pose_camera", {}),
-            valid_grasp_poses_ref=valid_ref,
             object_reference_center_camera=payload.get("object_reference_center_camera", []),
-            rgb_ref=rgb_ref,
-            depth_ref=depth_ref,
-            raw_result_ref=raw_ref,
             a2a_task_id=str(result.get("a2a_task_id", "")),
         )
         status = "GRASP_READY" if success else "GRASP_FAILED"
@@ -970,14 +1039,12 @@ class Orchestrator:
         started = time.time()
         from agents.car_approach_agent import CarApproachAgent
 
-        store = self._artifact_store(state)
         params = dict(state.get("module_params", {}) or {})
         params.setdefault("grasp_result", state.get("grasp_result", {}) or {})
         agent = CarApproachAgent(use_mock=self.use_mock)
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}
-        raw_ref = store.save_json("approach_raw_result", payload, created_by_node="car_approach_node")
         approach = ApproachResult(
             success=success,
             status_code=str(payload.get("status_code", "APPROACH_SUCCESS" if success else "APPROACH_FAIL")),
@@ -988,7 +1055,6 @@ class Orchestrator:
             arm_result=payload.get("arm_result", {}) if isinstance(payload.get("arm_result", {}), dict) else {},
             arm_base_alignment_result=payload.get("arm_base_alignment_result", {}) if isinstance(payload.get("arm_base_alignment_result", {}), dict) else {},
             selected_solution=payload.get("selected_solution", {}) if isinstance(payload.get("selected_solution", {}), dict) else {},
-            raw_result_ref=raw_ref,
         )
         status = "APPROACH_COMPLETED" if success else "APPROACH_FAILED"
         return {"approach_result": dump_model(approach), "current_status": status, "last_execution": self._execution(state, "car_approach_node", status, started, success=success, message=approach.message)}
@@ -1072,7 +1138,7 @@ class Orchestrator:
         return goal, ""
 
     def _default_initial_pose(self) -> Dict[str, Any]:
-        return {"x": 3.4133476128639803, "y": -3.040367824880008, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0, "covariance": [0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.06853892060437211]}
+        return {"frame_id": "map", "stamp": {"sec": 1779096158, "nsec": 13239355}, "x": -0.012687999817440121, "y": 0.12421656521077351, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0, "covariance": [0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.06853892060437211]}
 
     async def _run_nav_move_runner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         import shlex

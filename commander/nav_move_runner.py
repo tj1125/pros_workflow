@@ -120,6 +120,16 @@ class NavMoveRunner(Node):
     def _stamp_with_now(self, msg: PoseStamped | PoseWithCovarianceStamped) -> None:
         msg.header.stamp = self.get_clock().now().to_msg()
 
+    def _stamp_initial_pose(
+        self, msg: PoseWithCovarianceStamped, initial: Dict[str, Any]
+    ) -> None:
+        stamp = initial.get("stamp")
+        if isinstance(stamp, dict):
+            msg.header.stamp.sec = int(stamp.get("sec", 0))
+            msg.header.stamp.nanosec = int(stamp.get("nsec", stamp.get("nanosec", 0)))
+            return
+        self._stamp_with_now(msg)
+
     def _make_goal_pose(self) -> PoseStamped:
         goal = self.payload.get("goal_pose", {})
         msg = PoseStamped()
@@ -137,8 +147,8 @@ class NavMoveRunner(Node):
     def _make_initial_pose(self) -> PoseWithCovarianceStamped:
         initial = self.payload.get("initial_pose", {})
         msg = PoseWithCovarianceStamped()
-        msg.header.frame_id = "map"
-        self._stamp_with_now(msg)
+        msg.header.frame_id = str(initial.get("frame_id", "map"))
+        self._stamp_initial_pose(msg, initial)
         msg.pose.pose.position.x = float(initial.get("x", 0.0))
         msg.pose.pose.position.y = float(initial.get("y", 0.0))
         msg.pose.pose.position.z = float(initial.get("z", 0.0))
@@ -306,7 +316,7 @@ class NavMoveRunner(Node):
         deadline = time.monotonic() + plan_timeout
         while time.monotonic() <= deadline:
             if publish_initialpose:
-                self._stamp_with_now(initial_pose_msg)
+                self._stamp_initial_pose(initial_pose_msg, self.payload.get("initial_pose", {}))
                 self.initial_pose_pub.publish(initial_pose_msg)
             
             self._stamp_with_now(goal_pose_msg)

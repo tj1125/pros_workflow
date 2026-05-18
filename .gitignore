@@ -11,6 +11,9 @@ dist/
 *.egg-info/
 =*
 
+# Local thesis draft
+thesis/
+
 # LaTeX build artifacts
 thesis/*.aux
 thesis/*.fdb_latexmk

@@ -14,7 +14,7 @@ def _merge_dict(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]
 
 
 class CommanderState(TypedDict):
-    """Narrow LangGraph state. Large data lives in ArtifactStore."""
+    """Narrow LangGraph state. Raw session data lives in SQLite/artifacts."""
 
     context_id: str
     interface_mode: str
