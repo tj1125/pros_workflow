@@ -58,12 +58,12 @@ INF_GET_ITEM_INFO_NO_SAM3D_URL=http://192.168.1.10:8006
 
 ```json
 {
-  "yolo_class": "doll",
-  "target_item_id": "doll",
+  "yolo_class": "apple",
+  "target_item_id": "apple",
   "target_instance_id": 1,
-  "target_instance_key": "doll_1",
-  "target_topic_key": "doll",
-  "target_label": "褐色小熊玩偶",
+  "target_instance_key": "apple_1",
+  "target_topic_key": "apple",
+  "target_label": "紅色蘋果",
   "selected_camera": "Camera_Room1_12",
   "camera_names": ["Camera_Room1_12", "Camera_Room1_13"],
   "center_world": [1.2, 0.4, 2.8],
@@ -83,12 +83,12 @@ INF_GET_ITEM_INFO_NO_SAM3D_URL=http://192.168.1.10:8006
   "center_world": [1.2, 0.4, 2.8],
   "center_world_coordinate_frame": "unity_world",
   "primary_camera_id": "Camera_Room1_12",
-  "target_instance_key": "doll_1",
+  "target_instance_key": "apple_1",
   "target_object": {
-    "label": "褐色小熊玩偶",
+    "label": "紅色蘋果",
     "id": 1,
     "instance_id": 1,
-    "instance_key": "doll_1"
+    "instance_key": "apple_1"
   },
   "group_ranking": [
     {

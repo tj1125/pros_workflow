@@ -2,7 +2,7 @@
 
 `grasp_agent` 是一個 A2A Agent Server，負責接收 `Camera_Car` 的 RGBD 與 `object_id`，在 3090 端執行：
 
-`RGBD -> YOLO(best.pt) -> SAM -> 目標點雲 -> GraspGen -> valid grasps -> 回傳所有可行 grasp pose（並保留 best grasp）`
+`RGBD -> YOLOv26(yolov26_best.pt) -> SAM -> 目標點雲 -> GraspGen -> valid grasps -> 回傳所有可行 grasp pose（並保留 best grasp）`
 
 ## A2A Request
 

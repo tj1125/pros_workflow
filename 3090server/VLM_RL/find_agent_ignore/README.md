@@ -41,8 +41,8 @@ INF_FIND_URL=http://192.168.1.10:8005
     "Camera_Room1_12": "...base64...",
     "Camera_Room1_13": "...base64..."
   },
-  "task_description": "抓取褐色小熊玩偶",
-  "target_object": {"id": "doll", "label": "褐色小熊玩偶"}
+  "task_description": "抓取紅色蘋果",
+  "target_object": {"id": "apple", "label": "紅色蘋果"}
 }
 ```
 
@@ -56,7 +56,7 @@ INF_FIND_URL=http://192.168.1.10:8005
     "1": {
       "camera": "Camera_Room1_12",
       "bbox": [100, 100, 300, 300],
-      "label": "doll",
+      "label": "apple",
       "conf": 0.92,
       "annotated_image_base64": "..."
     }

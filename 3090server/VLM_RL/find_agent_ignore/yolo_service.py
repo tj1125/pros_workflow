@@ -21,7 +21,7 @@ from tool.vision.yolo import extract_detections, load_yolo_model, run_yolo
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = Path(__file__).parent.parent / "models/yolo/pure720.pt"
+_DEFAULT_MODEL = Path(__file__).parent.parent / "models/yolov26/yolov26_best.pt"
 _MIN_DET_CONF = 0.5
 _MIN_GROUP_MAX_CONF = 0.6
 _GROUP_SIZE = 3

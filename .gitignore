@@ -33,7 +33,7 @@ thesis/*.xdv
 3090server/VLM_RL/get_item_info_agent/vendor/pydeps/
 
 # 忽略大型參考資料夾
-參考檔案放這/
+參考用/
 
 # UV 與 macOS 系統檔案
 .uv_python/

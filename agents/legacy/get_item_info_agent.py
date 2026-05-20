@@ -35,7 +35,7 @@ class GetItemInfoAgent:
 
     execute() takes params:
       {
-        "yolo_class": "doll",  # or "apple", "wine"
+        "yolo_class": "doll",  # one of: apple, box, coffee, cup, doll, gaobear, hpb, xbox
         "selected_camera": "Camera_Room1_12",
         "camera_names": ["Camera_Room1_12", "Camera_Room1_13", "Camera_Room1_14", "Camera_Room1_15"],
         "camera_images": {"Camera_Room1_12": "...", ...},

@@ -35,13 +35,20 @@ def test_history_reducer_appends_all_entries() -> None:
     ]
 
 
-def test_task_classifier_matches_alias_and_keeps_chat_general() -> None:
+def test_task_classifier_matches_id_label_and_keeps_chat_general() -> None:
     objects = _load_graspable_objects()
+    assert [obj["id"] for obj in objects] == ["apple", "box", "coffee", "cup", "doll", "gaobear", "hpb", "xbox"]
+    assert all(set(obj) == {"id", "label"} for obj in objects)
+
     router = Orchestrator.__new__(Orchestrator)
 
-    teddy = router._mock_task_classification("The human wants to pick up the brown teddy bear.", objects)
-    assert teddy.intent == "specific_task"
-    assert teddy.selected_object_index == 1
+    apple = router._mock_task_classification("The human wants to pick up apple.", objects)
+    assert apple.intent == "specific_task"
+    assert apple.selected_object_index == 1
+
+    doll = router._mock_task_classification("請拿褐色小熊玩偶", objects)
+    assert doll.intent == "specific_task"
+    assert doll.selected_object_index == 5
 
     chat = router._mock_task_classification("hello", objects)
     assert chat.intent == "general_chat"
@@ -50,7 +57,7 @@ def test_task_classifier_matches_alias_and_keeps_chat_general() -> None:
 
 def test_legacy_prompt_type_only_uses_detection_selection() -> None:
     assert _legacy_prompt_type("請輸入候選照片編號 (1-2) 或 no：") == "detection_selection"
-    assert _legacy_prompt_type("請輸入目標物編號 (1-3)：") == "legacy_input"
+    assert _legacy_prompt_type("請輸入目標物編號 (1-8)：") == "legacy_input"
 
 
 def test_artifact_store_json_text_bytes_and_db_rows() -> None:

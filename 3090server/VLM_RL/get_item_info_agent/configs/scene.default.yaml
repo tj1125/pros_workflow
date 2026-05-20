@@ -5,7 +5,7 @@ camera:
   rgb_dir: "../data/rgb_image"
 
 models:
-  yolo_weights: "../../models/yolo/pure720.pt"
+  yolo_weights: "../../models/yolov26/yolov26_best.pt"
   sam_seg_checkpoint: "../../models/segmentation/sam_vit_b_01ec64.pth"
   depthanything_weights: "../../models/depth/depth_anything_v2_vitb.pth"
   sam3d_root: "../vendor/sam3d_runtime"

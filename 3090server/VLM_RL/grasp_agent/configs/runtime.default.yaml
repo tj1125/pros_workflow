@@ -3,7 +3,7 @@ camera:
   intrinsics_path: "../data/camera_parameter/Intrinsics/Camera_Car.yaml"
 
 models:
-  yolo_weights: "../../models/yolo/best.pt"
+  yolo_weights: "../../models/yolov26/yolov26_best.pt"
   sam_seg_checkpoint: "../../models/segmentation/sam_vit_b_01ec64.pth"
   graspgen_root: "../../get_item_info_agent/vendor/graspgen_runtime"
   gripper_config: "../../models/graspgen_checkpoints/graspgen_robotiq_2f_140.yml"

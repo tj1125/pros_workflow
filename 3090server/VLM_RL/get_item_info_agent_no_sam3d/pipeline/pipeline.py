@@ -32,9 +32,14 @@ from tool.grasp.graspgen import (
 from tool.runtime.memory import release_cuda_memory
 
 LABEL_COLORS = {
-    "doll": np.array([60, 220, 90], dtype=np.uint8),
     "apple": np.array([255, 140, 40], dtype=np.uint8),
-    "wine": np.array([70, 160, 255], dtype=np.uint8),
+    "box": np.array([150, 95, 45], dtype=np.uint8),
+    "coffee": np.array([245, 245, 235], dtype=np.uint8),
+    "cup": np.array([120, 80, 45], dtype=np.uint8),
+    "doll": np.array([60, 220, 90], dtype=np.uint8),
+    "gaobear": np.array([35, 35, 35], dtype=np.uint8),
+    "hpb": np.array([25, 80, 160], dtype=np.uint8),
+    "xbox": np.array([90, 90, 90], dtype=np.uint8),
 }
 HEIGHT_WEIGHT_RATIO_ANCHORS = np.array([0.70, 1.03, 2.28], dtype=np.float32)
 HEIGHT_WEIGHT_VALUE_ANCHORS = np.array([0.65, 0.80, 0.90], dtype=np.float32)

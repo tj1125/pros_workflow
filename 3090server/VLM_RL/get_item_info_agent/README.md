@@ -46,7 +46,7 @@ INF_GET_ITEM_INFO_URL=http://192.168.1.10:8008
 
 ```json
 {
-  "yolo_class": "doll",
+  "yolo_class": "apple",
   "scene_config": "get_item_info_agent/configs/scene.default.yaml",
   "selected_camera": "Camera_Room1_12",
   "camera_names": ["Camera_Room1_12", "Camera_Room1_13"]
