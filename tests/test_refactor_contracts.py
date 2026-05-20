@@ -60,6 +60,26 @@ def test_legacy_prompt_type_only_uses_detection_selection() -> None:
     assert _legacy_prompt_type("請輸入目標物編號 (1-8)：") == "legacy_input"
 
 
+def test_item_info_uses_all_room1_upload_cameras() -> None:
+    orchestrator = Orchestrator.__new__(Orchestrator)
+
+    camera_names = orchestrator._item_info_room_camera_names()
+    assert camera_names == [
+        "Camera_Room1_12",
+        "Camera_Room1_13",
+        "Camera_Room1_14",
+        "Camera_Room1_15",
+    ]
+
+    camera_names.append("Camera_Room1_16")
+    assert orchestrator._item_info_room_camera_names() == [
+        "Camera_Room1_12",
+        "Camera_Room1_13",
+        "Camera_Room1_14",
+        "Camera_Room1_15",
+    ]
+
+
 def test_artifact_store_json_text_bytes_and_db_rows() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = ArtifactStore(context_id="ctx", base_dir=tmp)

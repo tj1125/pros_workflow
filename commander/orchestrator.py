@@ -47,6 +47,12 @@ logger = logging.getLogger(__name__)
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 _GOODBYE_TOKENS = {"bye", "exit", "quit", "q", "再見", "掰掰", "結束"}
 _PICK_TASK_PATTERN = re.compile(r"\b(pick up|pick|grab|grasp|get|fetch|take|hold)\b|抓取|拾取|拿|抓|夾|取")
+_ITEM_INFO_ROOM_CAMERA_NAMES = (
+    "Camera_Room1_12",
+    "Camera_Room1_13",
+    "Camera_Room1_14",
+    "Camera_Room1_15",
+)
 
 
 def _load_graspable_objects() -> list[dict[str, Any]]:
@@ -532,6 +538,10 @@ class Orchestrator:
                     ordered.append(camera_text)
         return ordered
 
+    @staticmethod
+    def _item_info_room_camera_names() -> list[str]:
+        return list(_ITEM_INFO_ROOM_CAMERA_NAMES)
+
     def _pick_primary_room_camera(self, candidate: Dict[str, Any], room_cameras: dict[str, Any]) -> tuple[str, list[float]]:
         from .world_position import bbox_area
 
@@ -610,7 +620,7 @@ class Orchestrator:
                 return {"selected_instance": {}, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, error="/world_position_data read failed")}
             raw_payload = {"data": raw}
             candidates = parse_world_position_payload(raw_payload)
-        room_cameras = {} if self.use_mock else await self._capture_room_camera_images(state, self._world_position_camera_names(candidates), timeout_sec=10.0)
+        room_cameras = {} if self.use_mock else await self._capture_room_camera_images(state, self._item_info_room_camera_names(), timeout_sec=10.0)
         matches = [candidate for candidate in candidates if candidate.get("item_id") == wanted]
         if not matches:
             status = "TARGET_NOT_FOUND"
@@ -694,15 +704,30 @@ class Orchestrator:
         if not selected or not world.get("snapshot_id"):
             status = "ITEM_INFO_NO_SAM3D_FAILED"
             return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="missing selected instance or world snapshot")}
-        camera_names = [name for name in selected.get("camsrc", []) if name in room_cameras]
-        if not self.use_mock and not camera_names:
-            status = "ITEM_INFO_NO_SAM3D_FAILED"
-            return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="no target room camera refs")}
+        camera_names = [] if self.use_mock else self._item_info_room_camera_names()
+        if not self.use_mock:
+            latest_room_cameras = await self._capture_room_camera_images(state, camera_names, timeout_sec=10.0)
+            room_cameras = {**room_cameras, **latest_room_cameras}
+            missing_cameras = [name for name in camera_names if name not in room_cameras]
+            if missing_cameras:
+                status = "ITEM_INFO_NO_SAM3D_FAILED"
+                return {
+                    "room_cameras": room_cameras,
+                    "current_status": status,
+                    "last_execution": self._execution(
+                        state,
+                        "get_item_info_no_sam3d_node",
+                        status,
+                        started,
+                        success=False,
+                        error=f"missing required room camera images: {missing_cameras}",
+                    ),
+                }
         try:
             camera_images = {name: self._load_transient_base64(state, str(room_cameras[name].get("image_key", ""))) for name in camera_names}
         except Exception as exc:
             status = "ITEM_INFO_NO_SAM3D_FAILED"
-            return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error=f"missing transient room camera image: {exc}")}
+            return {"room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error=f"missing transient room camera image: {exc}")}
         raw_world = store.load_world_snapshot_raw(str(world["snapshot_id"]))
         params = {
             "target_item_id": selected.get("item_id"),
@@ -747,7 +772,7 @@ class Orchestrator:
             force_initialpose=state.get("navigation", {}).get("result") in ({}, None),
         )
         status = "ITEM_INFO_NO_SAM3D_READY"
-        return {"item_info": dump_model(item_info), "navigation": dump_model(navigation), "current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=not bool(err), message="item info ready" if not err else err)}
+        return {"item_info": dump_model(item_info), "navigation": dump_model(navigation), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=not bool(err), message="item info ready" if not err else err)}
 
     def _route_get_item_info_no_sam3d(self, state: CommanderState) -> Literal["nav_move_node", "nav_home_node"]:
         navigation = state.get("navigation", {}) or {}
@@ -1138,7 +1163,7 @@ class Orchestrator:
         return goal, ""
 
     def _default_initial_pose(self) -> Dict[str, Any]:
-        return {"frame_id": "map", "stamp": {"sec": 1779096158, "nsec": 13239355}, "x": -0.012687999817440121, "y": 0.12421656521077351, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0, "covariance": [0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.06853892060437211]}
+        return {"x": -0.012687999817440121, "y": 0.12421656521077351, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
 
     async def _run_nav_move_runner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         import shlex
