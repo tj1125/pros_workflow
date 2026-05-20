@@ -6,11 +6,11 @@ vel, rotate_vel為自走車PID數值, 可於arduino程式碼查看
 
 前左、前右、後左、後右
 """
-vel = 10.0
+vel = 7.5
 vel_slow = 5.0
-rotate_vel = 8.5
+rotate_vel = 7.8
 rotate_vel_slow = 6.7
-rotate_vel_median = 7.5
+rotate_vel_median = 7.3
 ACTION_MAPPINGS = {
     "FORWARD": [vel, vel, vel, vel],  # 前進
     "FORWARD_SLOW": [vel_slow, vel_slow, vel_slow, vel_slow],  # 前進
