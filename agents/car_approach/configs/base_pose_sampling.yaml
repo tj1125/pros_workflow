@@ -7,8 +7,10 @@
 #     the direction the gripper travels when approaching the object.
 #     Leave as null to skip the approach-direction filter (all headings allowed).
 #
-# The map is loaded from a ROS-style PGM + YAML pair.  Free cells are projected
-# into Unity (x, z) using:  unity_x = map_x,  unity_z = map_y.
+# The map is loaded from a ROS-style PGM + YAML pair. ROS map origin (0, 0)
+# corresponds to Unity world x=-2.29999995, z=2.5. The floor-plane conversion is:
+#   unity_x = map_y - 2.29999995
+#   unity_z = 2.5 - map_x
 
 # ── Target (Unity world frame) ────────────────────────────────────────────────
 # Grasp EE position in Unity world coordinates.  y = 0.51 is the EE height.

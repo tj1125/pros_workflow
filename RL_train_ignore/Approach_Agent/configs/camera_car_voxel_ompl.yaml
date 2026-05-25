@@ -23,7 +23,7 @@ pixel_stride: 1
 max_voxel_obstacles: 0
 obstacle_rgba: [0.85, 0.2, 0.2, 0.55]
 # Single source of truth for the gripper midpoint in camera coordinates.
-gripper_midpoint_camera_xyz: [0.0, 0.04, 0.11]
+gripper_midpoint_camera_xyz: [0.0, -0.0824, 0.023]
 crop_to_workspace_camera: false
 workspace_bounds_camera:
   min_xyz: [0.10, -0.60, 0.00]

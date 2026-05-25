@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import time
@@ -919,6 +920,20 @@ class ArmAutoController:
         )
         if warning_summary:
             message += f"; arm_warnings={warning_summary}"
+        trajectory_debug = getattr(
+            self.pybullet_robot_controller,
+            "last_interpolated_trajectory_debug",
+            {},
+        )
+        if isinstance(trajectory_debug, dict) and trajectory_debug:
+            try:
+                message += "; car_grasp_sequence_ik_debug_json=" + json.dumps(
+                    trajectory_debug,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            except Exception:
+                pass
         return ArmGoal.Result(
             success=bool(grasp_verify_result["success"]),
             message=message,

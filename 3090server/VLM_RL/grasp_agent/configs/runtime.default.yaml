@@ -24,7 +24,7 @@ runtime:
   grasp_threshold: -1.0
   num_grasps: 800
   topk_num_grasps: 400
-  gripper_midpoint_camera_xyz: [0.0, -0.04, 0.11]
+  gripper_midpoint_camera_xyz: [0.0, -0.0824, 0.023]
   max_grasp_local_z: 0.03
   max_grasp_pitch_deg: 45.0
   collision_threshold: 0.002

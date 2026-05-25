@@ -46,6 +46,7 @@ class PybulletRobotController:
         self.target_marker_ids = []
         self.front_marker_ids = []
         self.link_axes_lines = []
+        self.last_interpolated_trajectory_debug = {}
 
         self.createWorld(
             GUI=self.arm_params["pybullet"]["gui"],
@@ -318,20 +319,41 @@ class PybulletRobotController:
         return None
 
     def generateInterpolatedTrajectory(self, target_position, steps=50):
+        step_count = max(1, int(steps))
         current_position = self.solveForwardPositonKinematics(self.getJointStates()[0])[0:3]
-        step_vector = (np.array(target_position) - np.array(current_position)) / steps
+        target_position_np = np.array(target_position, dtype=float)
+        current_position_np = np.array(current_position, dtype=float)
+        step_vector = (target_position_np - current_position_np) / step_count
         self.markTarget(target_position)
 
         joint_angles_in_radians = []
-        for i in range(steps):
-            intermediate_position = np.array(current_position) + (i + 1) * step_vector
+        waypoint_positions_xyz = []
+        failed_waypoint_index = None
+        for i in range(step_count):
+            intermediate_position = current_position_np + (i + 1) * step_vector
+            waypoint_positions_xyz.append(intermediate_position.astype(float).tolist())
             joint_angles = self.solveInversePositionKinematics(intermediate_position)
             if joint_angles and len(joint_angles) >= len(self.controllable_joints):
                 joint_angles_in_radians.append(
-                    joint_angles[: len(self.controllable_joints)]
+                    [float(value) for value in joint_angles[: len(self.controllable_joints)]]
                 )
             else:
+                failed_waypoint_index = i + 1
                 break
+
+        self.last_interpolated_trajectory_debug = {
+            "start_position_xyz": current_position_np.astype(float).tolist(),
+            "target_position_xyz": target_position_np.astype(float).tolist(),
+            "requested_steps": int(step_count),
+            "generated_waypoint_count": int(len(joint_angles_in_radians)),
+            "waypoint_positions_xyz": waypoint_positions_xyz[: len(joint_angles_in_radians)],
+            "waypoint_joint_positions_rad": joint_angles_in_radians,
+            "waypoint_joint_positions_deg": [
+                [math.degrees(float(value)) for value in waypoint]
+                for waypoint in joint_angles_in_radians
+            ],
+            "failed_waypoint_index": failed_waypoint_index,
+        }
 
         return joint_angles_in_radians
 

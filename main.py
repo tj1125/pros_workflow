@@ -12,7 +12,10 @@ import sys
 import uuid
 
 import click
-from dotenv import load_dotenv
+
+from commander import load_project_env
+
+load_project_env()
 
 from commander.logger import TraceLogger
 from commander.orchestrator import Orchestrator
@@ -20,7 +23,6 @@ from commander.session_store import SessionMemoryStore
 from commander.state import create_initial_state
 
 
-load_dotenv(override=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

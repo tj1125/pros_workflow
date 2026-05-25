@@ -138,21 +138,22 @@ class NavigationController:
     @staticmethod
     def choose_path_action(diff_angle, force_slow=False):
         abs_diff = abs(diff_angle)
+        heading_tolerance_deg = 10.0
 
         if force_slow:
-            if abs_diff < 5:
+            if abs_diff <= heading_tolerance_deg:
                 return "FORWARD_SLOW"
-            if -180 < diff_angle < 0:
+            if -180 < diff_angle < -heading_tolerance_deg:
                 return "CLOCKWISE_ROTATION_SLOW"
-            if 0 < diff_angle < 180:
+            if heading_tolerance_deg < diff_angle < 180:
                 return "COUNTERCLOCKWISE_ROTATION_SLOW"
             return "STOP"
 
-        if abs_diff < 5:
+        if abs_diff <= heading_tolerance_deg:
             return "FORWARD"
-        if -180 < diff_angle <= -5:
+        if -180 < diff_angle < -heading_tolerance_deg:
             return "CLOCKWISE_ROTATION"
-        if 5 <= diff_angle < 180:
+        if heading_tolerance_deg < diff_angle < 180:
             return "COUNTERCLOCKWISE_ROTATION"
         return "STOP"
 
@@ -182,7 +183,7 @@ class NavigationController:
         )
 
     def get_next_target_point(
-        self, car_position, path_points, min_required_distance=0.03
+        self, car_position, path_points, min_required_distance=0.2
     ) -> Optional[list[float]]:
         """
         Return the next path point at least `min_required_distance` from the car.

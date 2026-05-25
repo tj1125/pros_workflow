@@ -51,7 +51,7 @@ class Brain:
                 google_api_key=os.getenv("GOOGLE_API_KEY"),
             )
             method = os.getenv("GOOGLE_STRUCTURED_METHOD", "json_schema")
-            self._model = self._raw_model.with_structured_output(BrainDecision, method=method)
+            self._model = self._with_structured_output(method)
             logger.info("[Brain] Using Google Gemini: %s structured_method=%s", model_name, method)
         elif provider == "ollama":
             from langchain_openai import ChatOpenAI
@@ -65,10 +65,21 @@ class Brain:
                 temperature=0,
             )
             method = os.getenv("OLLAMA_STRUCTURED_METHOD", "json_schema")
-            self._model = self._raw_model.with_structured_output(BrainDecision, method=method)
+            self._model = self._with_structured_output(method)
             logger.info("[Brain] Using Ollama: %s @ %s structured_method=%s", model_name, base_url, method)
         else:
             raise ValueError(f"[Brain] Unknown VLM_PROVIDER: {provider}")
+
+    def _with_structured_output(self, method: str) -> Any:
+        if self._raw_model is None:
+            raise RuntimeError("[Brain] Raw model is not initialized.")
+        try:
+            return self._raw_model.with_structured_output(BrainDecision, method=method, include_raw=True)
+        except TypeError as exc:
+            if "include_raw" not in str(exc):
+                raise
+            logger.warning("[Brain] Structured output wrapper lacks include_raw support; raw retry fallback remains enabled.")
+            return self._raw_model.with_structured_output(BrainDecision, method=method)
 
     def _build_prompt(self, state: CommanderState, artifact_store: Any | None = None, image_loader: Any | None = None) -> list | str:
         task = state.get("task", {}) or {}
@@ -113,12 +124,10 @@ class Brain:
             f"Next major_nav rank available: {next_rank_available}\n"
             f"Current nav goal source: {navigation.get('nav_goal_pose_source', '')}\n"
             f"Last result: {json.dumps(nav_result, ensure_ascii=False)}\n\n"
-            "## Visual Safety Checklist\n"
-            "Before choosing grasp_agent, inspect the image for foreground blockers. "
-            "If the target is partly hidden by a cup, bottle, container, table edge, wall, chair part, "
-            "or the gripper itself, choose major_nav_node when Next major_nav rank available is True. "
-            "If recent grasp or approach failed at this rank, choose major_nav_node instead of repeating grasp_agent. "
-            "Only choose grasp_agent when the target body and gripper approach corridor are clearly unobstructed.\n"
+            "## Grasp Feasibility Check\n"
+            "Choose grasp_agent when the target has an exposed graspable body/edge and at least one visible approach corridor. "
+            "Nearby objects, table support, or mild partial occlusion are acceptable if they do not block the intended grasp region. "
+            "Choose major_nav_node only when the current view cannot support a plausible grasp, or recent grasp/approach failed at this rank and another rank is available.\n"
             f"Recent failure hint: {failure_hint or '(none)'}\n\n"
             "## Current Observation\n"
             f"{observation.get('description', 'Camera image unavailable.')}\n\n"
@@ -189,14 +198,25 @@ class Brain:
     def _model_name(self) -> str:
         if self.use_mock:
             return "mock"
-        return os.getenv("GEMINI_MODEL") or os.getenv("OLLAMA_MODEL") or "configured-vlm"
+        provider = os.getenv("VLM_PROVIDER", "google").lower()
+        if provider == "ollama":
+            return os.getenv("OLLAMA_MODEL", "gemma4:26b")
+        if provider == "google":
+            return os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        return "configured-vlm"
 
     async def _llm_reason(self, state: CommanderState, artifact_store: Any | None = None, image_loader: Any | None = None) -> BrainDecision:
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=self._build_prompt(state, artifact_store=artifact_store, image_loader=image_loader)),
         ]
-        result = await asyncio.get_event_loop().run_in_executor(None, self._model.invoke, messages)
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(None, self._model.invoke, messages)
+        except Exception as exc:
+            if self._raw_model is None or not self._is_structured_parse_error(exc):
+                raise
+            logger.warning("[Brain] Structured output parser failed; retrying with raw response parsing: %s", exc)
+            result = await asyncio.get_event_loop().run_in_executor(None, self._raw_model.invoke, messages)
         return self._coerce_structured_decision(result)
 
     @staticmethod
@@ -204,13 +224,91 @@ class Brain:
         if isinstance(result, BrainDecision):
             return result
         if isinstance(result, dict):
-            return BrainDecision.model_validate(result)
+            if "parsed" in result or "raw" in result or "parsing_error" in result:
+                parsed = result.get("parsed")
+                if parsed is not None:
+                    return Brain._coerce_structured_decision(parsed)
+                raw = result.get("raw")
+                if raw is not None:
+                    try:
+                        return Brain._coerce_structured_decision(raw)
+                    except Exception as exc:
+                        parsing_error = result.get("parsing_error")
+                        if parsing_error is not None:
+                            raise ValueError(f"Brain structured output parsing failed: {parsing_error}") from exc
+                        raise
+            return BrainDecision.model_validate(Brain._normalize_decision_payload(result))
         if hasattr(result, "content"):
-            raise ValueError(
-                "VLM provider returned free-form message content instead of BrainDecision structured output. "
-                "Check OLLAMA_STRUCTURED_METHOD/GOOGLE_STRUCTURED_METHOD and model support."
-            )
+            payload = Brain._extract_json_object(getattr(result, "content"))
+            return Brain._coerce_structured_decision(payload)
         return BrainDecision.model_validate(result)
+
+    @staticmethod
+    def _normalize_decision_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(payload)
+        if "module_params" not in data and "params" in data:
+            data["module_params"] = data.pop("params")
+        return data
+
+    @staticmethod
+    def _extract_json_object(content: Any) -> Dict[str, Any]:
+        text = Brain._message_content_to_text(content)
+        if not text:
+            raise ValueError("VLM provider returned empty message content instead of BrainDecision JSON.")
+
+        candidates = [text]
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if len(lines) >= 3 and lines[-1].strip().startswith("```"):
+                candidates.append("\n".join(lines[1:-1]).strip())
+
+        for candidate in candidates:
+            try:
+                payload = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                return payload
+
+        decoder = json.JSONDecoder()
+        for idx, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                payload, _ = decoder.raw_decode(text[idx:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                return payload
+
+        raise ValueError(
+            "VLM provider returned free-form message content instead of BrainDecision JSON. "
+            "Check OLLAMA_STRUCTURED_METHOD/GOOGLE_STRUCTURED_METHOD and model support."
+        )
+
+    @staticmethod
+    def _message_content_to_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            return "\n".join(parts).strip()
+        return str(content).strip()
+
+    @staticmethod
+    def _is_structured_parse_error(exc: Exception) -> bool:
+        message = str(exc)
+        return (
+            "BrainDecision" in message
+            or "Invalid JSON" in message
+            or "Failed to parse" in message
+            or "structured output" in message.lower()
+        )
 
 
     async def _mock_reason(self, state: CommanderState) -> BrainDecision:

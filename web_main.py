@@ -3,7 +3,8 @@
 import os
 
 import click
-from dotenv import load_dotenv
+
+from commander import load_project_env
 
 
 @click.command()
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 @click.option("--reload", "reload_enabled", is_flag=True, default=False)
 def main(host: str, port: int, reload_enabled: bool) -> None:
     """Start the VLM grasp web chat server."""
-    load_dotenv(override=True)
+    load_project_env()
 
     import uvicorn
 

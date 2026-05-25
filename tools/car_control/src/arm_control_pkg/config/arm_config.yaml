@@ -25,18 +25,18 @@ pybullet:
 joints:
   0:
     min_angle: 0.0
-    max_angle: 240.0
+    max_angle: 180.0
   1:
     min_angle: 0.0
-    max_angle: 240.0
+    max_angle: 120.0
   2:
     min_angle: 0.0
-    max_angle: 150.0
+    max_angle: 180.0
   3:
     min_angle: 0.0
     max_angle: 180.0
   4:
-    min_angle: 10.0
+    min_angle: 0.0
     max_angle: 70.0
 joints_reset:
   0: 90.0

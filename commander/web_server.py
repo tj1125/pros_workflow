@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict
 from urllib.parse import quote
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from starlette.responses import FileResponse, HTMLResponse, StreamingResponse
 
@@ -26,6 +25,7 @@ except ModuleNotFoundError:  # pragma: no cover - lets py_compile work before uv
     FastAPI = None  # type: ignore[assignment]
     HTTPException = RuntimeError  # type: ignore[assignment]
 
+from . import load_project_env
 from .contracts import NodeExecution, dump_model
 from .logger import TraceLogger
 from .orchestrator import Orchestrator, _load_graspable_objects
@@ -33,7 +33,7 @@ from .session_store import SessionMemoryStore
 from .state import CommanderState, create_initial_state
 
 
-load_dotenv(override=True)
+load_project_env()
 logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ALLOWED_PREVIEW_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -1105,6 +1105,7 @@ _INDEX_HTML = r"""<!doctype html>
       --preview-bg: #eef7f6;
       --shadow: 0 6px 20px rgba(15, 23, 42, .06);
       --warm-shadow: 0 4px 12px rgba(15, 118, 110, .25);
+      --candidate-menu-width: clamp(360px, 24vw, 460px);
       --font-main: "PingFang TC", "Microsoft JhengHei", sans-serif;
     }
     * { box-sizing: border-box; }
@@ -1207,7 +1208,7 @@ _INDEX_HTML = r"""<!doctype html>
       height: 100%;
       min-height: 0;
       display: grid;
-      grid-template-columns: 300px minmax(0, 1fr);
+      grid-template-columns: var(--candidate-menu-width) minmax(0, 1fr);
     }
     .conversation {
       min-width: 0;
@@ -1591,6 +1592,8 @@ _INDEX_HTML = r"""<!doctype html>
       margin-bottom: 10px;
       font-size: 13px;
       font-weight: 700;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
     }
     .candidate-menu .choice-grid {
       gap: 8px;
@@ -1620,8 +1623,9 @@ _INDEX_HTML = r"""<!doctype html>
     }
     code { color: var(--muted); }
     @media (max-width: 1100px) {
+      :root { --candidate-menu-width: clamp(300px, 32vw, 340px); }
       main { grid-template-columns: minmax(360px, 1fr) 310px; }
-      .chat-workspace { grid-template-columns: 260px minmax(0, 1fr); }
+      .chat-workspace { grid-template-columns: var(--candidate-menu-width) minmax(0, 1fr); }
       .messages { padding: 28px; }
       aside { padding: 24px 22px; }
       .detection-card { grid-template-columns: minmax(190px, 40%) minmax(0, 1fr); }
@@ -2030,7 +2034,7 @@ _INDEX_HTML = r"""<!doctype html>
         return;
       }
 
-      if (value.type === "detection_selection") {
+      if (value.type === "detection_selection" && !detections.length) {
         card.appendChild(makeManualInput(value));
       }
 

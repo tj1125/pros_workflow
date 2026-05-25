@@ -146,7 +146,7 @@ def load_camera_car_voxel_ompl_config(config_path: Path) -> CameraCarVoxelOmplCo
         max_voxel_obstacles=(None if max_voxel_obstacles in {None, 0} else int(max_voxel_obstacles)),
         obstacle_rgba=_vector4(payload.get("obstacle_rgba", [0.85, 0.2, 0.2, 0.55]), "obstacle_rgba"),
         gripper_midpoint_camera_xyz=_vector3(
-            payload.get("gripper_midpoint_camera_xyz", [0.0, 0.04, 0.11]),
+            payload.get("gripper_midpoint_camera_xyz", [0.0, -0.0824, 0.023]),
             "gripper_midpoint_camera_xyz",
         ),
         crop_to_workspace_camera=bool(payload.get("crop_to_workspace_camera", False)),

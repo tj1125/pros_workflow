@@ -381,7 +381,7 @@ def run_pipeline(
         valid_grasps_camera[:, :3, 3] + object_reference_center_camera[None, :]
     )
     gripper_midpoint_camera_xyz = np.asarray(
-        runtime.get("gripper_midpoint_camera_xyz", [0.0, -0.04, 0.11]),
+        runtime.get("gripper_midpoint_camera_xyz", [0.0, -0.0824, 0.023]),
         dtype=float,
     )
     if gripper_midpoint_camera_xyz.shape != (3,):

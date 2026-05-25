@@ -443,7 +443,7 @@ def main() -> None:
         fallback=(
             np.zeros(3, dtype=float)
             if centered_visualization_npz
-            else np.array([0.0, -0.04, 0.11], dtype=float)
+            else np.array([0.0, -0.0824, 0.023], dtype=float)
         ),
     )
     object_pc_camera = get_array(

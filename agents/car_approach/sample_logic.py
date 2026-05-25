@@ -103,7 +103,7 @@ def load_grasp_candidates_from_result_payload(
     if not isinstance(raw_result, dict):
         raise ValueError(f"Grasp result payload must contain a mapping: {source_label}")
     gripper_midpoint_camera_xyz = np.asarray(
-        raw_result.get("gripper_midpoint_camera_xyz", [0.0, -0.04, 0.11]),
+        raw_result.get("gripper_midpoint_camera_xyz", [0.0, -0.0824, 0.023]),
         dtype=np.float64,
     )
     if gripper_midpoint_camera_xyz.shape != (3,):

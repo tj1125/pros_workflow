@@ -175,10 +175,22 @@ def test_brain_accepts_only_structured_decisions() -> None:
     assert isinstance(decision, BrainDecision)
     assert decision.call_module == "grasp_agent"
 
+    fenced = Brain._coerce_structured_decision(
+        SimpleNamespace(content='```json\n{"reasoning":"ready","call_module":"grasp_agent","module_params":{}}\n```')
+    )
+    assert fenced.call_module == "grasp_agent"
+
+    wrapper = Brain._coerce_structured_decision({
+        "raw": SimpleNamespace(content='```json\n{"reasoning":"ready","call_module":"grasp_agent","params":{"object_id":"doll"}}\n```'),
+        "parsed": None,
+        "parsing_error": ValueError("provider parser rejected markdown fences"),
+    })
+    assert wrapper.module_params == {"object_id": "doll"}
+
     try:
-        Brain._coerce_structured_decision(SimpleNamespace(content='```json\n{"reasoning":"ready","call_module":"grasp_agent","module_params":{}}\n```'))
+        Brain._coerce_structured_decision(SimpleNamespace(content="ready to grasp"))
     except ValueError as exc:
-        assert "free-form message content" in str(exc)
+        assert "BrainDecision JSON" in str(exc)
     else:
         raise AssertionError("free-form Brain output was accepted")
 
@@ -254,9 +266,10 @@ def test_brain_prompt_marks_occlusion_and_failed_attempts_as_major_nav_policy() 
 
     prompt = Brain(use_mock=True)._build_prompt(state)
     assert isinstance(prompt, str)
-    assert "Visual Safety Checklist" in prompt
+    assert "Grasp Feasibility Check" in prompt
     assert "Next major_nav rank available: True" in prompt
-    assert "partly hidden by a cup" in prompt
+    assert "Nearby objects, table support, or mild partial occlusion" in prompt
+    assert "current view cannot support a plausible grasp" in prompt
     assert "latest approach failed at current rank" in prompt
 
 
@@ -366,7 +379,7 @@ def test_langgraph_route_matrix() -> None:
 
 def run_all() -> None:
     test_history_reducer_appends_all_entries()
-    test_task_classifier_matches_alias_and_keeps_chat_general()
+    test_task_classifier_matches_id_label_and_keeps_chat_general()
     test_legacy_prompt_type_only_uses_detection_selection()
     test_artifact_store_json_text_bytes_and_db_rows()
     test_world_snapshot_raw_and_goal_pose_are_sqlite_rows()

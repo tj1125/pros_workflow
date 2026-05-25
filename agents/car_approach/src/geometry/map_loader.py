@@ -1,18 +1,19 @@
 """
-map_loader.py — Load a ROS-style 2-D occupancy-grid PGM map and expose its
-free cells as Unity world-frame (x, z) coordinates.
+map_loader.py - Load a ROS-style 2-D occupancy-grid PGM map and expose its
+free cells in ROS map-frame or Unity world-frame floor coordinates.
 
 Coordinate conventions
 ----------------------
 Map frame (ROS):   x = right,  y = up   (metres from map origin)
 Unity world frame: x = right,  y = up,  z = forward  (floor plane = X-Z)
 
-The conversion used here:
-    unity_x = map_x
-    unity_z = map_y
+ROS map origin (0, 0) is anchored at this Unity world floor point:
+    Unity x = -2.29999995
+    Unity z = 2.5
 
-(This matches the AMCL convention used in the project where the localisation
-system maps Unity positions to the ROS map frame.)
+The floor-plane conversion used here is:
+    unity_x = map_y + ROS_MAP_ORIGIN_UNITY_X
+    unity_z = ROS_MAP_ORIGIN_UNITY_Z - map_x
 """
 
 from __future__ import annotations
@@ -22,6 +23,10 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+
+
+ROS_MAP_ORIGIN_UNITY_X = -2.29999995
+ROS_MAP_ORIGIN_UNITY_Z = 2.5
 
 
 @dataclass(frozen=True)
@@ -69,18 +74,22 @@ def load_map_meta(yaml_path: Path) -> OccupancyMapMeta:
     )
 
 
-def load_free_cells_unity_xz(meta: OccupancyMapMeta) -> np.ndarray:
-    """Return an ``(N, 2)`` float32 array of free-cell centres in Unity (x, z).
+def ros_map_to_unity_xz(map_x: float, map_y: float) -> tuple[float, float]:
+    """Convert ROS map ``(x, y)`` to Unity world floor ``(x, z)``."""
+    unity_x = float(map_y) + ROS_MAP_ORIGIN_UNITY_X
+    unity_z = ROS_MAP_ORIGIN_UNITY_Z - float(map_x)
+    return unity_x, unity_z
 
-    Free cells are those whose value (after normalising to [0, 1]) is above
-    ``meta.free_thresh``.  Unknown cells (value ≈ 0.5 in the raw image) are
-    treated as occupied/unknown and are excluded.
 
-    Returns
-    -------
-    np.ndarray, shape (N, 2), dtype float32
-        Each row is ``[unity_x, unity_z]`` (metres, Unity world frame).
-    """
+def unity_xz_to_ros_map_xy(unity_x: float, unity_z: float) -> tuple[float, float]:
+    """Convert Unity world floor ``(x, z)`` to ROS map ``(x, y)``."""
+    map_x = ROS_MAP_ORIGIN_UNITY_Z - float(unity_z)
+    map_y = float(unity_x) - ROS_MAP_ORIGIN_UNITY_X
+    return map_x, map_y
+
+
+def load_free_cells_map_xy(meta: OccupancyMapMeta) -> np.ndarray:
+    """Return an ``(N, 2)`` float32 array of free-cell centres in ROS map ``(x, y)``."""
     image = _load_pgm(meta.pgm_path)    # shape (H, W), uint8
 
     H, W = image.shape
@@ -98,10 +107,14 @@ def load_free_cells_unity_xz(meta: OccupancyMapMeta) -> np.ndarray:
     rows, cols = np.where(free_mask)          # image indices
     map_x = cols.astype(np.float32) * meta.resolution_m + meta.origin_xy[0]
     map_y = (H - 1 - rows).astype(np.float32) * meta.resolution_m + meta.origin_xy[1]
+    return np.stack([map_x, map_y], axis=1).astype(np.float32)
 
-    # map (x, y) → Unity (x, z)
-    unity_x = map_x
-    unity_z = map_y
+
+def load_free_cells_unity_xz(meta: OccupancyMapMeta) -> np.ndarray:
+    """Return an ``(N, 2)`` float32 array of free-cell centres in Unity world ``(x, z)``."""
+    map_xy = load_free_cells_map_xy(meta)
+    unity_x = map_xy[:, 1] + ROS_MAP_ORIGIN_UNITY_X
+    unity_z = ROS_MAP_ORIGIN_UNITY_Z - map_xy[:, 0]
     return np.stack([unity_x, unity_z], axis=1).astype(np.float32)
 
 

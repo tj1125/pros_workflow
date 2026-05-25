@@ -19,9 +19,9 @@ import uuid
 
 import click
 import httpx
-from dotenv import load_dotenv
+from commander import load_project_env
 
-load_dotenv(override=True)
+load_project_env()
 
 logging.basicConfig(
     level=logging.INFO,

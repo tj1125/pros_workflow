@@ -53,6 +53,8 @@ _ITEM_INFO_ROOM_CAMERA_NAMES = (
     "Camera_Room1_14",
     "Camera_Room1_15",
 )
+_ROS_MAP_ORIGIN_UNITY_X = -2.29999995
+_ROS_MAP_ORIGIN_UNITY_Z = 2.5
 
 
 def _load_graspable_objects() -> list[dict[str, Any]]:
@@ -1130,9 +1132,19 @@ class Orchestrator:
 
     def _target_center_world_to_map_xy(self, item_info: Dict[str, Any]) -> tuple[float | None, float | None]:
         center_world = item_info.get("center_world", [])
-        if not isinstance(center_world, list) or len(center_world) < 3:
+        if not isinstance(center_world, list) or len(center_world) < 2:
             return None, None
-        return 6.0 - float(center_world[2]), float(center_world[0]) - 3.0
+        frame = str(item_info.get("center_world_coordinate_frame", "unity_world") or "unity_world").lower()
+        try:
+            if frame in {"ros_map", "map", "ros_map_xy"}:
+                return float(center_world[0]), float(center_world[1])
+            if len(center_world) < 3:
+                return None, None
+            unity_x = float(center_world[0])
+            unity_z = float(center_world[2])
+        except (TypeError, ValueError):
+            return None, None
+        return _ROS_MAP_ORIGIN_UNITY_Z - unity_z, unity_x - _ROS_MAP_ORIGIN_UNITY_X
 
     def _goal_pose_from_ros_map(self, item_info: Dict[str, Any], goal_pose_ros: Any) -> tuple[Dict[str, Any], str]:
         if not isinstance(goal_pose_ros, list) or len(goal_pose_ros) < 2:
