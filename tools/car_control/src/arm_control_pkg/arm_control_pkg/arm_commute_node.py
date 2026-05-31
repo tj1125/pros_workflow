@@ -75,11 +75,11 @@ class ArmCummuteNode(Node):
         if not self.joint_state_groups or not msg.name:
             return list(joint_positions), [[float(value)] for value in joint_positions]
 
-        name_to_position = {
-            str(name): float(joint_positions[index])
-            for index, name in enumerate(msg.name)
-            if index < len(joint_positions)
-        }
+        name_to_position: dict[str, float] = {}
+        for index, name in enumerate(msg.name):
+            if index >= len(joint_positions):
+                break
+            name_to_position.setdefault(str(name), float(joint_positions[index]))
         mapped_positions = []
         group_positions = []
         for group in self.joint_state_groups:

@@ -59,7 +59,9 @@ _ROS_MAP_ORIGIN_UNITY_Z = 2.5
 
 def _load_graspable_objects() -> list[dict[str, Any]]:
     with (_CONFIG_DIR / "objects.yaml").open(encoding="utf-8") as handle:
-        return yaml.safe_load(handle).get("graspable_objects", [])
+        payload = yaml.safe_load(handle) or {}
+    objects = payload.get("graspable_objects", [])
+    return objects if isinstance(objects, list) else []
 
 
 class TaskClassification(BaseModel):
@@ -187,7 +189,6 @@ class Orchestrator:
         workflow.add_edge("observe_node", "reason_node")
         workflow.add_edge("nav_home_node", "goodbye_node")
         workflow.add_edge("car_grasp_node", "car_approach_node")
-        workflow.add_edge("car_approach_node", "update_memory_node")
         workflow.add_edge("update_memory_node", "observe_node")
 
         workflow.add_conditional_edges(
@@ -234,6 +235,11 @@ class Orchestrator:
             "nav_move_node",
             self._route_nav_move,
             {"observe_node": "observe_node", "update_memory_node": "update_memory_node"},
+        )
+        workflow.add_conditional_edges(
+            "car_approach_node",
+            self._route_car_approach,
+            {"end": "nav_home_node", "update_memory_node": "update_memory_node"},
         )
         return workflow.compile(checkpointer=self._checkpointer)
 
@@ -962,6 +968,11 @@ class Orchestrator:
     def _route_nav_move(self, state: CommanderState) -> Literal["observe_node", "update_memory_node"]:
         return "observe_node" if (state.get("navigation", {}) or {}).get("nav_move_source") == "bootstrap" else "update_memory_node"
 
+    def _route_car_approach(self, state: CommanderState) -> Literal["end", "update_memory_node"]:
+        if (state.get("approach_result", {}) or {}).get("success") is True:
+            return "end"
+        return "update_memory_node"
+
     async def _nav_move_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
         navigation = dict(state.get("navigation", {}) or {})
@@ -1048,6 +1059,17 @@ class Orchestrator:
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}
+        raw_result_ref = None
+        if payload:
+            try:
+                raw_result_ref = self._artifact_store(state).save_json(
+                    "grasp_raw_result",
+                    payload,
+                    created_by_node="car_grasp_node",
+                    metadata={"object_id": object_id, "camera_name": payload.get("camera_name", "Camera_Car")},
+                )
+            except Exception as exc:
+                logger.warning("[car_grasp_node] failed to save raw grasp result artifact: %s", exc)
         grasp = GraspResult(
             object_id=payload.get("object_id") or object_id,
             camera_name=payload.get("camera_name", "Camera_Car"),
@@ -1056,7 +1078,9 @@ class Orchestrator:
             num_candidate_grasps=payload.get("num_candidate_grasps"),
             num_valid_grasps=payload.get("num_valid_grasps"),
             best_grasp_pose_camera=payload.get("best_grasp_pose_camera", {}),
+            valid_grasp_poses_camera=payload.get("valid_grasp_poses_camera", []) if isinstance(payload.get("valid_grasp_poses_camera", []), list) else [],
             object_reference_center_camera=payload.get("object_reference_center_camera", []),
+            raw_result_ref=raw_result_ref,
             a2a_task_id=str(result.get("a2a_task_id", "")),
         )
         status = "GRASP_READY" if success else "GRASP_FAILED"
@@ -1080,8 +1104,13 @@ class Orchestrator:
             next_agent=payload.get("next_agent"),
             nav_result=payload.get("nav_result", {}) if isinstance(payload.get("nav_result", {}), dict) else {},
             arm_result=payload.get("arm_result", {}) if isinstance(payload.get("arm_result", {}), dict) else {},
+            car_return_result=payload.get("car_return_result", {}) if isinstance(payload.get("car_return_result", {}), dict) else {},
             arm_base_alignment_result=payload.get("arm_base_alignment_result", {}) if isinstance(payload.get("arm_base_alignment_result", {}), dict) else {},
             selected_solution=payload.get("selected_solution", {}) if isinstance(payload.get("selected_solution", {}), dict) else {},
+            closest_solution=payload.get("closest_solution", {}) if isinstance(payload.get("closest_solution", {}), dict) else {},
+            selected_solution_source=str(payload.get("selected_solution_source", "") or ""),
+            fallback_to_closest_solution=bool(payload.get("fallback_to_closest_solution", False)),
+            sampling_summary=payload.get("sampling_summary", {}) if isinstance(payload.get("sampling_summary", {}), dict) else {},
         )
         status = "APPROACH_COMPLETED" if success else "APPROACH_FAILED"
         return {"approach_result": dump_model(approach), "current_status": status, "last_execution": self._execution(state, "car_approach_node", status, started, success=success, message=approach.message)}
@@ -1175,7 +1204,8 @@ class Orchestrator:
         return goal, ""
 
     def _default_initial_pose(self) -> Dict[str, Any]:
-        return {"x": -0.012687999817440121, "y": 0.12421656521077351, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
+        # return {"x": -0.012687999817440121, "y": 0.12421656521077351, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
+        return {"x": 0.0, "y": 0.0, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
 
     async def _run_nav_move_runner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         import shlex

@@ -459,10 +459,12 @@ def _progress_message_from_update(
         return "已完成抓取規劃。接下來依照抓取結果控制車體與手臂靠近。"
 
     if node_name == "car_approach_node":
-        return "已完成靠近/執行動作。接下來更新任務記憶並重新觀察環境。"
+        if status == "APPROACH_COMPLETED":
+            return "已完成靠近/執行動作。接下來返回 home。"
+        return "靠近/執行動作沒有成功完成。接下來更新任務記憶並重新觀察環境。"
 
     if node_name == "update_memory_node":
-        return "已更新任務記憶。接下來重新觀察環境，確認任務是否完成。"
+        return "已更新任務記憶。接下來重新觀察環境，確認下一步。"
 
     if node_name == "nav_home_node":
         if status == "NAV_HOME_COMPLETED":

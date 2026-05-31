@@ -1,1 +1,1 @@
-"""I/O helpers for the base Approach Agent runtime."""
+"""Input helpers for live car approach data."""

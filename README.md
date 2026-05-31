@@ -19,8 +19,10 @@ greeting_node
           -> reason_node
               -> update_item_info_1_node -> major_nav_node -> nav_move_node
               -> update_item_info_2_node -> car_grasp_node -> car_approach_node
+                  -> nav_home_node -> goodbye_node        # car_approach 成功
+                  -> update_memory_node -> observe_node   # car_approach 失敗
               -> nav_home_node -> goodbye_node
-          -> update_memory_node -> observe_node
+          -> update_memory_node -> observe_node           # 一般記憶更新
 ```
 
 重點行為：

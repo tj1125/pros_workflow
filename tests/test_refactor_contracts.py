@@ -368,6 +368,9 @@ def test_langgraph_route_matrix() -> None:
                 ("nav_move.bootstrap", orchestrator._route_nav_move({"navigation": {"nav_move_source": "bootstrap"}}), "observe_node"),
                 ("nav_move.major_nav", orchestrator._route_nav_move({"navigation": {"nav_move_source": "major_nav"}}), "update_memory_node"),
                 ("nav_move.empty", orchestrator._route_nav_move({"navigation": {}}), "update_memory_node"),
+                ("car_approach.success", orchestrator._route_car_approach({"approach_result": {"success": True}}), "end"),
+                ("car_approach.failed", orchestrator._route_car_approach({"approach_result": {"success": False}}), "update_memory_node"),
+                ("car_approach.empty", orchestrator._route_car_approach({"approach_result": {}}), "update_memory_node"),
             ]
             for name, got, expected in cases:
                 assert got == expected, f"{name}: got {got}, expected {expected}"

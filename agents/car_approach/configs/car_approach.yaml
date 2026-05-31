@@ -1,0 +1,110 @@
+# Slim car approach pipeline config.
+# Live depth image is captured through ROS, decoded, and backprojected before voxelization.
+
+grasp_json_path: null
+
+# Scene point cloud for PyBullet voxel obstacles.
+# Callers can pass pointcloud_xyz directly; otherwise live depth capture is used.
+# pointcloud_frame describes caller-supplied pointcloud_xyz. Live depth starts in camera frame.
+pointcloud_frame: pybullet
+grasp_pose_frame: camera
+# Before any frame conversion, move the grasp target along the gripper local +Z axis.
+grasp_target_gripper_z_offset_m: 0.10
+# Camera-frame axes map to PyBullet as pb = [cam_x, -cam_z, cam_y] + camera_position_pb.
+# The mapped relative points are translated by arm_base_link_pb_xyz + camera_from_arm_base_pb_xy.
+camera_from_arm_base_pb_xy: [0.0, -0.198544, 0.353028]
+# Initial/reference arm base link absolute pose in PyBullet world. Sampled poses are different absolute arm-base poses.
+arm_base_link_pb_xyz: [-0.001193, -0.001505, 0.039689]
+car_center_from_arm_base_pb_xy: [0.0, -0.1285]
+capture_depth_image: true
+camera_name: Camera_Car
+intrinsics_path: ../../../3090server/VLM_RL/grasp_agent/data/camera_parameter/Intrinsics/Camera_Car.yaml
+capture_timeout_sec: 15.0
+pre_capture_amcl_timeout_sec: 2.0
+min_depth_m: 0.19
+max_depth_m: 1.7
+pixel_stride: 1
+# Match grasp_agent: mirror depth-derived camera points so camera +X becomes -X.
+mirror_depth_camera_x: true
+# grasp_agent flips the SAM mask vertically for depth alignment but records YOLO bbox unflipped.
+target_bbox_flip_y_for_depth_alignment: true
+voxel_edge_length_m: 0.03
+max_voxels: 0
+voxel_collision_threshold_m: 0.0
+
+# ROS map feasibility. Missing AMCL reference means this stage fails.
+enable_ros_map_check: true
+allow_ros_map_check_without_reference: false
+map_yaml_path: ../../../tools/car_control/src/nav_goal_bridge_pkg/config/keepout_map.yaml
+vehicle_base_length_x_m: 0.35 # 0.35
+vehicle_base_length_y_m: 0.33 # 0.33
+reference_amcl_pose: null
+
+# Robot / IK scene.
+urdf_path: ../../../tools/car_control/src/robot_description/urdf/target.urdf
+base_height_m: 0.039689
+base_orientation_euler_deg: [0.0, 0.0, 0.0]
+joint_reset_deg: [90.0, 30.0, 150.0, 0.0, 10.0]
+joint_bounds_deg:
+  - [0.0, 180.0]
+  - [0.0, 120.0]
+  - [0.0, 180.0]
+  - [0.0, 180.0]
+  - [0.0, 70.0]
+ee_link_index: 4
+controllable_joints: 5
+position_tolerance_m: 0.03
+orientation_tolerance_deg: 20.0
+ik_max_iterations: 1000
+ik_residual_threshold: 0.0001
+
+# Base sample candidates: back off from each grasp approach axis.
+max_grasps: 10
+max_samples: 160
+min_backoff_m: 0.10
+max_backoff_m: 0.60
+backoff_step_m: 0.02
+yaw_span_deg: 20.0
+yaw_step_deg: 5.0
+
+# Rule navigation. pipeline.py sends the selected base pose to move_car.
+amcl_topic: /amcl_pose
+front_wheel_topic: car_C_front_wheel
+rear_wheel_topic: car_C_rear_wheel
+xy_tolerance_m: 0.03
+face_target_yaw_tolerance_rad: 0.08
+drive_heading_tolerance_rad: 0.14
+final_yaw_tolerance_rad: 0.08
+command_period_sec: 0.1
+amcl_wait_timeout_sec: 5.0
+amcl_stale_timeout_sec: 1.0
+max_duration_sec: 120.0
+
+# Arm finish. pipeline.py runs this after the car reaches the selected base pose.
+arm_topic: /robot_arm
+joint_state_topic: /joint_states
+joint_state_groups:
+  - [base_link2_v2_1]
+  - [link3_v1_1]
+  - [link4_v1_1]
+  - [robot_ver7_link_4_v1_1]
+  - [robot_ver7_grap1_2_v1_1, robot_ver7_grap2_2_v1_1]
+gripper_joint_index: 4
+gripper_open_deg: 60.0
+gripper_close_deg: 10.0
+arm_joint_state_wait_sec: 5.0
+arm_command_timeout_sec: 5.0
+arm_command_tolerance_rad: 0.08
+arm_republish_interval_sec: 0.02
+arm_waypoint_steps: 5
+gripper_close_timeout_sec: 2.0
+arm_publisher_match_timeout_sec: 1.0
+# Last waypoint may stop early only when cube_z_distance is below this threshold.
+cube_z_distance_topic: /cube_z_distance
+cube_z_distance_final_waypoint_stop_threshold_m: 0.0295
+# After return_reset, this threshold decides final arm success.
+cube_z_distance_final_verify_threshold_m: 0.04
+cube_z_distance_poll_interval_sec: 0.02
+cube_z_distance_verify_timeout_sec: 1.0
+# Keep publishing return_reset for this long.
+arm_reset_hold_sec: 1.5

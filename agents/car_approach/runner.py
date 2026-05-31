@@ -1,10 +1,35 @@
-"""Callable runtime entry for the base approach sequence."""
+"""Callable runtime entry for the refactored approach pipeline."""
 
+from __future__ import annotations
+
+import base64
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
+
+_TARGET_MASK_KEYS = (
+    "target_mask",
+    "target_object_mask",
+    "object_mask",
+    "object_segmentation_mask",
+    "segmentation_mask",
+    "mask",
+)
+_TARGET_MASK_BASE64_KEYS = (
+    "target_mask_base64",
+    "target_mask_png_base64",
+    "target_object_mask_base64",
+    "target_object_mask_png_base64",
+    "object_mask_base64",
+    "object_mask_png_base64",
+    "segmentation_mask_base64",
+    "segmentation_mask_png_base64",
+    "mask_base64",
+    "mask_png_base64",
+)
 
 
 def run_base_approach_sync(
@@ -13,44 +38,45 @@ def run_base_approach_sync(
     context_id: str = "",
 ) -> Dict[str, Any]:
     try:
-        from . import base_sampler
+        from . import pipeline
+        from .debug_log import debug_stage
 
-        grasp_payload = _grasp_payload_from_params(params)
-        config = base_sampler.ApproachAgentRunConfig(
-            base_config_path=_path_param(
-                params,
-                "base_config_path",
-                "base_config",
-                default=Path("configs/base_pose_sampling.yaml"),
-            ),
-            camera_config_path=_path_param(
-                params,
-                "camera_config_path",
-                "camera_config",
-                default=Path("configs/camera_car_voxel_ompl.yaml"),
-            ),
-            grasp_json_path=_optional_path_param(params, "grasp_json_path", "grasp_json"),
-            grasp_result_payload=grasp_payload,
-            initial_pose=_dict_param(params, "initial_pose"),
-            initial_pose_source=_str_param(
-                params,
-                "initial_pose_source",
-                default="",
-            ),
-            allow_missing_amcl=_bool_param(params, "allow_missing_amcl", False),
-            run_rule_navigation=_run_rule_navigation_from_params(params),
-            show_gui=_bool_param(params, "show_gui", False),
-            write_map_png=_bool_param(params, "write_map_png", False),
-            map_png_path=_optional_path_param(params, "map_png_path"),
-            write_debug_views=_bool_param(params, "write_debug_views", False),
-            debug_render_path=_optional_path_param(params, "debug_render_path"),
+        debug_stage(
+            "runner",
+            "收到 car_approach payload，準備進入 pipeline",
+            context_id=context_id,
+            has_grasp_payload=any(isinstance(params.get(key), dict) for key in ("grasp_result_payload", "grasp_result")),
+            has_pointcloud=any(key in params for key in ("pointcloud_xyz", "pointcloud", "scene_pointcloud_xyz")),
+            has_depth=any(params.get(key) for key in ("depth_png_bytes", "depth_image_bytes", "depth_png_base64", "depth_image_base64")),
+            has_target_mask=any(key in params for key in (*_TARGET_MASK_KEYS, *_TARGET_MASK_BASE64_KEYS)),
         )
-        result = base_sampler.run_approach_agent(config)
-        return {
-            "result": result,
-            "success": bool(result.get("success", False)),
-        }
+        result = pipeline.run_approach_pipeline(
+            pipeline.ApproachPipelineRunConfig(
+                config_path=_path_param(
+                    params,
+                    "config_path",
+                    "car_approach_config_path",
+                    "car_approach_config",
+                    "base_config_path",
+                    "base_config",
+                    default=Path("configs/car_approach.yaml"),
+                ),
+                grasp_json_path=_optional_path_param(params, "grasp_json_path", "grasp_json"),
+                grasp_result_payload=_grasp_payload_from_params(params),
+                pointcloud_xyz=_pointcloud_from_params(params),
+                depth_png_bytes=_depth_png_bytes_from_params(params),
+                target_mask=_target_mask_from_params(params),
+            )
+        )
+        debug_stage("runner", "pipeline 執行結束", success=bool(result.get("success", False)), phase=result.get("phase"))
+        return {"result": result, "success": bool(result.get("success", False))}
     except Exception as exc:
+        try:
+            from .debug_log import debug_stage
+
+            debug_stage("runner", "car_approach runtime 失敗：發生例外", error=str(exc))
+        except Exception:
+            pass
         logger.exception("Base approach runtime failed")
         return {
             "result": {
@@ -65,20 +91,8 @@ def run_base_approach_sync(
         }
 
 
-def _bool_param(params: Dict[str, Any], name: str, default: bool) -> bool:
-    raw_value = params.get(name)
-    if raw_value is None:
-        return bool(default)
-    if isinstance(raw_value, bool):
-        return raw_value
-    return str(raw_value).strip().lower() not in {"0", "false", "no", "off", ""}
 
-
-def _path_param(
-    params: Dict[str, Any],
-    *names: str,
-    default: Path,
-) -> Path:
+def _path_param(params: Dict[str, Any], *names: str, default: Path) -> Path:
     for name in names:
         raw_value = params.get(name)
         if raw_value:
@@ -94,40 +108,62 @@ def _optional_path_param(params: Dict[str, Any], *names: str) -> Path | None:
     return None
 
 
-def _dict_param(params: Dict[str, Any], *names: str) -> dict[str, object] | None:
-    for name in names:
-        raw_value = params.get(name)
-        if isinstance(raw_value, dict) and raw_value:
-            return raw_value
-    return None
-
-
-def _str_param(params: Dict[str, Any], name: str, *, default: str = "") -> str:
-    raw_value = params.get(name)
-    if raw_value is None:
-        return default
-    return str(raw_value)
-
-
-def _run_rule_navigation_from_params(params: Dict[str, Any]) -> bool:
-    run_rule_navigation = _bool_param(
-        params,
-        "run_rule_navigation",
-        _bool_param(params, "rule_navigation", True),
-    )
-    if "no_publish_goal_pose" in params:
-        run_rule_navigation = not _bool_param(params, "no_publish_goal_pose", False)
-    if "no_rule_nav" in params:
-        run_rule_navigation = not _bool_param(params, "no_rule_nav", False)
-    return run_rule_navigation
-
 
 def _grasp_payload_from_params(params: Dict[str, Any]) -> dict[str, object] | None:
     for key in ("grasp_result_payload", "grasp_result"):
         payload = params.get(key)
         if isinstance(payload, dict):
             nested_result = payload.get("result")
-            if isinstance(nested_result, dict):
-                return nested_result
-            return payload
+            grasp_payload = nested_result if isinstance(nested_result, dict) else payload
+            artifact_payload = _grasp_payload_from_raw_result_ref(grasp_payload)
+            return artifact_payload or grasp_payload
+    return None
+
+
+def _grasp_payload_from_raw_result_ref(payload: dict[str, object]) -> dict[str, object] | None:
+    raw_ref = payload.get("raw_result_ref")
+    if not isinstance(raw_ref, dict):
+        return None
+    raw_path = raw_ref.get("path")
+    if not raw_path:
+        return None
+    path = Path(str(raw_path)).expanduser()
+    candidates = [path] if path.is_absolute() else [Path("logs") / path, path]
+    for candidate in candidates:
+        try:
+            loaded = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(loaded, dict):
+            return loaded
+    return None
+
+
+def _pointcloud_from_params(params: Dict[str, Any]) -> object | None:
+    for key in ("pointcloud_xyz", "pointcloud", "scene_pointcloud_xyz"):
+        if key in params:
+            return params[key]
+    return None
+
+
+def _depth_png_bytes_from_params(params: Dict[str, Any]) -> bytes | None:
+    for key in ("depth_png_bytes", "depth_image_bytes"):
+        payload = params.get(key)
+        if isinstance(payload, (bytes, bytearray, memoryview)):
+            return bytes(payload)
+    for key in ("depth_png_base64", "depth_image_base64"):
+        payload = params.get(key)
+        if isinstance(payload, str) and payload.strip():
+            return base64.b64decode(payload)
+    return None
+
+
+def _target_mask_from_params(params: Dict[str, Any]) -> object | None:
+    for key in _TARGET_MASK_KEYS:
+        if key in params:
+            return params[key]
+    for key in _TARGET_MASK_BASE64_KEYS:
+        payload = params.get(key)
+        if isinstance(payload, str) and payload.strip():
+            return base64.b64decode(payload)
     return None

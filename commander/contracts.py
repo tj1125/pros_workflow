@@ -150,10 +150,8 @@ class GraspResult(StrictModel):
     num_candidate_grasps: int | None = None
     num_valid_grasps: int | None = None
     best_grasp_pose_camera: dict[str, Any] = Field(default_factory=dict)
-    valid_grasp_poses_ref: ArtifactRef | None = None
+    valid_grasp_poses_camera: list[dict[str, Any]] = Field(default_factory=list)
     object_reference_center_camera: list[float] = Field(default_factory=list)
-    rgb_ref: ArtifactRef | None = None
-    depth_ref: ArtifactRef | None = None
     raw_result_ref: ArtifactRef | None = None
     a2a_task_id: str = ""
 
@@ -166,8 +164,13 @@ class ApproachResult(StrictModel):
     next_agent: str | None = None
     nav_result: dict[str, Any] = Field(default_factory=dict)
     arm_result: dict[str, Any] = Field(default_factory=dict)
+    car_return_result: dict[str, Any] = Field(default_factory=dict)
     arm_base_alignment_result: dict[str, Any] = Field(default_factory=dict)
     selected_solution: dict[str, Any] = Field(default_factory=dict)
+    closest_solution: dict[str, Any] = Field(default_factory=dict)
+    selected_solution_source: str = ""
+    fallback_to_closest_solution: bool = False
+    sampling_summary: dict[str, Any] = Field(default_factory=dict)
     raw_result_ref: ArtifactRef | None = None
 
 

@@ -65,7 +65,7 @@ graph TD
 | `major_nav_node` | 切到下一個 ranked goal pose。 |
 | `update_item_info_2_node` | grasp 前刷新 world position，目標移動時重算 item info。 |
 | `car_grasp_node` | 呼叫 Grasp Agent，保存 `latest_grasp_result`。 |
-| `car_approach_node` | 啟動 car approach subprocess，完成底盤靠近與手臂/夾爪收尾。 |
+| `car_approach_node` | 啟動 car approach subprocess，完成底盤靠近與手臂/夾爪收尾；成功直接路由回 home，失敗才進 memory/observe。 |
 | `update_memory_node` | 將最近 3 次行動摘要、key facts、latest result 寫回 state。 |
 | `nav_home_node` / `goodbye_node` | 任務完成、失敗或結束時回 home 並結束 graph。 |
 
@@ -114,10 +114,15 @@ sequenceDiagram
       C->>A: car_grasp_node
       A-->>C: 6-DoF grasp result
       C->>R: car_approach_node
+      alt car approach succeeded
+        C->>R: nav_home_node
+      else car approach failed
+        C->>C: update_memory_node
+        C->>R: observe_node
+      end
     else done
       C->>R: nav_home_node
     end
-    C->>C: update_memory_node
   end
 ```
 
@@ -145,7 +150,7 @@ sequenceDiagram
 - world position 中目標移動超過 `WORLD_POSITION_UPDATE_THRESHOLD_M`：重跑 `get_item_info_no_sam3d_node`。
 - navigation 失敗：寫入 `NAV_FAILED` 與 `nav_move_events`，後續 memory 讓 Brain 或路由選擇下一步。
 - major navigation rank 耗盡：標記 task complete，回 home。
-- car approach 成功且 `arm_result.success=true`：Brain 下次應輸出 `DONE`。
+- car approach 成功：直接走 `end` 路由到 `nav_home_node`；失敗則寫入 `update_memory_node` 後回 `observe_node`。
 
 ## 7. 部署邊界
 

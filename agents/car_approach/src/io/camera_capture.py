@@ -1,3 +1,5 @@
+"""ROS RGB-D capture for the car approach pipeline."""
+
 from __future__ import annotations
 
 import time
@@ -5,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass
+@dataclass(frozen=True)
 class AmclPoseSnapshot:
     stamp_sec: float | None
     position_xyz: tuple[float, float, float]
@@ -13,7 +15,7 @@ class AmclPoseSnapshot:
     covariance: tuple[float, ...] | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class CameraRgbdSnapshot:
     camera_name: str
     rgb_bytes: bytes
@@ -119,8 +121,10 @@ def capture_rgbd_snapshot(
             self._depth_msg = None
             self._waiting_capture = True
             future = self._client.call_async(Trigger.Request())
-            rclpy.spin_until_future_complete(self, future, timeout_sec=self._timeout_sec)
-            response = future.result()
+            trigger_deadline = time.monotonic() + self._timeout_sec
+            while not future.done() and time.monotonic() < trigger_deadline:
+                rclpy.spin_once(self, timeout_sec=0.1)
+            response = future.result() if future.done() else None
             if response is None or not response.success:
                 raise RuntimeError(
                     f"Camera capture trigger failed: {getattr(response, 'message', 'timeout')}"
@@ -128,32 +132,32 @@ def capture_rgbd_snapshot(
 
             deadline = time.monotonic() + self._timeout_sec
             while time.monotonic() < deadline:
-                if self._rgb_msg is not None and self._depth_msg is not None:
+                if self._depth_msg is not None:
                     break
                 rclpy.spin_once(self, timeout_sec=0.1)
             self._waiting_capture = False
             capture_time_amcl_msg = self._latest_amcl_msg
 
-            if self._rgb_msg is None:
-                raise RuntimeError("RGB topic timed out.")
             if self._depth_msg is None:
                 raise RuntimeError("Depth topic timed out.")
 
-            amcl_snapshot = self._amcl_snapshot_from_msg(capture_time_amcl_msg)
-
             return CameraRgbdSnapshot(
                 camera_name=camera_name,
-                rgb_bytes=bytes(self._rgb_msg.data),
+                rgb_bytes=bytes(self._rgb_msg.data) if self._rgb_msg is not None else b"",
                 depth_bytes=bytes(self._depth_msg.data),
-                rgb_format=str(getattr(self._rgb_msg, "format", "")),
+                rgb_format=str(getattr(self._rgb_msg, "format", "")) if self._rgb_msg is not None else "",
                 depth_format=str(getattr(self._depth_msg, "format", "")),
-                amcl_pose=amcl_snapshot,
+                amcl_pose=self._amcl_snapshot_from_msg(capture_time_amcl_msg),
             )
 
-    rclpy.init()
+    did_init = False
+    if not rclpy.ok():
+        rclpy.init()
+        did_init = True
     node = _CaptureNode()
     try:
         return node.capture()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if did_init:
+            rclpy.shutdown()
