@@ -26,8 +26,8 @@ alignment:
   padding: 0.05
 
 map:
-  map_pgm: "../../../../tools/car_control/src/nav_goal_bridge_pkg/config/keepout_map.pgm"
-  map_yaml: "../../../../tools/car_control/src/nav_goal_bridge_pkg/config/keepout_map.yaml"
+  map_pgm: "../../../../src/nav_goal_bridge_pkg/config/keepout_map.pgm"
+  map_yaml: "../../../../src/nav_goal_bridge_pkg/config/keepout_map.yaml"
   unity_map_origin: [-2.29999995, 0.0710000023, 2.5]
   offset: 0.45
   white_threshold: 250

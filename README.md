@@ -38,80 +38,80 @@ greeting_node
 ## 快速開始
 
 ```bash
-pip install uv
-uv sync
-cp .env.example .env
+python3 -m venv .venv_linux
+source .venv_linux/bin/activate
+pip install -e workflow
+# edit .env for VLM/A2A/ROS/Docker settings
 ```
 
 Mock 模式不需要 GPU、VLM API 或 ROS2：
 
 ```bash
-uv run python main.py --mock
+cd workflow
+python main.py --mock
 ```
 
 Real 模式會使用 `.env` 中的 VLM、A2A 與 ROS2 設定：
 
 ```bash
-uv run python main.py --no-mock
+cd workflow
+python main.py --no-mock
 ```
 
 Web 介面：
 
 ```bash
-uv run python web_main.py --host 0.0.0.0 --port 8080
+cd workflow
+python web_main.py --host 0.0.0.0 --port 8080
 ```
 
 瀏覽器開 `http://localhost:8080`。
 
-## Nav2 與容器
+## Docker / ROS runtime
 
-先啟動 Nav2 導航容器：
-
-```bash
-./launch_nav.sh --rebuild
-./launch_nav.sh
-```
-
-背景啟動：
+統一從根目錄入口進 Docker；`run.sh` 採用和 `pros_cameraapi/run_unity.sh` 類似的直寫 Docker command。它使用固定的 `pros_workflow_image:latest` image、`pros_workflow` container，以及 `compose_cube_bridge_network` network；ROS packages 掛到 `/workspaces/src` 給 `r` build，非 ROS workflow code 放在 `/workspace/VLM_RL/workflow`，避免 colcon 掃到整個 repo。`.env` 只傳進 container 給 workflow/ROS/VLM 讀取。
 
 ```bash
-./launch_nav.sh -d
+docker build -t pros_workflow_image:latest -f docker/Dockerfile .
+./run.sh
 ```
 
-停止 Nav2：
-
-```bash
-./launch_nav.sh --stop
-```
-
-進入開發容器：
-
-```bash
-./enter_docker.sh
-```
-
-若需要從主機瀏覽器連 web UI：
-
-```bash
-./enter_docker.sh --web-port 8080
-```
-
-容器內常用命令：
+容器內先手動 build/source ROS workspace，維持 pros 的 `r` 習慣：
 
 ```bash
 r
-ros2 run car_control_pkg car_control_node
-ros2 run arm_control_pkg arm_control_node
-ros2 run keyboard_mode_interface_pkg keyboard_control_node
-ros2 launch nav_goal_bridge_pkg navigation.launch.py
+```
+
+啟動 ROS runtime：
+
+```bash
+scripts/start.sh
+```
+
+`runtime.launch.py` 會一次啟動 Nav2、car control、arm control 與 rosbridge。rosbridge 由 `scripts/start.sh` 啟動後在 container 內聽 `9090`；web UI 則由 `web` shortcut 啟動。
+
+另一個 terminal 可以再次進同一個 container 跑 workflow：
+
+```bash
+./run.sh
 run
 ```
 
-需要 PyBullet GUI 或 X11 視窗時使用：
+Web 介面可在 container 內用：
 
 ```bash
-./enter_docker_x11.sh
+web
 ```
+
+容器中的 `r` 來自 Docker image 內建：
+
+```bash
+alias r='source /workspaces/rebuild_colcon.rc'
+```
+
+本機 repo 不保存 `rebuild_colcon.rc`。
+
+Docker image 是 `pros_workflow_image:latest`，建在 PROS car runtime base 上，不使用 RL base；`run.sh` 不自動 build image。`pros_car_docker_image` 已經有 ROS Humble、Nav2、rosbridge、`ros2_laser_scan_matcher`、`numpy/scipy/pybullet/Pillow/PyYAML/urwid/OpenCV`；VLM_RL image 只額外補 `/opt/vlm_rl_venv` workflow dependencies 與 shell helpers。container 內的 ROS/VLM/Web 設定只從 `.env` 進入，不由 `run.sh` 硬塞預設值。
 
 ## RTX 3090 A2A 服務
 
@@ -134,19 +134,20 @@ run
 
 ```text
 VLM_RL/
-├── main.py                         # CLI 入口
-├── web_main.py                     # FastAPI/SSE web 入口
-├── commander/                      # LangGraph 主控、VLM、ROS bridge、session/log
-├── agents/                         # Commander-facing agent adapters
+├── run.sh                          # Host 端唯一 Docker 入口
+├── docker/Dockerfile               # VLM_RL runtime image
+├── scripts/env.sh                  # Container 內 workflow shortcuts
+├── scripts/start.sh                # Container 內 ROS runtime 啟動
+├── src/                            # ROS2 car/arm/nav/bringup packages
+├── workflow/                       # 非 ROS workflow app
+│   ├── main.py                     # CLI 入口
+│   ├── web_main.py                 # FastAPI/SSE web 入口
+│   ├── commander/                  # LangGraph 主控、VLM、ROS bridge、session/log
+│   ├── agents/                     # Commander-facing agent adapters
+│   └── config/                     # cameras.yaml / objects.yaml
 ├── 3090server/VLM_RL/              # RTX 3090 A2A server services
-├── tools/car_control/src/          # ROS2 car/arm/nav packages
-├── config/                         # cameras.yaml / objects.yaml
 ├── docs/                           # 主流程圖與系統規格
-├── thesis/                         # 論文總整理與研究筆記
-├── Dockerfile
-├── Dockerfile.nav2
-├── enter_docker.sh
-└── launch_nav.sh
+└── thesis/                         # 論文總整理與研究筆記
 ```
 
 ## 環境變數
@@ -187,32 +188,40 @@ ROS2/導航：
 | `NAV_GOAL_TOLERANCE_M` | 到點距離容忍 | 由 `commander/nav_settings.py` 決定 |
 | `WORLD_POSITION_UPDATE_THRESHOLD_M` | 目標移動超過此距離時重算 item info | `0.3` |
 | `APPROACH_AGENT_TIMEOUT_SEC` | car approach 子程序 timeout | `420` |
+| `ROSBRIDGE_URL` | workflow 連 rosbridge 的 URL；同 container 預設 `ws://localhost:9090` | `.env` |
 
 Web：
 
 | 變數 | 說明 | 預設 |
 |---|---|---|
 | `WEB_HOST` | Web server host | `0.0.0.0` |
-| `WEB_PORT` | Web server port | `8080` |
+| `WEB_PORT` | `web` shortcut 未指定 port 時使用 | `8080` |
 
+啟動 web 時可以直接指定 port：
+
+```bash
+web 8080
+```
 ## 驗證
 
 語法檢查：
 
 ```bash
-python3 -m py_compile main.py web_main.py commander/*.py agents/*.py
+python3 -m py_compile workflow/main.py workflow/web_main.py workflow/commander/*.py workflow/agents/*.py
 ```
 
 Mock 端到端測試：
 
 ```bash
-uv run python test_client.py --mock-only
+cd workflow
+python test_client.py --mock-only
 ```
 
 A2A 連線測試會讀取 `.env` 中已設定的 `INF_*_URL`：
 
 ```bash
-uv run python test_client.py
+cd workflow
+python test_client.py
 ```
 
 ## 文件
