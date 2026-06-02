@@ -1205,7 +1205,8 @@ class Orchestrator:
 
     def _default_initial_pose(self) -> Dict[str, Any]:
         # return {"x": -0.012687999817440121, "y": 0.12421656521077351, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
-        return {"x": 0.0, "y": 0.0, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
+        # return {"x": 0.0, "y": 0.0, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
+        return {"x": -5.9734, "y": 4.6721, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
 
     async def _run_nav_move_runner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         import shlex
