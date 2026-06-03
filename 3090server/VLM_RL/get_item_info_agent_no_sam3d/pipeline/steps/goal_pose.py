@@ -142,8 +142,6 @@ def compute_goal_pose(
 
     feasible_counts: dict[int, int] = {}
     feasible_best_by_group: dict[int, dict[str, float | np.ndarray | list[float] | bool | str]] = {}
-    fallback_counts: dict[int, int] = {}
-    fallback_best_by_group: dict[int, dict[str, float | np.ndarray | list[float] | bool | str]] = {}
     map_feasible_mask: list[bool] = []
     goal_unity_candidates: list[np.ndarray] = []
     goal_ros_candidates: list[list[float]] = []
@@ -218,17 +216,6 @@ def compute_goal_pose(
         approach = rotation[:, 2]
         norm = np.linalg.norm(approach)
         if norm == 0:
-            append_group_goal_pose_candidate(
-                group=group,
-                grasp_index=grasp_index,
-                confidence=confidence,
-                world_pos=world_pos,
-                rotation=rotation,
-                goal_unity=np.full(3, np.nan, dtype=float),
-                goal_ros=[float("nan"), float("nan")],
-                map_feasible=False,
-                selection_mode="invalid_approach",
-            )
             map_feasible_mask.append(False)
             goal_unity_candidates.append(np.full(3, np.nan, dtype=float))
             goal_ros_candidates.append([float("nan"), float("nan")])
@@ -244,7 +231,9 @@ def compute_goal_pose(
         map_feasible_mask.append(bool(candidate_is_white))
         goal_unity_candidates.append(np.asarray(candidate, dtype=float))
         goal_ros_candidates.append([float(goal_ros[0]), float(goal_ros[1])])
-        selection_mode = "free_map" if candidate_is_white else "fallback_nonfree_map"
+        if not candidate_is_white:
+            continue
+
         append_group_goal_pose_candidate(
             group=group,
             grasp_index=grasp_index,
@@ -253,24 +242,9 @@ def compute_goal_pose(
             rotation=rotation,
             goal_unity=candidate,
             goal_ros=[float(goal_ros[0]), float(goal_ros[1])],
-            map_feasible=candidate_is_white,
-            selection_mode=selection_mode,
+            map_feasible=True,
+            selection_mode="free_map",
         )
-
-        update_group_candidate(
-            fallback_counts,
-            fallback_best_by_group,
-            group=group,
-            confidence=confidence,
-            candidate=candidate,
-            world_pos=world_pos,
-            rotation=rotation,
-            map_feasible=candidate_is_white,
-            selection_mode=selection_mode,
-        )
-
-        if not candidate_is_white:
-            continue
 
         update_group_candidate(
             feasible_counts,
@@ -284,15 +258,12 @@ def compute_goal_pose(
             selection_mode="free_map",
         )
 
-    using_map_fallback = False
     counts = feasible_counts
     best_by_group = feasible_best_by_group
     if not counts:
-        if not fallback_counts:
-            raise RuntimeError("No feasible goal pose candidates could be generated.")
-        using_map_fallback = True
-        counts = fallback_counts
-        best_by_group = fallback_best_by_group
+        raise RuntimeError(
+            "No map-feasible goal pose candidates remain after keepout_map white-area filtering."
+        )
 
     sorted_groups = sorted(
         counts.keys(),
@@ -329,6 +300,6 @@ def compute_goal_pose(
         "map_feasible_mask": np.asarray(map_feasible_mask, dtype=bool),
         "goal_unity_candidates": np.asarray(goal_unity_candidates, dtype=float),
         "goal_ros_candidates": np.asarray(goal_ros_candidates, dtype=float),
-        "used_map_fallback": bool(using_map_fallback),
-        "using_map_fallback": bool(using_map_fallback),
+        "used_map_fallback": False,
+        "using_map_fallback": False,
     }
