@@ -1,0 +1,36 @@
+# Commander runtime settings. Runtime env vars can still override the matching
+# values. Defaults live here; runtime_settings.py only validates and reads them.
+
+nav_runner:
+  plan_timeout_sec: 8.0
+  arrival_timeout_sec: 180.0
+  publish_interval_sec: 0.1
+  goal_tolerance_m: 0.05
+  goal_heading_tolerance_rad: 0.10
+  status_topic: /nav_move/status
+  home_status_topic: /nav_home/status
+  nav_result_topic: /auto_nav/result
+
+initial_pose:
+  frame_id: map
+  x: -5.9734
+  y: 4.6721
+  z: 0.0
+  qx: 0.0
+  qy: 0.0
+  qz: 0.0
+  qw: 1.0
+
+map_transform:
+  ros_map_origin_unity_x: -2.29999995
+  ros_map_origin_unity_z: 2.5
+
+world_position:
+  update_threshold_m: 0.3
+
+ros_subprocess:
+  python_bin: /usr/bin/python3
+  ros_setup_bash: /opt/ros/humble/setup.bash
+  overlay_setup_bash: /workspaces/install/setup.bash
+  pythonpath: /workspace/VLM_RL/workflow:/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages
+  ld_library_path: /opt/ros/humble/lib

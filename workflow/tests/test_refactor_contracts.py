@@ -14,11 +14,12 @@ from a2a.utils import completed_task, new_agent_parts_message, new_data_artifact
 
 from agents.a2a_adapter import extract_result_payload, require_agent_card_modes
 from commander.brain import Brain, BrainDecision
-from commander.artifact_store import ArtifactStore
-from commander.session_store import SessionMemoryStore
-from commander.orchestrator import Orchestrator, _load_graspable_objects
+from commander.storage.artifact_store import ArtifactStore
+from commander.storage.session_store import SessionMemoryStore
+from commander.object_catalog import load_graspable_objects
+from commander.orchestrator import Orchestrator
 from commander.state import _append_history, create_initial_state
-from commander.web_server import _legacy_prompt_type
+from commander.web.app import _legacy_prompt_type
 
 
 def test_history_reducer_appends_all_entries() -> None:
@@ -36,7 +37,7 @@ def test_history_reducer_appends_all_entries() -> None:
 
 
 def test_task_classifier_matches_id_label_and_keeps_chat_general() -> None:
-    objects = _load_graspable_objects()
+    objects = load_graspable_objects()
     assert [obj["id"] for obj in objects] == ["apple", "box", "coffee", "cup", "doll", "gaobear", "hpb", "xbox"]
     assert all(set(obj) == {"id", "label"} for obj in objects)
 
@@ -248,9 +249,13 @@ def test_a2a_adapter_accepts_direct_message_and_task_artifact() -> None:
     assert task_id == "task-2"
 
 
-def test_brain_prompt_marks_occlusion_and_failed_attempts_as_major_nav_policy() -> None:
+def test_brain_prompt_keeps_human_context_compact_and_omits_retry_count() -> None:
     state = create_initial_state("ctx-prompt")
+    state["retry_count"] = 7
+    state["requested_object"] = {"id": "doll", "label": "brown teddy bear"}
+    state["selected_instance"] = {"instance_key": "doll_1"}
     state["navigation"]["current_goal_rank"] = 1
+    state["navigation"]["result"] = {"arrived": True, "message": "arrived at rank 1"}
     state["item_info"] = {
         "center_world": [2.0, 0.5, 4.0],
         "group_ranking": [
@@ -266,11 +271,16 @@ def test_brain_prompt_marks_occlusion_and_failed_attempts_as_major_nav_policy() 
 
     prompt = Brain(use_mock=True)._build_prompt(state)
     assert isinstance(prompt, str)
-    assert "Grasp Feasibility Check" in prompt
-    assert "Next major_nav rank available: True" in prompt
-    assert "Nearby objects, table support, or mild partial occlusion" in prompt
-    assert "current view cannot support a plausible grasp" in prompt
+    assert "## Current State" in prompt
+    assert "Target: brown teddy bear (doll)" in prompt
+    assert "Target instance: doll_1" in prompt
+    assert "Next viewpoint available: True" in prompt
+    assert "Last navigation: arrived=True, message=arrived at rank 1" in prompt
     assert "latest approach failed at current rank" in prompt
+    assert "Retry Count" not in prompt
+    assert "retry_count" not in prompt
+    assert "Grasp Feasibility Check" not in prompt
+    assert "Available ranked goal poses" not in prompt
 
 
 def test_decision_safety_guard_forces_major_nav_after_failed_attempt_when_next_rank_exists() -> None:
@@ -391,7 +401,7 @@ def run_all() -> None:
     test_a2a_card_validation_rejects_wrong_service()
     test_a2a_card_validation_accepts_required_modes()
     test_a2a_adapter_accepts_direct_message_and_task_artifact()
-    test_brain_prompt_marks_occlusion_and_failed_attempts_as_major_nav_policy()
+    test_brain_prompt_keeps_human_context_compact_and_omits_retry_count()
     test_decision_safety_guard_forces_major_nav_after_failed_attempt_when_next_rank_exists()
     test_langgraph_general_chat_returns_to_input_without_replaying_reply()
     test_langgraph_route_matrix()

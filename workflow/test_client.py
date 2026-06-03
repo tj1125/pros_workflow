@@ -41,7 +41,7 @@ async def test_mock_langgraph_loop() -> bool:
     """
     from commander.logger import TraceLogger
     from commander.orchestrator import Orchestrator
-    from commander.session_store import SessionMemoryStore
+    from commander.storage.session_store import SessionMemoryStore
     from commander.state import create_initial_state
 
     print("\n" + "=" * 50)

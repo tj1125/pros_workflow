@@ -1065,7 +1065,7 @@ def _load_sampler_config(config_path: Path) -> dict[str, object]:
         "grasp_json_path": None,
         "pointcloud_frame": "pybullet",
         "grasp_pose_frame": "camera",
-        "grasp_target_gripper_z_offset_m": 0.1,
+        "grasp_target_gripper_z_offset_m": 0.15,
         "camera_from_arm_base_pb_xy": [0.0, -0.198544, 0.353028],
         "arm_base_link_pb_xyz": [-0.001193, -0.001505, 0.039689],
         "car_center_from_arm_base_pb_xy": [0.0, -0.1285],

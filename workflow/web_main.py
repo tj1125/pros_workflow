@@ -18,7 +18,7 @@ def main(host: str, port: int, reload_enabled: bool) -> None:
     import uvicorn
 
     uvicorn.run(
-        "commander.web_server:app",
+        "commander.web.app:app",
         host=os.getenv("WEB_HOST", host),
         port=int(os.getenv("WEB_PORT", str(port))),
         reload=reload_enabled,

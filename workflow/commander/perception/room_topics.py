@@ -1,5 +1,5 @@
 """
-commander/room_topics.py — One-shot ROS topic helpers for room-camera snapshots
+commander/perception/room_topics.py — One-shot ROS topic helpers for room-camera snapshots
 and world_position_data retrieval.
 
 This module mirrors commander/camera.py's subprocess pattern so the main app can
@@ -22,14 +22,16 @@ logger = logging.getLogger(__name__)
 
 
 def _ros_python_bin() -> str:
-    return os.getenv("ROS_PYTHON_BIN", "/usr/bin/python3")
+    from ..runtime_settings import ros_subprocess_settings
+
+    return ros_subprocess_settings()["python_bin"]
 
 
 def _ros_setup_scripts() -> list[str]:
-    return [
-        os.getenv("ROS_SETUP_BASH", "/opt/ros/humble/setup.bash"),
-        os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/install/setup.bash"),
-    ]
+    from ..runtime_settings import ros_subprocess_settings
+
+    settings = ros_subprocess_settings()
+    return [settings["ros_setup_bash"], settings["overlay_setup_bash"]]
 
 
 def _topic_subprocess_cmd(mode: str, topic_name: str, timeout_sec: float) -> str:
@@ -159,11 +161,6 @@ def save_preview_bbox_annotated(image_base64: str, bbox: list[float], output_pat
         return False
 
 
-def save_preview_crop(image_base64: str, bbox: list[float], output_path: Path) -> bool:
-    """Backward-compatible wrapper; now saves the full image with a red bbox."""
-    return save_preview_bbox_annotated(image_base64, bbox, output_path)
-
-
 if __name__ == "__main__":
     import argparse
     import base64
@@ -174,13 +171,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="One-shot ROS topic helpers.")
     parser.add_argument(
         "mode",
-        choices=("string_topic", "compressed_image_topic", "amcl_pose", "annotate_preview", "crop_preview"),
+        choices=("string_topic", "compressed_image_topic", "amcl_pose", "annotate_preview"),
     )
     parser.add_argument("topic_name", nargs="?", default="")
     parser.add_argument("--timeout", type=float, default=10.0)
     args = parser.parse_args()
 
-    if args.mode in ("annotate_preview", "crop_preview"):
+    if args.mode == "annotate_preview":
         from PIL import Image, ImageDraw
 
         payload = json.load(sys.stdin)
@@ -196,17 +193,11 @@ if __name__ == "__main__":
             top = max(0, min(rgb.height, top))
             right = max(0, min(rgb.width, right))
             bottom = max(0, min(rgb.height, bottom))
-            if args.mode == "crop_preview":
-                if right <= left or bottom <= top:
-                    preview = rgb
-                else:
-                    preview = rgb.crop((left, top, right, bottom))
-            else:
-                preview = rgb.copy()
-                if right > left and bottom > top:
-                    draw = ImageDraw.Draw(preview)
-                    line_width = max(3, min(preview.width, preview.height) // 200)
-                    draw.rectangle((left, top, right, bottom), outline=(255, 0, 0), width=line_width)
+            preview = rgb.copy()
+            if right > left and bottom > top:
+                draw = ImageDraw.Draw(preview)
+                line_width = max(3, min(preview.width, preview.height) // 200)
+                draw.rectangle((left, top, right, bottom), outline=(255, 0, 0), width=line_width)
             preview.save(output_path, format="JPEG", quality=95)
         print(str(output_path))
         raise SystemExit(0)

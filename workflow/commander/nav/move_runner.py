@@ -20,9 +20,10 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from std_msgs.msg import String
 
-from .nav_settings import (
+from ..runtime_settings import (
     goal_heading_tolerance_rad_default,
     goal_tolerance_m_default,
+    nav_runner_payload_defaults,
 )
 
 
@@ -283,12 +284,19 @@ class NavMoveRunner(Node):
         }
 
     def run(self) -> Dict[str, Any]:
-        plan_timeout = float(self.payload.get("plan_timeout_sec", 8.0))
-        arrival_timeout = float(self.payload.get("arrival_timeout_sec", 120.0))
-        initial_pose_timeout = float(self.payload.get("initial_pose_timeout_sec", 5.0))
+        defaults = nav_runner_payload_defaults()
+        plan_timeout = float(self.payload.get("plan_timeout_sec", defaults["plan_timeout_sec"]))
+        arrival_timeout = float(self.payload.get("arrival_timeout_sec", defaults["arrival_timeout_sec"]))
+        publish_interval_sec = max(
+            0.001,
+            float(
+                self.payload.get(
+                    "publish_interval_sec",
+                    defaults["publish_interval_sec"],
+                )
+            ),
+        )
         publish_initialpose = bool(self.payload.get("publish_initialpose", False))
-        warmup_publish_count = int(self.payload.get("warmup_publish_count", 3))
-        warmup_sleep = float(self.payload.get("publish_interval_sec", 0.2))
         goal_tolerance_m = float(
             self.payload.get("goal_tolerance_m", goal_tolerance_m_default())
         )
@@ -310,7 +318,7 @@ class NavMoveRunner(Node):
 
         self._emit_event(
             "plan_wait",
-            "Hard looping /goal_pose (and /initialpose) every 0.1s until global plan is ready...",
+            f"Hard looping /goal_pose (and /initialpose) every {publish_interval_sec:.3g}s until global plan is ready...",
         )
 
         deadline = time.monotonic() + plan_timeout
@@ -326,7 +334,7 @@ class NavMoveRunner(Node):
             if self._plan_ready:
                 break
                 
-            time.sleep(0.1)
+            time.sleep(publish_interval_sec)
 
         if not self._plan_ready:
             self._emit_event("attempt_failed", "failed to observe global plan after hard loop")

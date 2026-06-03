@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import yaml
 
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "cameras.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "cameras.yaml"
 _ROOM1_CAMERA_RE = re.compile(r"^Camera_Room1_(\d+)$")
 _GROUP_SIZE = 3
 

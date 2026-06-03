@@ -25,15 +25,17 @@ logger = logging.getLogger(__name__)
 
 def _ros_python_bin() -> str:
     """Return the Python executable that has ROS 2 Python packages installed."""
-    return os.getenv("ROS_PYTHON_BIN", "/usr/bin/python3")
+    from ..runtime_settings import ros_subprocess_settings
+
+    return ros_subprocess_settings()["python_bin"]
 
 
 def _ros_setup_scripts() -> list[str]:
     """Return ROS setup scripts to source before running the ROS-side helper."""
-    return [
-        os.getenv("ROS_SETUP_BASH", "/opt/ros/humble/setup.bash"),
-        os.getenv("ROS_OVERLAY_SETUP_BASH", "/workspaces/install/setup.bash"),
-    ]
+    from ..runtime_settings import ros_subprocess_settings
+
+    settings = ros_subprocess_settings()
+    return [settings["ros_setup_bash"], settings["overlay_setup_bash"]]
 
 
 def _camera_subprocess_cmd(camera_name: str, mode: str) -> str:

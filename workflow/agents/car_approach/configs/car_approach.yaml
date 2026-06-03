@@ -101,7 +101,7 @@ gripper_close_timeout_sec: 2.0
 arm_publisher_match_timeout_sec: 1.0
 # Last waypoint may stop early only when cube_z_distance is below this threshold.
 cube_z_distance_topic: /cube_z_distance
-cube_z_distance_final_waypoint_stop_threshold_m: 0.03
+cube_z_distance_final_waypoint_stop_threshold_m: 0.015
 # After return_reset, this threshold decides final arm success.
 cube_z_distance_final_verify_threshold_m: 0.04
 cube_z_distance_poll_interval_sec: 0.02

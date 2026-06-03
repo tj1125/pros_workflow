@@ -57,7 +57,7 @@ class Brain:
             from langchain_openai import ChatOpenAI
 
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            model_name = os.getenv("OLLAMA_MODEL", "gemma4:26b")
+            model_name = os.getenv("OLLAMA_MODEL", "gemma3:12b")
             self._raw_model = ChatOpenAI(
                 model=model_name,
                 openai_api_key="ollama",
@@ -89,12 +89,8 @@ class Brain:
         navigation = state.get("navigation", {}) or {}
         observation = state.get("observation", {}) or {}
         history = list(state.get("history_buffer", []) or [])[-6:]
-        session_summary = str(state.get("session_summary", "") or "")
-        retry = int(state.get("retry_count", 0) or 0)
 
         history_summary = "\n".join(self._format_history_entry(item) for item in history) or "  (no recent node history)"
-        success_criteria = task.get("success_criteria") or []
-        success_text = "\n".join(f"- {item}" for item in success_criteria) or "- Complete the requested robot task safely."
         nav_result = navigation.get("result") or {}
         current_rank = int(navigation.get("current_goal_rank", 1) or 1)
         groups = item_info.get("group_ranking", []) or []
@@ -104,38 +100,37 @@ class Brain:
                 available_goal_ranks.append(int(group.get("rank", idx) or idx))
         next_rank_available = any(rank > current_rank for rank in available_goal_ranks)
         failure_hint = self._failure_hint(state)
+        target_label = str(requested.get("label") or requested.get("id") or task.get("normalized_task", "") or "target object")
+        target_id = str(requested.get("id") or "")
+        target_text = f"{target_label} ({target_id})" if target_id and target_id != target_label else target_label
+        instance_key = selected.get("instance_key") or item_info.get("target_instance_key") or "unknown"
+        nav_arrived = nav_result.get("arrived", "unknown") if nav_result else "unknown"
+        nav_message = nav_result.get("message", "") if nav_result else ""
+        grasp = state.get("grasp_result", {}) or {}
+        grasp_success = grasp.get("success", "unknown") if grasp else "unknown"
+        pose_ready = bool(grasp.get("best_grasp_pose_camera")) if grasp else "unknown"
+        approach = state.get("approach_result", {}) or {}
+        approach_success = approach.get("success", "unknown") if approach else "unknown"
+        approach_phase = approach.get("phase") or approach.get("status_code") or "none"
+        arm_result = approach.get("arm_result", {}) if isinstance(approach.get("arm_result", {}), dict) else {}
+        arm_success = bool(arm_result.get("success", False)) if approach and arm_result else "unknown"
 
         text_content = (
             "## Task\n"
-            f"Original request: {task.get('original_user_request', '')}\n"
-            f"Normalized task: {task.get('normalized_task', '')}\n"
-            f"Done policy: {task.get('done_policy', '')}\n"
-            f"Success criteria:\n{success_text}\n\n"
-            "## Requested Object\n"
-            f"ID: {requested.get('id', '')}\n"
-            f"Label: {requested.get('label', '')}\n\n"
-            "## Selected Instance\n"
-            f"Instance key: {selected.get('instance_key', '')}\n"
-            f"Center world: {selected.get('center_world', item_info.get('center_world', []))}\n"
-            f"Primary camera: {selected.get('primary_camera', item_info.get('primary_camera_id', ''))}\n\n"
-            "## Navigation\n"
-            f"Current rank: {current_rank}\n"
-            f"Available ranked goal poses: {available_goal_ranks or 'unknown'}\n"
-            f"Next major_nav rank available: {next_rank_available}\n"
-            f"Current nav goal source: {navigation.get('nav_goal_pose_source', '')}\n"
-            f"Last result: {json.dumps(nav_result, ensure_ascii=False)}\n\n"
-            "## Grasp Feasibility Check\n"
-            "Choose grasp_agent when the target has an exposed graspable body/edge and at least one visible approach corridor. "
-            "Nearby objects, table support, or mild partial occlusion are acceptable if they do not block the intended grasp region. "
-            "Choose major_nav_node only when the current view cannot support a plausible grasp, or recent grasp/approach failed at this rank and another rank is available.\n"
-            f"Recent failure hint: {failure_hint or '(none)'}\n\n"
+            f"Target: {target_text}\n"
+            f"Target instance: {instance_key}\n"
+            f"Done policy: {task.get('done_policy', '') or 'Complete the requested robot task safely.'}\n\n"
+            "## Current State\n"
+            f"Current viewpoint rank: {current_rank}\n"
+            f"Next viewpoint available: {next_rank_available}\n"
+            f"Last navigation: arrived={nav_arrived}, message={nav_message or 'none'}\n"
+            f"Last grasp: success={grasp_success}, pose_ready={pose_ready}\n"
+            f"Last approach: success={approach_success}, phase={approach_phase}, arm_success={arm_success}\n"
+            f"Recent failure: {failure_hint or 'none'}\n\n"
             "## Current Observation\n"
             f"{observation.get('description', 'Camera image unavailable.')}\n\n"
-            "## Session Summary\n"
-            f"{session_summary or '(empty)'}\n\n"
-            "## Recent Node History (bounded to 6)\n"
+            "## Recent Action History\n"
             f"{history_summary}\n\n"
-            f"## Retry Count\n{retry}\n\n"
             "Decide the next action. Output exactly one JSON object with this schema:\n"
             '{"reasoning":"short reason","call_module":"major_nav_node|grasp_agent|car_approach_agent|DONE","module_params":{}}\n'
             "Use DONE only when the task success criteria and done policy are satisfied."
@@ -200,7 +195,7 @@ class Brain:
             return "mock"
         provider = os.getenv("VLM_PROVIDER", "google").lower()
         if provider == "ollama":
-            return os.getenv("OLLAMA_MODEL", "gemma4:26b")
+            return os.getenv("OLLAMA_MODEL", "gemma3:12b")
         if provider == "google":
             return os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         return "configured-vlm"

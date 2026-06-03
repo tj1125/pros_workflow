@@ -1,6 +1,8 @@
 # VLM_RL
 
-VLM_RL 是 Unity/ROS2 環境中的 workflow runtime。ROS 節點放在 `src/`，非 ROS 的 Commander workflow 放在 `workflow/`，RTX 3090 端 A2A 推論服務放在 `3090server/VLM_RL/`。目前統一用 Docker 進入環境，透過 `r` build ROS，`scripts/start.sh` 啟動 ROS runtime，`run` 或 `web 8080` 啟動 workflow。
+本專案是部署於 Unity/ROS2 環境的主動感知抓取系統。主控端使用 LangGraph 維護任務狀態，透過 VLM 做高層決策，並呼叫本機 ROS2 控制流程與 RTX 3090 上的 A2A 推論服務完成找物、導航、抓取姿態生成與底盤/手臂收尾。
+
+ROS 節點放在 `src/`，非 ROS 的 Commander workflow 放在 `workflow/`，RTX 3090 端 A2A 推論服務放在 `3090server/VLM_RL/`。目前統一用 Docker 進入環境，透過 `r` build ROS，`scripts/start.sh` 啟動 ROS runtime，`run` 或 `web 8080` 啟動 workflow。
 
 ## Workflow
 

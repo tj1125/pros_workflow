@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .contracts import ArtifactRef, dump_model
+from ..contracts import ArtifactRef, dump_model
 
 
 _IMAGE_SUFFIX_MAP = {
