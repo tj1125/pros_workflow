@@ -56,6 +56,10 @@ class GraspAgentExecutor(AgentExecutor):
                 camera_name=camera_name,
                 rgb_bytes=rgb_bytes,
                 depth_bytes=depth_bytes,
+                target_center_world=body.get("target_center_world"),
+                target_instance_key=str(body.get("target_instance_key", "") or ""),
+                amcl_pose=body.get("amcl_pose"),
+                ros_map_origin_unity=body.get("ros_map_origin_unity"),
             )
             logger.info(
                 "GraspAgent complete. object_id=%s, grasp_confidence=%.4f, num_valid_grasps=%d",

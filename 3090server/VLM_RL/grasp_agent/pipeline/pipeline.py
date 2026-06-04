@@ -18,7 +18,7 @@ from tool.grasp.graspgen import (
     prepare_graspgen_runtime_imports,
 )
 from tool.vision.sam import sam_segment_with_bbox
-from tool.vision.yolo import load_yolo_model, run_yolo, select_best_bbox
+from tool.vision.yolo import extract_detections, load_yolo_model, run_yolo
 
 
 @dataclass(frozen=True)
@@ -153,6 +153,204 @@ def _rank_grasps_by_reference_point(
         np.asarray(confidences, dtype=float)[sort_idx],
         reference_distances[sort_idx],
     )
+
+
+def _bbox_center_xy(bbox_xyxy: tuple[float, float, float, float]) -> tuple[float, float]:
+    x1, y1, x2, y2 = [float(value) for value in bbox_xyxy]
+    return (x1 + x2) * 0.5, (y1 + y2) * 0.5
+
+
+def _depth_at_image_xy(depth_m: np.ndarray, x: float, y: float, *, window_px: int = 7) -> float | None:
+    height, width = depth_m.shape[:2]
+    cx = int(round(float(x)))
+    cy = int(round(float(y)))
+    if cx < 0 or cy < 0 or cx >= width or cy >= height:
+        return None
+    radius = max(0, int(window_px) // 2)
+    x1 = max(0, cx - radius)
+    x2 = min(width, cx + radius + 1)
+    y1 = max(0, cy - radius)
+    y2 = min(height, cy + radius + 1)
+    patch = np.asarray(depth_m[y1:y2, x1:x2], dtype=np.float32)
+    valid = patch[np.isfinite(patch) & (patch > 0.0)]
+    if valid.size == 0:
+        return None
+    return float(np.median(valid))
+
+
+def _yaw_from_amcl_pose(amcl_pose: object) -> float | None:
+    if not isinstance(amcl_pose, dict):
+        return None
+    try:
+        if amcl_pose.get("yaw") is not None:
+            return float(amcl_pose["yaw"])
+        if amcl_pose.get("yaw_rad") is not None:
+            return float(amcl_pose["yaw_rad"])
+        qx = float(amcl_pose.get("qx", 0.0))
+        qy = float(amcl_pose.get("qy", 0.0))
+        qz = float(amcl_pose.get("qz", 0.0))
+        qw = float(amcl_pose.get("qw", 1.0))
+    except (TypeError, ValueError):
+        return None
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    return float(np.arctan2(siny_cosp, cosy_cosp))
+
+
+def _ros_map_origin_unity_xz(origin: object) -> tuple[float, float] | None:
+    try:
+        if isinstance(origin, dict):
+            origin_x = origin.get("x", origin.get("ros_map_origin_unity_x"))
+            origin_z = origin.get("z", origin.get("ros_map_origin_unity_z"))
+            return float(origin_x), float(origin_z)
+        if isinstance(origin, (list, tuple)) and len(origin) >= 2:
+            return float(origin[0]), float(origin[1])
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _target_center_world_xyz(target_center_world: object) -> np.ndarray | None:
+    if not isinstance(target_center_world, (list, tuple)) or len(target_center_world) < 3:
+        return None
+    try:
+        target = np.asarray([float(target_center_world[0]), float(target_center_world[1]), float(target_center_world[2])], dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if not np.all(np.isfinite(target)):
+        return None
+    return target
+
+
+def _estimate_bbox_center_unity_world(
+    *,
+    bbox_xyxy: tuple[float, float, float, float],
+    depth_m: np.ndarray,
+    intrinsic_matrix: np.ndarray,
+    mirror_depth_camera_x: bool,
+    amcl_pose: object,
+    ros_map_origin_unity: object,
+    target_center_world: np.ndarray,
+) -> dict[str, object] | None:
+    if not isinstance(amcl_pose, dict):
+        return None
+    yaw = _yaw_from_amcl_pose(amcl_pose)
+    origin = _ros_map_origin_unity_xz(ros_map_origin_unity)
+    if yaw is None or origin is None:
+        return None
+    try:
+        amcl_x = float(amcl_pose["x"])
+        amcl_y = float(amcl_pose["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    u, v = _bbox_center_xy(bbox_xyxy)
+    depth_v = float(depth_m.shape[0] - 1) - float(v)
+    z_camera = _depth_at_image_xy(depth_m, u, depth_v)
+    if z_camera is None:
+        return None
+    fx = float(intrinsic_matrix[0, 0])
+    fy = float(intrinsic_matrix[1, 1])
+    cx = float(intrinsic_matrix[0, 2])
+    cy = float(intrinsic_matrix[1, 2])
+    x_camera = (float(u) - cx) * z_camera / fx
+    y_camera = (float(depth_v) - cy) * z_camera / fy
+    if mirror_depth_camera_x:
+        x_camera *= -1.0
+
+    forward_m = float(z_camera)
+    left_m = float(-x_camera)
+    map_x = amcl_x + np.cos(yaw) * forward_m - np.sin(yaw) * left_m
+    map_y = amcl_y + np.sin(yaw) * forward_m + np.cos(yaw) * left_m
+    origin_x, origin_z = origin
+    unity_x = float(map_y + origin_x)
+    unity_z = float(origin_z - map_x)
+    estimated = np.asarray([unity_x, float(target_center_world[1]), unity_z], dtype=float)
+    planar_distance = float(np.linalg.norm(estimated[[0, 2]] - target_center_world[[0, 2]]))
+    return {
+        "bbox_center_px": [float(u), float(v)],
+        "bbox_center_depth_px": [float(u), float(depth_v)],
+        "depth_m": float(z_camera),
+        "camera_point_xyz": [float(x_camera), float(y_camera), float(z_camera)],
+        "ros_map_xy": [float(map_x), float(map_y)],
+        "estimated_center_world": estimated.astype(float).tolist(),
+        "distance_to_target_m": planar_distance,
+    }
+
+
+def _select_bbox_for_target(
+    *,
+    yolo_result: object,
+    object_id: str,
+    depth_m: np.ndarray,
+    intrinsic_matrix: np.ndarray,
+    mirror_depth_camera_x: bool,
+    target_center_world: object | None,
+    target_instance_key: str,
+    amcl_pose: object | None,
+    ros_map_origin_unity: object | None,
+) -> tuple[tuple[float, float, float, float], float, dict[str, object]]:
+    target_label = str(object_id).lower()
+    detections = [detection for detection in extract_detections(yolo_result, conf_threshold=0.0) if detection.label == target_label]
+    if not detections:
+        available_labels = sorted({detection.label for detection in extract_detections(yolo_result, conf_threshold=0.0)})
+        raise ValueError(f"No YOLO detection matched '{object_id}'. Available labels: {available_labels}")
+
+    detections = sorted(detections, key=lambda detection: float(detection.conf), reverse=True)
+    target = _target_center_world_xyz(target_center_world)
+    candidate_records: list[dict[str, object]] = []
+    for idx, detection in enumerate(detections, 1):
+        estimate = None
+        if target is not None and amcl_pose is not None and ros_map_origin_unity is not None:
+            estimate = _estimate_bbox_center_unity_world(
+                bbox_xyxy=detection.bbox_xyxy,
+                depth_m=depth_m,
+                intrinsic_matrix=intrinsic_matrix,
+                mirror_depth_camera_x=mirror_depth_camera_x,
+                amcl_pose=amcl_pose,
+                ros_map_origin_unity=ros_map_origin_unity,
+                target_center_world=target,
+            )
+        bbox_center_x, bbox_center_y = _bbox_center_xy(detection.bbox_xyxy)
+        image_center_x = (float(depth_m.shape[1]) - 1.0) * 0.5
+        record = {
+            "index": idx,
+            "label": detection.label,
+            "confidence": float(detection.conf),
+            "bbox_xyxy": [float(value) for value in detection.bbox_xyxy],
+            "bbox_center_px": [float(bbox_center_x), float(bbox_center_y)],
+            "image_center_x_px": float(image_center_x),
+            "x_distance_to_image_center_px": abs(float(bbox_center_x) - float(image_center_x)),
+        }
+        if estimate is not None:
+            record.update(estimate)
+        candidate_records.append(record)
+
+    ranked = [record for record in candidate_records if record.get("distance_to_target_m") is not None]
+    if len(detections) == 1:
+        selected_record = candidate_records[0]
+        selection_mode = "single_detection"
+    elif ranked:
+        selected_record = min(ranked, key=lambda record: (float(record["distance_to_target_m"]), -float(record["confidence"])))
+        selection_mode = "closest_to_target_center"
+    else:
+        selected_record = min(candidate_records, key=lambda record: (float(record["x_distance_to_image_center_px"]), -float(record["confidence"])))
+        selection_mode = "closest_to_image_x_center_missing_target_context"
+
+    selected_index = int(selected_record["index"]) - 1
+    selected_detection = detections[selected_index]
+    target_selection = {
+        "selection_mode": selection_mode,
+        "target_instance_key": target_instance_key,
+        "target_center_world": target.astype(float).tolist() if target is not None else [],
+        "candidate_count": len(detections),
+        "selected_detection_index": int(selected_record["index"]),
+        "selected_bbox_xyxy": selected_record.get("bbox_xyxy", []),
+        "selected_estimated_center_world": selected_record.get("estimated_center_world", []),
+        "selected_distance_to_target_m": selected_record.get("distance_to_target_m"),
+        "candidates": candidate_records,
+    }
+    return selected_detection.bbox_xyxy, float(selected_detection.conf), target_selection
 
 
 def _depth_to_point_cloud(
@@ -291,6 +489,10 @@ def run_pipeline(
     camera_name: str,
     rgb_bytes: bytes,
     depth_bytes: bytes,
+    target_center_world: object | None = None,
+    target_instance_key: str = "",
+    amcl_pose: object | None = None,
+    ros_map_origin_unity: object | None = None,
 ) -> dict[str, object]:
     cfg, _ = load_runtime_config(config_path)
     validate_required_paths(cfg)
@@ -298,17 +500,29 @@ def run_pipeline(
     prepare_graspgen_runtime_imports(Path(cfg["models"]["graspgen_root"]))
 
     image_bgr = _decode_rgb_image(rgb_bytes)
-    depth_m = _decode_depth_m(depth_bytes, depth_scale=float(cfg["runtime"]["depth_scale"]))
+    runtime = cfg["runtime"]
+    depth_m = _decode_depth_m(depth_bytes, depth_scale=float(runtime["depth_scale"]))
     intrinsic_matrix = _load_intrinsic_matrix(Path(cfg["camera"]["intrinsics_path"]))
+    mirror_depth_camera_x = _runtime_bool(runtime.get("mirror_depth_camera_x"), True)
 
     yolo_model = load_yolo_model(Path(cfg["models"]["yolo_weights"]))
     yolo_result = run_yolo(
         yolo_model,
         image_bgr,
-        conf_threshold=float(cfg["runtime"]["yolo_conf_threshold"]),
+        conf_threshold=float(runtime["yolo_conf_threshold"]),
         device=device,
     )
-    bbox_xyxy, detection_confidence = select_best_bbox(yolo_result, object_id)
+    bbox_xyxy, detection_confidence, target_selection = _select_bbox_for_target(
+        yolo_result=yolo_result,
+        object_id=object_id,
+        depth_m=depth_m,
+        intrinsic_matrix=intrinsic_matrix,
+        mirror_depth_camera_x=mirror_depth_camera_x,
+        target_center_world=target_center_world,
+        target_instance_key=target_instance_key,
+        amcl_pose=amcl_pose,
+        ros_map_origin_unity=ros_map_origin_unity,
+    )
     bbox = BoundingBox(*bbox_xyxy)
 
     seg_mask_bool = sam_segment_with_bbox(
@@ -320,8 +534,6 @@ def run_pipeline(
     )
     seg_mask_bool = _flip_mask_for_depth_alignment(seg_mask_bool)
 
-    runtime = cfg["runtime"]
-    mirror_depth_camera_x = _runtime_bool(runtime.get("mirror_depth_camera_x"), True)
     object_pc_camera = _depth_to_point_cloud(
         depth_m=depth_m,
         intrinsic_matrix=intrinsic_matrix,
@@ -451,7 +663,9 @@ def run_pipeline(
     return {
         "object_id": object_id,
         "camera_name": camera_name or str(cfg["camera"]["camera_name"]),
+        "target_instance_key": target_instance_key,
         "bbox_xyxy": [bbox.x1, bbox.y1, bbox.x2, bbox.y2],
+        "target_selection": target_selection,
         "mask_area_px": int(seg_mask_bool.sum()),
         "detection_confidence": float(detection_confidence),
         "grasp_confidence": float(valid_grasp_confidences[best_idx]),

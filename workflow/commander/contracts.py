@@ -40,6 +40,9 @@ class TaskContext(StrictModel):
 class RequestedObject(StrictModel):
     id: str = ""
     label: str = ""
+    candidate_ids: list[str] = Field(default_factory=list)
+    candidate_labels: dict[str, str] = Field(default_factory=dict)
+    candidate_match_notes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SelectedInstance(StrictModel):
@@ -146,6 +149,10 @@ class GraspResult(StrictModel):
     object_id: str = ""
     camera_name: str = "Camera_Car"
     success: bool = False
+    target_instance_key: str = ""
+    bbox_xyxy: list[float] = Field(default_factory=list)
+    detection_confidence: float | None = None
+    target_selection: dict[str, Any] = Field(default_factory=dict)
     grasp_confidence: float | None = None
     num_candidate_grasps: int | None = None
     num_valid_grasps: int | None = None

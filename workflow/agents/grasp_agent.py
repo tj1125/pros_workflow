@@ -38,6 +38,9 @@ class GraspAgent:
         mock_result = {
             "object_id": obj_id,
             "camera_name": params.get("camera_name", "Camera_Car"),
+            "target_instance_key": params.get("target_instance_key", ""),
+            "bbox_xyxy": [10.0, 10.0, 100.0, 100.0],
+            "target_selection": {"selection_mode": "mock"},
             "detection_confidence": 0.95,
             "grasp_confidence": 0.91,
             "num_candidate_grasps": 1,
@@ -80,8 +83,13 @@ class GraspAgent:
             require_agent_card_modes(agent_card, input_modes={"data", "file"}, output_modes={"data"}, skill_ids={"generate_grasp_pose"})
             client = A2AClient(httpx_client=self._http_client, agent_card=agent_card)
 
+            metadata = {"object_id": object_id, "camera_name": camera_name}
+            for key in ("target_center_world", "target_instance_key", "amcl_pose", "ros_map_origin_unity"):
+                value = params.get(key)
+                if value not in (None, "", [], {}):
+                    metadata[key] = value
             parts = [
-                data_part({"object_id": object_id, "camera_name": camera_name}),
+                data_part(metadata),
                 file_part(name=f"{camera_name}.rgb.jpg", data_base64=rgb_base64, mime_type="image/jpeg", metadata={"camera_name": camera_name, "semantic": "rgb"}),
                 file_part(name=f"{camera_name}.depth.png", data_base64=depth_base64, mime_type="image/png", metadata={"camera_name": camera_name, "semantic": "depth"}),
             ]

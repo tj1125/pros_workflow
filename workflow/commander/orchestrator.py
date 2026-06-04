@@ -16,7 +16,7 @@ from .storage.artifact_store import ArtifactStore
 from .brain import Brain
 from .contracts import NodeExecution, dump_model
 from .logger import TraceLogger
-from .flows.chat import ChatFlowMixin, ChatReply, TaskClassification
+from .flows.chat import ChatFlowMixin, ChatReply, RelatedObjectSelection, TaskClassification
 from .flows.pick import PickFlowMixin
 from .state import CommanderState
 
@@ -50,6 +50,7 @@ class Orchestrator(ChatFlowMixin, PickFlowMixin):
         self.http_client = httpx.AsyncClient(timeout=120.0)
         self.use_mock = use_mock
         self._classifier_model = None
+        self._related_object_model = None
         self._chat_model = None
         self._artifact_stores: dict[str, ArtifactStore] = {}
         self._transient_base64: dict[str, dict[str, str]] = {}
@@ -90,12 +91,14 @@ class Orchestrator(ChatFlowMixin, PickFlowMixin):
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
         classifier_model_name = os.getenv("OLLAMA_CLASSIFIER_MODEL", "gemma3:1b")
         chat_model_name = os.getenv("OLLAMA_CHAT_MODEL", os.getenv("OLLAMA_MODEL", "gemma4:31b"))
-        self._classifier_model = ChatOpenAI(
+        classifier_base_model = ChatOpenAI(
             model=classifier_model_name,
             openai_api_key="ollama",
             openai_api_base=f"{base_url}/v1",
             temperature=0,
-        ).with_structured_output(TaskClassification)
+        )
+        self._classifier_model = classifier_base_model.with_structured_output(TaskClassification)
+        self._related_object_model = classifier_base_model.with_structured_output(RelatedObjectSelection)
         self._chat_model = ChatOpenAI(
             model=chat_model_name,
             openai_api_key="ollama",

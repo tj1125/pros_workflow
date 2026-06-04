@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+import shutil
 import sqlite3
 import time
 import uuid
@@ -225,10 +226,11 @@ class ArtifactStore:
         update_reason: str = "",
         update_distance_m: float = 0.0,
         updated_at: float | None = None,
+        store_raw_payload: bool = True,
     ) -> str:
         snapshot_id = uuid.uuid4().hex
         timestamp = time.time() if updated_at is None else float(updated_at)
-        raw_payload_json = json.dumps(raw_payload, ensure_ascii=False, default=str)
+        raw_payload_json = json.dumps(raw_payload, ensure_ascii=False, default=str) if store_raw_payload else ""
         with self._connect() as conn:
             conn.execute(
                 """
@@ -344,6 +346,56 @@ class ArtifactStore:
             metadata=metadata,
         )
 
+    def register_file(
+        self,
+        kind: str,
+        path: str | Path,
+        *,
+        created_by_node: str,
+        metadata: dict[str, Any] | None = None,
+        mime_type: str | None = None,
+    ) -> ArtifactRef:
+        file_path = Path(path)
+        data = file_path.read_bytes()
+        sha256 = hashlib.sha256(data).hexdigest()
+        artifact_id = uuid.uuid4().hex
+        suffix = file_path.suffix or ".bin"
+        resolved_mime_type = mime_type or mimetypes.types_map.get(suffix.lower(), "application/octet-stream")
+        try:
+            rel_path = str(file_path.relative_to(self.base_dir))
+        except ValueError:
+            rel_path = str(file_path)
+        ref = ArtifactRef(
+            artifact_id=artifact_id,
+            kind=kind,
+            path=rel_path,
+            sha256=sha256,
+            size_bytes=len(data),
+            mime_type=resolved_mime_type,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO artifacts(
+                    artifact_id, context_id, kind, path, sha256, size_bytes,
+                    mime_type, created_by_node, created_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ref.artifact_id,
+                    self.context_id,
+                    ref.kind,
+                    ref.path,
+                    ref.sha256,
+                    ref.size_bytes,
+                    ref.mime_type,
+                    created_by_node,
+                    time.time(),
+                    json.dumps(metadata or {}, ensure_ascii=False, default=str),
+                ),
+            )
+        return ref
+
     def save_bytes(
         self,
         kind: str,
@@ -394,6 +446,16 @@ class ArtifactStore:
                 ),
             )
         return ref
+
+    def clear_artifacts(self) -> None:
+        if self.artifacts_dir.exists():
+            shutil.rmtree(self.artifacts_dir)
+        legacy_find_candidates_dir = self.session_dir / "find_candidates"
+        if legacy_find_candidates_dir.exists():
+            shutil.rmtree(legacy_find_candidates_dir)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.execute("DELETE FROM artifacts WHERE context_id = ?", (self.context_id,))
 
     def load_bytes(self, ref: ArtifactRef | dict[str, Any]) -> bytes:
         return self.resolve_path(ref).read_bytes()

@@ -13,13 +13,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_PATH = ROOT / "langgraph_flow.png"
-NODES = [
-    "START",
+CHAT_NODES = [
     "greeting_node",
     "human_reply_node",
     "task_classification_node",
     "ai_reply_node",
     "chat_memory_node",
+    "goodbye_node",
+]
+
+PICK_NODES = [
     "input_node",
     "find_node",
     "get_item_info_no_sam3d_node",
@@ -33,9 +36,9 @@ NODES = [
     "car_approach_node",
     "update_memory_node",
     "nav_home_node",
-    "goodbye_node",
-    "END",
 ]
+
+NODES = ["START", *CHAT_NODES, *PICK_NODES, "END"]
 
 EDGES = [
     ("START", "greeting_node", "", ""),
@@ -52,7 +55,7 @@ EDGES = [
     ("get_item_info_no_sam3d_node", "nav_move_node", "ready", ""),
     ("get_item_info_no_sam3d_node", "nav_home_node", "failed/no_goal", ""),
     ("nav_move_node", "observe_node", "bootstrap", ""),
-    ("nav_move_node", "update_memory_node", "major_nav/failed", ""),
+    ("nav_move_node", "update_memory_node", "nav failed", ""),
     ("update_memory_node", "observe_node", "", ""),
     ("observe_node", "reason_node", "", ""),
     ("reason_node", "update_item_info_1_node", "major_nav_node", ""),
@@ -74,17 +77,14 @@ EDGES = [
 ]
 
 NODE_STYLES = {
-    "START": {"shape": "oval", "fillcolor": "#dcfce7", "color": "#16a34a", "label": "START"},
-    "END": {"shape": "oval", "fillcolor": "#fee2e2", "color": "#dc2626", "label": "END"},
-    "car_approach_node": {"fillcolor": "#fef3c7", "color": "#d97706"},
-    "update_memory_node": {"fillcolor": "#e0f2fe", "color": "#0284c7"},
-    "nav_home_node": {"fillcolor": "#dcfce7", "color": "#16a34a"},
+    "START": {"shape": "oval", "fillcolor": "#dcfce7", "color": "#16a34a", "label": "START", "penwidth": "1.8"},
+    "END": {"shape": "oval", "fillcolor": "#fee2e2", "color": "#dc2626", "label": "END", "penwidth": "1.8"},
 }
 
-EDGE_STYLES = {
-    "success": {"color": "#16a34a", "fontcolor": "#166534", "penwidth": "2"},
-    "failure": {"color": "#dc2626", "fontcolor": "#991b1b", "penwidth": "2"},
-}
+CLUSTERS = [
+    ("cluster_chat", "chat", CHAT_NODES, "#f8fafc", "#cbd5e1"),
+    ("cluster_pick", "pick", PICK_NODES, "#ffffff", "#cbd5e1"),
+]
 
 
 def _quote(value: str) -> str:
@@ -95,22 +95,52 @@ def _attrs(values: dict[str, str]) -> str:
     return ", ".join(f"{key}={_quote(str(value))}" for key, value in values.items())
 
 
+def _node_line(node: str, *, indent: str = "  ") -> str:
+    attrs = {"label": node, **NODE_STYLES.get(node, {})}
+    return f"{indent}{_quote(node)} [{_attrs(attrs)}];"
+
+
 def build_dot() -> str:
     lines = [
         "digraph LangGraphFlow {",
         '  graph [rankdir=TB, bgcolor="white", pad="0.4", nodesep="0.5", ranksep="0.65", splines=ortho];',
-        '  node [shape=box, style="rounded,filled", fillcolor="#f8fafc", color="#64748b", fontname="DejaVu Sans", fontsize=11, margin="0.12,0.08"];',
-        '  edge [color="#475569", fontname="DejaVu Sans", fontsize=9, arrowsize=0.7];',
+        '  node [shape=box, style="rounded,filled", fillcolor="#f8fafc", color="#64748b", penwidth="1.2", fontname="DejaVu Sans", fontsize=11, margin="0.12,0.08"];',
+        '  edge [color="#475569", fontcolor="#475569", penwidth="1.2", fontname="DejaVu Sans", fontsize=9, arrowsize=0.7];',
         "",
     ]
-    for node in NODES:
-        attrs = {"label": node, **NODE_STYLES.get(node, {})}
-        lines.append(f"  {_quote(node)} [{_attrs(attrs)}];")
+    lines.append(_node_line("START"))
+    lines.append(_node_line("END"))
     lines.append("")
-    for src, dst, label, style_key in EDGES:
-        attrs = dict(EDGE_STYLES.get(style_key, {}))
-        if label:
-            attrs["xlabel"] = label
+
+    clustered = set()
+    for cluster_name, label, nodes, fillcolor, color in CLUSTERS:
+        clustered.update(nodes)
+        cluster_attrs = {
+            "label": label,
+            "style": "rounded,filled",
+            "fillcolor": fillcolor,
+            "color": color,
+            "penwidth": "1.2",
+            "fontname": "DejaVu Sans",
+            "fontsize": "12",
+            "margin": "12",
+        }
+        lines.extend([
+            f"  subgraph {_quote(cluster_name)} {{",
+            f"    graph [{_attrs(cluster_attrs)}];",
+        ])
+        for node in nodes:
+            lines.append(_node_line(node, indent="    "))
+        lines.append("  }")
+        lines.append("")
+
+    for node in NODES:
+        if node not in clustered and node not in {"START", "END"}:
+            lines.append(_node_line(node))
+    lines.append("")
+
+    for src, dst, label, _style_key in EDGES:
+        attrs = {"xlabel": label} if label else {}
         suffix = f" [{_attrs(attrs)}]" if attrs else ""
         lines.append(f"  {_quote(src)} -> {_quote(dst)}{suffix};")
     lines.append("}")

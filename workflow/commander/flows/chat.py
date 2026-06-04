@@ -33,6 +33,14 @@ class ChatReply(BaseModel):
     reply: str
 
 
+class RelatedObjectSelection(BaseModel):
+    related_object_indices: list[int] = Field(
+        default_factory=list,
+        description="1-based object indices from the provided config that should be considered for the request.",
+    )
+    reasoning: str = ""
+
+
 class ChatFlowMixin:
     async def _greeting_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
@@ -110,6 +118,13 @@ class ChatFlowMixin:
 
     async def _goodbye_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
+        context_id = str(state.get("context_id", "") or "default")
+        try:
+            self._artifact_store(state).clear_artifacts()
+            if hasattr(self, "_transient_base64"):
+                self._transient_base64.pop(context_id, None)
+        except Exception as exc:
+            logger.warning("[goodbye_node] session artifact cleanup failed: %s", exc)
         message = "對話及任務結束，祝您有美好的一天～"
         print(f"\n{message}", flush=True)
         status = "GOODBYE_SENT"

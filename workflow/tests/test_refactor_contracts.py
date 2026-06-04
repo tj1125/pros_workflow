@@ -81,6 +81,48 @@ def test_item_info_uses_all_room1_upload_cameras() -> None:
     ]
 
 
+def test_related_object_options_use_llm_config_indices() -> None:
+    objects = load_graspable_objects()
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.use_mock = False
+    orchestrator._related_object_model = SimpleNamespace(
+        invoke=lambda _messages: SimpleNamespace(related_object_indices=[5, 6], reasoning="doll-like objects")
+    )
+
+    options = asyncio.run(orchestrator._resolve_related_object_options("pick doll", objects, 5))
+
+    assert [option["id"] for option in options[:2]] == ["doll", "gaobear"]
+    assert options[1]["match_reason"] == "llm_related_config_description"
+
+
+def test_update_item_info_accepts_nearby_instance_id_reassignment() -> None:
+    selected = {"item_id": "doll", "instance_id": 2, "instance_key": "doll_2", "center_world": [1.0, 0.2, 3.0]}
+    candidates = [
+        {"item_id": "doll", "instance_id": 3, "instance_key": "doll_3", "center_world": [1.02, 0.2, 3.01]},
+        {"item_id": "doll", "instance_id": 5, "instance_key": "doll_5", "center_world": [1.0, 0.2, 3.0]},
+    ]
+
+    refreshed, match_info = Orchestrator._find_selected_candidate(candidates, selected)
+
+    assert refreshed["instance_key"] == "doll_3"
+    assert match_info["id_reassigned"] is True
+    assert match_info["instance_id_delta"] == 1
+
+
+def test_update_item_info_rejects_far_or_large_id_delta_candidates() -> None:
+    selected = {"item_id": "doll", "instance_id": 2, "instance_key": "doll_2", "center_world": [1.0, 0.2, 3.0]}
+    candidates = [
+        {"item_id": "doll", "instance_id": 3, "instance_key": "doll_3", "center_world": [1.04, 0.2, 3.0]},
+        {"item_id": "doll", "instance_id": 4, "instance_key": "doll_4", "center_world": [1.0, 0.2, 3.0]},
+        {"item_id": "gaobear", "instance_id": 3, "instance_key": "gaobear_3", "center_world": [1.0, 0.2, 3.0]},
+    ]
+
+    refreshed, match_info = Orchestrator._find_selected_candidate(candidates, selected)
+
+    assert refreshed is None
+    assert match_info["match_mode"] == "missing"
+
+
 def test_artifact_store_json_text_bytes_and_db_rows() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = ArtifactStore(context_id="ctx", base_dir=tmp)
@@ -98,6 +140,30 @@ def test_artifact_store_json_text_bytes_and_db_rows() -> None:
         con.close()
         assert {row[0] for row in rows} == {json_ref.artifact_id, text_ref.artifact_id, bytes_ref.artifact_id}
         assert all(row[1] and row[2] >= 3 for row in rows)
+
+
+def test_artifact_store_register_file_and_clear_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ArtifactStore(context_id="ctx-clear", base_dir=tmp)
+        preview_path = store.artifacts_dir / "find_candidates" / "candidate.jpg"
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        preview_path.write_bytes(b"preview")
+        legacy_dir = store.session_dir / "find_candidates"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        (legacy_dir / "old.jpg").write_bytes(b"old")
+
+        ref = store.register_file("find_candidates", preview_path, created_by_node="find_node")
+        assert store.resolve_path(ref).exists()
+
+        store.clear_artifacts()
+
+        assert store.artifacts_dir.exists()
+        assert not store.resolve_path(ref).exists()
+        assert not legacy_dir.exists()
+        con = sqlite3.connect(Path(tmp) / "sessions" / "ctx-clear" / "session.sqlite")
+        count = con.execute("select count(*) from artifacts").fetchone()[0]
+        con.close()
+        assert count == 0
 
 
 def test_world_snapshot_raw_and_goal_pose_are_sqlite_rows() -> None:
@@ -394,7 +460,12 @@ def run_all() -> None:
     test_history_reducer_appends_all_entries()
     test_task_classifier_matches_id_label_and_keeps_chat_general()
     test_legacy_prompt_type_only_uses_detection_selection()
+    test_item_info_uses_all_room1_upload_cameras()
+    test_related_object_options_use_llm_config_indices()
+    test_update_item_info_accepts_nearby_instance_id_reassignment()
+    test_update_item_info_rejects_far_or_large_id_delta_candidates()
     test_artifact_store_json_text_bytes_and_db_rows()
+    test_artifact_store_register_file_and_clear_artifacts()
     test_world_snapshot_raw_and_goal_pose_are_sqlite_rows()
     test_session_store_rejects_raw_state_blobs()
     test_brain_accepts_only_structured_decisions()
@@ -409,4 +480,4 @@ def run_all() -> None:
 
 if __name__ == "__main__":
     run_all()
-    print(json.dumps({"ok": True, "tests": 14, "run_id": uuid.uuid4().hex}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "tests": 19, "run_id": uuid.uuid4().hex}, ensure_ascii=False))

@@ -34,7 +34,7 @@ from ..nav.goal_builder import (
     goal_pose_from_ros_map,
     target_center_world_to_map_xy,
 )
-from ..object_catalog import load_graspable_objects, valid_object_index
+from ..object_catalog import lexical_related_object_options, load_graspable_objects, object_option, valid_object_index
 from ..runtime_settings import (
     default_initial_pose,
     nav_runner_payload_defaults,
@@ -52,6 +52,62 @@ class PickFlowMixin:
     @staticmethod
     def _nav_goal_from_pose(goal: dict[str, Any]) -> NavGoal:
         return NavGoal(**{key: value for key, value in goal.items() if key in NavGoal.model_fields})
+
+    async def _resolve_related_object_options(
+        self,
+        task_text: str,
+        objects: list[dict[str, Any]],
+        selected_index: int,
+    ) -> list[dict[str, Any]]:
+        selected_index = valid_object_index(selected_index, objects)
+        if not selected_index:
+            return []
+        if self.use_mock or getattr(self, "_related_object_model", None) is None:
+            return lexical_related_object_options(task_text, objects, selected_index=selected_index)
+
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        listing_lines = []
+        for idx, obj in enumerate(objects, 1):
+            aliases = obj.get("aliases", [])
+            alias_text = ", ".join(str(alias) for alias in aliases) if isinstance(aliases, list) else str(aliases or "")
+            listing_lines.append(f"{idx}. id={obj.get('id','')} label={obj.get('label','')} aliases=[{alias_text}]")
+        listing = "\n".join(listing_lines)
+        selected = objects[selected_index - 1]
+        system = (
+            "You choose which configured graspable objects should be considered for a robot pick request. "
+            "Use only the provided object config text: id, label, and aliases. Always include the selected object index. "
+            "Also include other configured objects when their descriptions are plausibly related, ambiguous, visually similar, "
+            "or could be intended by the same user wording. Do not invent objects or categories; return 1-based indices only."
+        )
+        human = (
+            f"Objects from config:\n{listing}\n\n"
+            f"Selected object index: {selected_index} (id={selected.get('id','')}, label={selected.get('label','')})\n"
+            f"Human request: {task_text}\n\n"
+            "Return related_object_indices ordered by relevance."
+        )
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                getattr(self, "_related_object_model").invoke,
+                [SystemMessage(content=system), HumanMessage(content=human)],
+            )
+            raw_indices = list(getattr(result, "related_object_indices", []) or [])
+        except Exception as exc:
+            logger.warning("[input_node] related-object LLM failed; using lexical fallback: %s", exc)
+            return lexical_related_object_options(task_text, objects, selected_index=selected_index)
+
+        ordered_indices: list[int] = []
+        for raw_idx in [selected_index, *raw_indices]:
+            idx = valid_object_index(raw_idx, objects)
+            if idx and idx not in ordered_indices:
+                ordered_indices.append(idx)
+        options: list[dict[str, Any]] = []
+        for rank, idx in enumerate(ordered_indices):
+            reason = "selected_object" if idx == selected_index else "llm_related_config_description"
+            score = 100 if idx == selected_index else max(60, 95 - rank)
+            options.append(object_option(objects[idx - 1], idx, reason=reason, score=score))
+        return options
 
     async def _input_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
@@ -79,9 +135,23 @@ class PickFlowMixin:
             success_criteria=["目標物已被抓取", "手臂與夾爪收尾完成", "任務完成後返回 home"],
             done_policy="When approach_result.success is true and arm_result.success is true, the task can be marked DONE and routed home.",
         )
-        requested = RequestedObject(id=object_id, label=label)
+        candidate_options = await self._resolve_related_object_options(task_text, objects, selected_index)
+        if not any(option.get("id") == object_id for option in candidate_options):
+            candidate_options.insert(0, object_option(selected, selected_index, reason="selected_object", score=100))
+        candidate_ids = [str(option.get("id", "")) for option in candidate_options if str(option.get("id", "")).strip()]
+        candidate_labels = {str(option.get("id", "")): str(option.get("label", option.get("id", ""))) for option in candidate_options if str(option.get("id", "")).strip()}
+        requested = RequestedObject(
+            id=object_id,
+            label=label,
+            candidate_ids=candidate_ids,
+            candidate_labels=candidate_labels,
+            candidate_match_notes=candidate_options,
+        )
         status = "INPUT_RECEIVED"
         print(f"\n任務已確認：{normalized_task}")
+        if len(candidate_ids) > 1:
+            related_text = "、".join(f"{candidate_labels[obj_id]}({obj_id})" for obj_id in candidate_ids[1:])
+            print(f"也會檢查相近描述的不同物品：{related_text}")
         return {
             "task": dump_model(task),
             "requested_object": dump_model(requested),
@@ -148,8 +218,7 @@ class PickFlowMixin:
             return {}
         from ..perception.room_topics import save_preview_bbox_annotated
 
-        context_id = str(state.get("context_id", store.context_id) or store.context_id)
-        preview_dir = Path("logs") / "sessions" / context_id / "find_candidates"
+        preview_dir = store.artifacts_dir / "find_candidates"
         prepared: dict[str, dict[str, Any]] = {}
         for idx, candidate in enumerate(matches, 1):
             instance_key = str(candidate.get("instance_key", f"candidate_{idx}"))
@@ -169,11 +238,23 @@ class PickFlowMixin:
             preview_file = preview_dir / f"{idx:02d}__{safe_instance}__{safe_camera}.jpg"
             if not save_preview_bbox_annotated(image_b64, primary_bbox, preview_file):
                 continue
+            preview_ref = store.register_file(
+                "find_candidates",
+                preview_file,
+                created_by_node="find_node",
+                metadata={
+                    "instance_key": instance_key,
+                    "camera_name": primary_camera,
+                    "selection_index": idx,
+                },
+                mime_type="image/jpeg",
+            )
             prepared[instance_key] = {
                 "selection_index": idx,
                 "primary_camera": primary_camera,
                 "primary_bbox": primary_bbox,
-                "preview_path": str(preview_file),
+                "preview_path": str(store.resolve_path(preview_ref)),
+                "preview_ref": preview_ref,
             }
         return prepared
 
@@ -185,7 +266,17 @@ class PickFlowMixin:
         store = self._artifact_store(state)
         from ..perception.world_position import normalized_item_id, parse_world_position_payload
 
+        candidate_ids = requested.get("candidate_ids") if isinstance(requested.get("candidate_ids"), list) else []
+        candidate_labels = requested.get("candidate_labels") if isinstance(requested.get("candidate_labels"), dict) else {}
         wanted = normalized_item_id(requested_id or label)
+        wanted_ids = {normalized_item_id(value) for value in candidate_ids if str(value or "").strip()}
+        if wanted:
+            wanted_ids.add(wanted)
+        if not wanted_ids:
+            wanted_ids = {wanted or "target"}
+        label_lookup = {normalized_item_id(key): str(value) for key, value in candidate_labels.items()}
+        if wanted:
+            label_lookup.setdefault(wanted, label)
         if self.use_mock:
             raw_payload = {"data": json.dumps({"mock": []})}
             candidates = [{"item_id": wanted or "target", "instance_id": 1, "instance_key": f"{wanted or 'target'}_1", "topic_key": "mock", "center_world": [1.2, 0.4, 2.8], "camsrc": [], "bboxes_by_camera": {}}]
@@ -198,13 +289,14 @@ class PickFlowMixin:
             raw_payload = {"data": raw}
             candidates = parse_world_position_payload(raw_payload)
         room_cameras = {} if self.use_mock else await self._capture_room_camera_images(state, self._item_info_room_camera_names(), timeout_sec=10.0)
-        matches = [candidate for candidate in candidates if candidate.get("item_id") == wanted]
+        matches = [candidate for candidate in candidates if candidate.get("item_id") in wanted_ids]
         if not matches:
             status = "TARGET_NOT_FOUND"
             updated_at = time.time()
-            snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="no_matching_instance", updated_at=updated_at)
+            snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="no_matching_instance", updated_at=updated_at, store_raw_payload=False)
             world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), updated_at=updated_at, update_source_node="find_node", update_reason="no_matching_instance")
-            return {"selected_instance": {}, "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message=f"No instance for {label}")}
+            missing = ", ".join(sorted(wanted_ids))
+            return {"selected_instance": {}, "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message=f"No instance for {label}; checked [{missing}]")}
 
         candidate_previews = self._prepare_candidate_previews(
             state=state,
@@ -217,7 +309,10 @@ class PickFlowMixin:
         for idx, candidate in enumerate(matches, 1):
             preview = candidate_previews.get(str(candidate.get("instance_key", "")), {})
             preview_note = f" preview={preview.get('preview_path', '')}" if preview else " preview=unavailable"
-            print(f"  [{idx}] {candidate.get('instance_key')} center_world={candidate.get('center_world', [])} camsrc={candidate.get('camsrc', [])}{preview_note}")
+            item_id = str(candidate.get("item_id", ""))
+            relation = "同種物品" if item_id == wanted else "相近不同物品"
+            object_label = label_lookup.get(item_id, item_id)
+            print(f"  [{idx}] {candidate.get('instance_key')} {relation}={object_label} center_world={candidate.get('center_world', [])} camsrc={candidate.get('camsrc', [])}{preview_note}")
         if self.use_mock and len(matches) == 1:
             selected_idx = 1
         else:
@@ -227,7 +322,7 @@ class PickFlowMixin:
                 if choice.strip().lower() == "no":
                     status = "TARGET_NOT_FOUND"
                     updated_at = time.time()
-                    snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="user_rejected", updated_at=updated_at)
+                    snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="user_rejected", updated_at=updated_at, store_raw_payload=False)
                     world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), updated_at=updated_at, update_source_node="find_node", update_reason="user_rejected")
                     return {"selected_instance": {}, "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message="User selected no target")}
                 try:
@@ -241,7 +336,7 @@ class PickFlowMixin:
         preview = candidate_previews.get(str(candidate.get("instance_key", "")), {})
         primary_camera = str(preview.get("primary_camera", ""))
         primary_bbox = preview.get("primary_bbox", []) or []
-        preview_ref = None
+        preview_ref = preview.get("preview_ref")
         preview_path = str(preview.get("preview_path", ""))
         if not primary_camera:
             primary_camera, primary_bbox = self._pick_primary_room_camera(candidate, room_cameras)
@@ -249,6 +344,8 @@ class PickFlowMixin:
             room_cameras[primary_camera]["bbox"] = primary_bbox
             if preview_path:
                 room_cameras[primary_camera]["preview_path"] = preview_path
+            if preview_ref:
+                room_cameras[primary_camera]["preview_ref"] = dump_model(preview_ref)
         selected = SelectedInstance(
             item_id=str(candidate.get("item_id", "")),
             instance_id=int(candidate.get("instance_id", -1)),
@@ -264,8 +361,11 @@ class PickFlowMixin:
         updated_at = time.time()
         snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), selected_instance_key=selected.instance_key, created_by_node="find_node", update_reason="db_created", updated_at=updated_at)
         world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), selected_instance_key=selected.instance_key, updated_at=updated_at, update_source_node="find_node", update_reason="db_created")
+        requested_updated = dict(requested)
+        selected_label = label_lookup.get(selected.item_id, selected.item_id)
+        requested_updated.update({"id": selected.item_id, "label": selected_label})
         status = "TARGET_SELECTED_FROM_WORLD_POSITION"
-        return {"selected_instance": dump_model(selected), "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, message=selected.instance_key)}
+        return {"requested_object": requested_updated, "selected_instance": dump_model(selected), "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, message=selected.instance_key)}
 
     def _route_find(self, state: CommanderState) -> str:
         return "get_item_info_no_sam3d_node" if state.get("selected_instance") else "end"
@@ -378,7 +478,7 @@ class PickFlowMixin:
         store = self._artifact_store(state)
         raw_payload = {"data": raw}
         candidates = parse_world_position_payload(raw_payload)
-        refreshed = self._find_selected_candidate(candidates, selected)
+        refreshed, match_info = self._find_selected_candidate(candidates, selected)
         if not refreshed:
             status = "TARGET_LOST_IN_WORLD_POSITION"
             world = WorldPositionSnapshot(candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), updated_at=time.time(), target_changed=False, update_source_node=source_node, update_reason="target_missing")
@@ -386,17 +486,36 @@ class PickFlowMixin:
         moved = self._center_world_distance_m(selected.get("center_world", []), refreshed.get("center_world", []))
         threshold = world_position_update_threshold_m()
         target_changed = moved > threshold
+        id_reassigned = bool(match_info.get("id_reassigned", False))
         updated_at = time.time()
-        update_reason = "target_moved" if target_changed else "unchanged"
+        update_reason = "target_moved" if target_changed else ("same_target_id_reassigned" if id_reassigned else "unchanged")
+        refreshed_key = str(refreshed.get("instance_key", selected.get("instance_key", "")))
         snapshot_id = ""
         if target_changed:
-            snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), created_by_node=source_node, target_changed=True, update_reason=update_reason, update_distance_m=moved, updated_at=updated_at)
-        world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), selected_instance_key=selected.get("instance_key", ""), updated_at=updated_at, target_changed=target_changed, update_source_node=source_node, update_distance_m=moved, update_reason=update_reason)
-        update: dict[str, Any] = {"world_position": dump_model(world), "current_status": "WORLD_POSITION_TARGET_MOVED" if target_changed else "WORLD_POSITION_UNCHANGED", "last_execution": self._execution(state, source_node, "WORLD_POSITION_TARGET_MOVED" if target_changed else "WORLD_POSITION_UNCHANGED", started)}
-        if target_changed:
+            snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), selected_instance_key=refreshed_key, created_by_node=source_node, target_changed=True, update_reason=update_reason, update_distance_m=moved, updated_at=updated_at)
+        world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), selected_instance_key=refreshed_key, updated_at=updated_at, target_changed=target_changed, update_source_node=source_node, update_distance_m=moved, update_reason=update_reason)
+        status = "WORLD_POSITION_TARGET_MOVED" if target_changed else "WORLD_POSITION_UNCHANGED"
+        update: dict[str, Any] = {"world_position": dump_model(world), "current_status": status, "last_execution": self._execution(state, source_node, status, started, message=update_reason)}
+        if target_changed or id_reassigned:
             selected_updated = dict(selected)
-            selected_updated.update({"center_world": refreshed.get("center_world", selected.get("center_world", [])), "camsrc": refreshed.get("camsrc", selected.get("camsrc", [])), "bboxes_by_camera": refreshed.get("bboxes_by_camera", selected.get("bboxes_by_camera", {}))})
-            update.update({"selected_instance": selected_updated, "item_info": {}, "navigation": {"current_goal_rank": 1, "current_goal_pose_index": 0, "goal_pose_db": {}, "nav_goal": {}, "result": {}}, "grasp_result": {}})
+            selected_updated.update({
+                "item_id": refreshed.get("item_id", selected.get("item_id", "")),
+                "instance_id": int(refreshed.get("instance_id", selected.get("instance_id", -1))),
+                "instance_key": refreshed_key,
+                "topic_key": refreshed.get("topic_key", selected.get("topic_key", "")),
+                "center_world": refreshed.get("center_world", selected.get("center_world", [])),
+                "camsrc": refreshed.get("camsrc", selected.get("camsrc", [])),
+                "bboxes_by_camera": refreshed.get("bboxes_by_camera", selected.get("bboxes_by_camera", {})),
+            })
+            update["selected_instance"] = selected_updated
+        if id_reassigned and not target_changed:
+            item_info_updated = dict(state.get("item_info", {}) or {})
+            if item_info_updated:
+                item_info_updated["target_instance_key"] = refreshed_key
+                item_info_updated["target_topic_key"] = refreshed.get("topic_key", item_info_updated.get("target_topic_key", ""))
+                update["item_info"] = item_info_updated
+        if target_changed:
+            update.update({"item_info": {}, "navigation": {"current_goal_rank": 1, "current_goal_pose_index": 0, "goal_pose_db": {}, "nav_goal": {}, "result": {}}, "grasp_result": {}})
         return update
 
     async def _update_item_info_1_node(self, state: CommanderState) -> Dict[str, Any]:
@@ -418,12 +537,44 @@ class PickFlowMixin:
         return "get_item_info_no_sam3d_node" if world.get("target_changed") else "car_grasp_node"
 
     @staticmethod
-    def _find_selected_candidate(candidates: list[dict[str, Any]], selected: dict[str, Any]) -> dict[str, Any] | None:
+    def _find_selected_candidate(candidates: list[dict[str, Any]], selected: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         key = str(selected.get("instance_key", ""))
         for candidate in candidates:
             if str(candidate.get("instance_key", "")) == key:
-                return candidate
-        return None
+                return candidate, {"match_mode": "exact", "id_reassigned": False, "distance_m": 0.0, "instance_id_delta": 0}
+
+        selected_item_id = str(selected.get("item_id", ""))
+        try:
+            selected_instance_id = int(selected.get("instance_id"))
+        except (TypeError, ValueError):
+            return None, {"match_mode": "missing"}
+
+        fallback_matches: list[tuple[float, int, dict[str, Any]]] = []
+        for candidate in candidates:
+            if str(candidate.get("item_id", "")) != selected_item_id:
+                continue
+            try:
+                candidate_instance_id = int(candidate.get("instance_id"))
+            except (TypeError, ValueError):
+                continue
+            instance_delta = abs(candidate_instance_id - selected_instance_id)
+            if instance_delta > 1:
+                continue
+            distance_m = PickFlowMixin._center_world_distance_m(selected.get("center_world", []), candidate.get("center_world", []))
+            if distance_m <= 0.03:
+                fallback_matches.append((distance_m, instance_delta, candidate))
+
+        if not fallback_matches:
+            return None, {"match_mode": "missing"}
+        distance_m, instance_delta, candidate = min(fallback_matches, key=lambda item: (item[0], item[1]))
+        return candidate, {
+            "match_mode": "nearby_same_item_id",
+            "id_reassigned": True,
+            "distance_m": distance_m,
+            "instance_id_delta": instance_delta,
+            "previous_instance_key": key,
+            "new_instance_key": str(candidate.get("instance_key", "")),
+        }
 
     async def _observe_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
@@ -609,19 +760,42 @@ class PickFlowMixin:
         from agents.grasp_agent import GraspAgent
         from ..camera import get_camera_rgbd_base64
 
-        object_id = (state.get("requested_object", {}) or {}).get("id", "")
+        selected_for_object = state.get("selected_instance", {}) or {}
+        object_id = selected_for_object.get("item_id") or (state.get("requested_object", {}) or {}).get("id", "")
         if not object_id:
             status = "GRASP_FAILED"
             return {"grasp_result": dump_model(GraspResult(success=False)), "current_status": status, "last_execution": self._execution(state, "car_grasp_node", status, started, success=False, error="missing object id")}
+        selected = state.get("selected_instance", {}) or {}
+        item_info = state.get("item_info", {}) or {}
+        target_center_world = selected.get("center_world") or item_info.get("center_world") or []
+        target_instance_key = str(selected.get("instance_key") or item_info.get("target_instance_key") or "")
         rgbd: dict[str, str] = {}
+        amcl_pose: dict[str, Any] | None = None
         if self.use_mock:
             rgbd = {"camera_name": "Camera_Car", "rgb_base64": "", "depth_base64": ""}
         else:
-            rgbd = await get_camera_rgbd_base64("Camera_Car", timeout_sec=15.0) or {}
+            from ..perception.room_topics import get_amcl_pose
+
+            rgbd, amcl_pose = await asyncio.gather(
+                get_camera_rgbd_base64("Camera_Car", timeout_sec=15.0),
+                get_amcl_pose(timeout_sec=5.0),
+            )
+            rgbd = rgbd or {}
             if not rgbd:
                 status = "GRASP_FAILED"
-                return {"grasp_result": dump_model(GraspResult(object_id=object_id, success=False)), "current_status": status, "last_execution": self._execution(state, "car_grasp_node", status, started, success=False, error="missing RGBD")}
-        params = {**(state.get("module_params", {}) or {}), "object_id": object_id, "camera_name": "Camera_Car", "rgb_base64": rgbd.get("rgb_base64", ""), "depth_base64": rgbd.get("depth_base64", "")}
+                return {"grasp_result": dump_model(GraspResult(object_id=object_id, target_instance_key=target_instance_key, success=False)), "current_status": status, "last_execution": self._execution(state, "car_grasp_node", status, started, success=False, error="missing RGBD")}
+        origin_x, origin_z = ros_map_origin_unity()
+        params = {
+            **(state.get("module_params", {}) or {}),
+            "object_id": object_id,
+            "camera_name": "Camera_Car",
+            "rgb_base64": rgbd.get("rgb_base64", ""),
+            "depth_base64": rgbd.get("depth_base64", ""),
+            "target_center_world": target_center_world,
+            "target_instance_key": target_instance_key,
+            "amcl_pose": amcl_pose or {},
+            "ros_map_origin_unity": {"x": origin_x, "z": origin_z},
+        }
         agent = GraspAgent(http_client=self.http_client, use_mock=self.use_mock)
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
@@ -633,7 +807,7 @@ class PickFlowMixin:
                     "grasp_raw_result",
                     payload,
                     created_by_node="car_grasp_node",
-                    metadata={"object_id": object_id, "camera_name": payload.get("camera_name", "Camera_Car")},
+                    metadata={"object_id": object_id, "target_instance_key": target_instance_key, "camera_name": payload.get("camera_name", "Camera_Car")},
                 )
             except Exception as exc:
                 logger.warning("[car_grasp_node] failed to save raw grasp result artifact: %s", exc)
@@ -641,6 +815,10 @@ class PickFlowMixin:
             object_id=payload.get("object_id") or object_id,
             camera_name=payload.get("camera_name", "Camera_Car"),
             success=success,
+            target_instance_key=str(payload.get("target_instance_key") or target_instance_key),
+            bbox_xyxy=payload.get("bbox_xyxy", []) if isinstance(payload.get("bbox_xyxy", []), list) else [],
+            detection_confidence=payload.get("detection_confidence"),
+            target_selection=payload.get("target_selection", {}) if isinstance(payload.get("target_selection", {}), dict) else {},
             grasp_confidence=payload.get("grasp_confidence"),
             num_candidate_grasps=payload.get("num_candidate_grasps"),
             num_valid_grasps=payload.get("num_valid_grasps"),
