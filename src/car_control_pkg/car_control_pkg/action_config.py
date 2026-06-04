@@ -9,7 +9,7 @@ vel, rotate_vel為自走車PID數值, 可於arduino程式碼查看
 vel = 12.0
 vel_slow = 4.5
 rotate_vel = 8.5
-rotate_vel_slow = 6.6
+rotate_vel_slow = 7.0
 rotate_vel_median = 7.5
 
 ACTION_MAPPINGS = {
