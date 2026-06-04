@@ -61,7 +61,7 @@ def generate_launch_description() -> LaunchDescription:
         name="lifecycle_manager_keepout_filter",
         output="screen",
         parameters=[
-            {"use_sim_time": False},
+            {"use_sim_time": True},
             {"autostart": True},
             {
                 "node_names": [

@@ -411,6 +411,40 @@ def _serialize_valid_grasp_pose_camera(
     return payload
 
 
+def _save_grasp_debug_npz(
+    *,
+    grasp_debug_npz: dict[str, np.ndarray],
+    object_id: str,
+    camera_name: str,
+    object_pc_camera: np.ndarray,
+    scene_pc_camera: np.ndarray,
+    object_reference_center_camera: np.ndarray,
+    gripper_midpoint_camera_xyz: np.ndarray,
+    valid_grasps_camera: np.ndarray,
+    valid_grasp_confidences: np.ndarray,
+    best_grasp_camera: np.ndarray,
+) -> Path:
+    output_dir = AGENT_ROOT / "data" / "debug_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "latest_grasp_debug.npz"
+
+    save_data: dict[str, object] = dict(grasp_debug_npz)
+    save_data.update(
+        {
+            "object_id": np.array(object_id),
+            "camera_name": np.array(camera_name),
+            "object_pc_camera": np.asarray(object_pc_camera, dtype=np.float32),
+            "scene_pc_camera": np.asarray(scene_pc_camera, dtype=np.float32),
+            "object_reference_center_camera": np.asarray(object_reference_center_camera, dtype=np.float32),
+            "gripper_midpoint_camera_xyz": np.asarray(gripper_midpoint_camera_xyz, dtype=np.float32),
+            "valid_grasps_camera": np.asarray(valid_grasps_camera, dtype=np.float32),
+            "valid_grasp_confidences": np.asarray(valid_grasp_confidences, dtype=np.float32),
+            "best_grasp_camera": np.asarray(best_grasp_camera, dtype=np.float32),
+        }
+    )
+    np.savez(str(output_path), **save_data)
+    return output_path
+
 def run_pipeline(
     config_path: Path,
     object_id: str,
@@ -564,9 +598,22 @@ def run_pipeline(
         )
     ]
     object_depth_values = object_pc_camera[:, 2]
+    resolved_camera_name = camera_name or str(cfg["camera"]["camera_name"])
+    _save_grasp_debug_npz(
+        grasp_debug_npz=grasp_debug_npz,
+        object_id=object_id,
+        camera_name=resolved_camera_name,
+        object_pc_camera=object_pc_camera,
+        scene_pc_camera=scene_pc_camera,
+        object_reference_center_camera=object_reference_center_camera,
+        gripper_midpoint_camera_xyz=gripper_midpoint_camera_xyz,
+        valid_grasps_camera=valid_grasps_camera,
+        valid_grasp_confidences=valid_grasp_confidences,
+        best_grasp_camera=best_grasp_camera,
+    )
     return {
         "object_id": object_id,
-        "camera_name": camera_name or str(cfg["camera"]["camera_name"]),
+        "camera_name": resolved_camera_name,
         "target_instance_key": target_instance_key,
         "bbox_xyxy": [bbox.x1, bbox.y1, bbox.x2, bbox.y2],
         "target_selection": target_selection,

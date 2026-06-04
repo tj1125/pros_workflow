@@ -96,7 +96,7 @@ arm_joint_state_wait_sec: 5.0
 arm_command_timeout_sec: 5.0
 arm_command_tolerance_rad: 0.08
 arm_republish_interval_sec: 0.02
-arm_waypoint_steps: 5
+arm_waypoint_steps: 3
 gripper_close_timeout_sec: 2.0
 arm_publisher_match_timeout_sec: 1.0
 # Last waypoint may stop early only when cube_z_distance is below this threshold.

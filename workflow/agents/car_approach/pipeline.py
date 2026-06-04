@@ -443,7 +443,7 @@ def _arm_motion_config(config: dict[str, object], config_path: Path) -> move_arm
         command_timeout_sec=float(config.get("arm_command_timeout_sec", 5.0)),
         command_tolerance_rad=float(config.get("arm_command_tolerance_rad", 0.08)),
         republish_interval_sec=float(config.get("arm_republish_interval_sec", 0.02)),
-        waypoint_steps=int(config.get("arm_waypoint_steps", 5)),
+        waypoint_steps=int(config.get("arm_waypoint_steps", 3)),
         reset_hold_sec=float(config.get("arm_reset_hold_sec", 3.0)),
         gripper_close_timeout_sec=float(config.get("gripper_close_timeout_sec", 2.0)),
         publisher_match_timeout_sec=float(config.get("arm_publisher_match_timeout_sec", 1.0)),

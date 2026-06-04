@@ -55,7 +55,7 @@ class ArmMotionConfig:
     command_timeout_sec: float = 5.0
     command_tolerance_rad: float = 0.08
     republish_interval_sec: float = 0.02
-    waypoint_steps: int = 5
+    waypoint_steps: int = 3
     reset_hold_sec: float = 3.0
     gripper_close_timeout_sec: float = 2.0
     publisher_match_timeout_sec: float = 1.0
