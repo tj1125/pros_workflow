@@ -49,6 +49,78 @@ def _dedupe_bboxes(bboxes: list[Any]) -> list[BoundingBox]:
     return result
 
 
+def _coerce_instance_id(value: Any) -> int | None:
+    try:
+        instance_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    return instance_id if instance_id >= 0 else None
+
+
+def _coerce_center_world(value: Any) -> np.ndarray | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return None
+    try:
+        return np.asarray([float(value[0]), float(value[1]), float(value[2])], dtype=np.float32)
+    except (TypeError, ValueError):
+        return None
+
+
+def world_position_instance_key(obj: WorldPositionObject) -> str:
+    return f"{obj.label}_{int(obj.item_id)}"
+
+
+def select_target_object(
+    objects: list[WorldPositionObject],
+    target_label: str,
+    *,
+    target_instance_id: Any = None,
+    target_instance_key: str = "",
+    target_topic_key: str = "",
+    target_center_world: Any = None,
+) -> WorldPositionObject:
+    normalized_target = normalize_label(target_label)
+    target_candidates = [obj for obj in objects if obj.label == normalized_target]
+    if not target_candidates:
+        available = sorted({obj.label for obj in objects})
+        raise RuntimeError(f"Target '{normalized_target}' not found in world_position_data. Available: {available}")
+
+    requested_key = str(target_instance_key or "").strip()
+    requested_topic = str(target_topic_key or "").strip()
+    requested_instance_id = _coerce_instance_id(target_instance_id)
+
+    if requested_key:
+        for obj in target_candidates:
+            keys = {
+                world_position_instance_key(obj),
+                f"{normalize_label(obj.topic_key)}_{int(obj.item_id)}",
+                f"{obj.topic_key}:{obj.label}:{int(obj.item_id)}",
+            }
+            if requested_key in keys:
+                return obj
+
+    if requested_instance_id is not None:
+        id_matches = [obj for obj in target_candidates if int(obj.item_id) == requested_instance_id]
+        if requested_topic:
+            for obj in id_matches:
+                if str(obj.topic_key) == requested_topic or normalize_label(obj.topic_key) == normalize_label(requested_topic):
+                    return obj
+        if id_matches:
+            return id_matches[0]
+
+    requested_center = _coerce_center_world(target_center_world)
+    if requested_center is not None:
+        nearest = min(
+            target_candidates,
+            key=lambda obj: float(np.linalg.norm(np.asarray(obj.center_world_unity, dtype=np.float32) - requested_center)),
+        )
+        nearest_distance = float(np.linalg.norm(np.asarray(nearest.center_world_unity, dtype=np.float32) - requested_center))
+        if nearest_distance <= 0.03:
+            return nearest
+
+    return target_candidates[0]
+
+
 def parse_world_position_data(payload: Any) -> list[WorldPositionObject]:
     data = payload
     if isinstance(data, dict) and "data" in data:

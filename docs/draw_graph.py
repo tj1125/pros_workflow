@@ -82,8 +82,8 @@ NODE_STYLES = {
 }
 
 CLUSTERS = [
-    ("cluster_chat", "chat", CHAT_NODES, "#f8fafc", "#cbd5e1"),
-    ("cluster_pick", "pick", PICK_NODES, "#ffffff", "#cbd5e1"),
+    ("cluster_chat", "chat", CHAT_NODES, "#e0f2fe", "#38bdf8"),
+    ("cluster_pick", "pick", PICK_NODES, "#dcfce7", "#22c55e"),
 ]
 
 
@@ -93,6 +93,10 @@ def _quote(value: str) -> str:
 
 def _attrs(values: dict[str, str]) -> str:
     return ", ".join(f"{key}={_quote(str(value))}" for key, value in values.items())
+
+
+def _cluster_label(label: str) -> str:
+    return f'<<B><FONT POINT-SIZE="18">{label}</FONT></B>>'
 
 
 def _node_line(node: str, *, indent: str = "  ") -> str:
@@ -116,18 +120,17 @@ def build_dot() -> str:
     for cluster_name, label, nodes, fillcolor, color in CLUSTERS:
         clustered.update(nodes)
         cluster_attrs = {
-            "label": label,
             "style": "rounded,filled",
             "fillcolor": fillcolor,
             "color": color,
-            "penwidth": "1.2",
+            "penwidth": "1.4",
             "fontname": "DejaVu Sans",
-            "fontsize": "12",
-            "margin": "12",
+            "margin": "14",
+            "labelloc": "t",
         }
         lines.extend([
             f"  subgraph {_quote(cluster_name)} {{",
-            f"    graph [{_attrs(cluster_attrs)}];",
+            f"    graph [label={_cluster_label(label)}, {_attrs(cluster_attrs)}];",
         ])
         for node in nodes:
             lines.append(_node_line(node, indent="    "))

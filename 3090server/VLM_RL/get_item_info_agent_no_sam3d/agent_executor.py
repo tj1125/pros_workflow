@@ -36,6 +36,10 @@ class GetItemInfoNoSam3dExecutor(AgentExecutor):
             scene_config_path = Path(body.get("scene_config", str(DEFAULT_SCENE_CONFIG)))
             selected_camera = str(body.get("selected_camera", "") or "").strip()
             world_position_data = body.get("world_position_data")
+            target_instance_id = body.get("target_instance_id")
+            target_instance_key = str(body.get("target_instance_key", "") or "").strip()
+            target_topic_key = str(body.get("target_topic_key", "") or "").strip()
+            target_center_world = body.get("center_world")
             debug_save = bool(body.get("debug_save", False))
 
             if not yolo_class:
@@ -84,6 +88,10 @@ class GetItemInfoNoSam3dExecutor(AgentExecutor):
                     image_paths_by_camera=image_paths_by_camera,
                     primary_camera_id=selected_camera or None,
                     world_position_data=world_position_data,
+                    target_instance_id=target_instance_id,
+                    target_instance_key=target_instance_key,
+                    target_topic_key=target_topic_key,
+                    target_center_world=target_center_world,
                 )
 
             await event_queue.enqueue_event(build_success(result, context, name="item_info"))

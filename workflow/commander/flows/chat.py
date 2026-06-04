@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from ..contracts import DecisionRecord, dump_model
 from ..state import CommanderState
-from ..object_catalog import load_graspable_objects, valid_object_index
+from ..object_catalog import load_graspable_objects
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,6 @@ class TaskClassification(BaseModel):
     intent: Literal["general_chat", "specific_task"] = Field(
         description="Route to general_chat for casual conversation, specific_task for picking tasks."
     )
-    selected_object_index: int = 0
     reasoning: str = ""
 
 
@@ -70,16 +69,15 @@ class ChatFlowMixin:
         human_reply = str(state.get("human_reply", "") or "").strip()
         objects = load_graspable_objects()
         try:
-            classification = self._mock_task_classification(human_reply, objects) if self.use_mock else await self._llm_task_classification(human_reply, objects)
+            classification = self._mock_task_classification(human_reply, objects) if self.use_mock else await self._llm_task_classification(human_reply)
         except Exception as exc:
             logger.error("[task_classification_node] classifier failed: %s", exc, exc_info=True)
             classification = self._mock_task_classification(human_reply, objects)
-        selected_index = valid_object_index(classification.selected_object_index, objects)
         status = "TASK_CLASSIFIED"
         return {
             "task_intent": classification.intent,
-            "selected_object_index": selected_index,
-            "decision": dump_model(DecisionRecord(reasoning=classification.reasoning, call_module="task_classification", module_params={"selected_object_index": selected_index})),
+            "selected_object_index": 0,
+            "decision": dump_model(DecisionRecord(reasoning=classification.reasoning, call_module="task_classification", module_params={"object_selection": "deferred_to_input_node"})),
             "current_status": status,
             "last_execution": self._execution(state, "task_classification_node", status, started, message=classification.reasoning),
         }
@@ -134,8 +132,7 @@ class ChatFlowMixin:
         return "goodbye_node" if self._is_goodbye_reply(state.get("human_reply", "")) else "task_classification_node"
 
     def _route_task_classification(self, state: CommanderState) -> Literal["ai_reply_node", "input_node"]:
-        selected = valid_object_index(state.get("selected_object_index", 0), load_graspable_objects())
-        return "input_node" if state.get("task_intent") == "specific_task" and selected else "ai_reply_node"
+        return "input_node" if state.get("task_intent") == "specific_task" else "ai_reply_node"
 
     @staticmethod
     def _is_goodbye_reply(reply: str) -> bool:
@@ -149,12 +146,7 @@ class ChatFlowMixin:
 
     @classmethod
     def _object_terms(cls, obj: dict[str, Any]) -> list[str]:
-        raw_terms: list[Any] = [obj.get("id", ""), obj.get("label", "")]
-        aliases = obj.get("aliases", [])
-        if isinstance(aliases, str):
-            raw_terms.append(aliases)
-        elif isinstance(aliases, list):
-            raw_terms.extend(aliases)
+        raw_terms: list[Any] = [obj.get("label", "")]
         terms: list[str] = []
         for term in raw_terms:
             normalized = cls._normalize_match_text(term)
@@ -187,31 +179,22 @@ class ChatFlowMixin:
         idx = self._infer_object_index(text, objects)
         has_task_intent = self._has_pick_task_intent(text)
         if not str(text or "").strip():
-            return TaskClassification(intent="general_chat", selected_object_index=0, reasoning="Empty message.")
-        if idx:
-            return TaskClassification(intent="specific_task", selected_object_index=idx, reasoning="Matched object alias.")
+            return TaskClassification(intent="general_chat", reasoning="Empty message.")
         if has_task_intent:
-            return TaskClassification(intent="general_chat", selected_object_index=0, reasoning="Detected pick/grasp intent, but no known object alias matched.")
-        return TaskClassification(intent="general_chat", selected_object_index=0, reasoning="No robot picking intent or known object alias.")
+            return TaskClassification(intent="specific_task", reasoning="Detected pick/grasp intent; object selection is deferred.")
+        if idx:
+            return TaskClassification(intent="specific_task", reasoning="Matched an object phrase; object selection is deferred.")
+        return TaskClassification(intent="general_chat", reasoning="No robot picking intent or task-like object phrase.")
 
-    async def _llm_task_classification(self, text: str, objects: list[dict[str, Any]]) -> TaskClassification:
+    async def _llm_task_classification(self, text: str) -> TaskClassification:
         if self._classifier_model is None:
-            return self._mock_task_classification(text, objects)
-        listing_lines = []
-        for idx, obj in enumerate(objects, 1):
-            aliases = obj.get("aliases", [])
-            alias_text = ", ".join(str(alias) for alias in aliases) if isinstance(aliases, list) else str(aliases or "")
-            listing_lines.append(f"{idx}. id={obj.get('id','')} label={obj.get('label','')} aliases=[{alias_text}]")
-        listing = "\n".join(listing_lines)
+            return self._mock_task_classification(text, load_graspable_objects())
         system = (
-            "You route a robot commander conversation. Return intent=specific_task only when the human asks "
-            "the robot to pick/grab/get/fetch/take/hold an object, or when they provide an object name as a task reply. "
-            "Match the human request against object id, label, and aliases, including cross-language synonyms. "
-            "selected_object_index must be the 1-based index from the object list. Return 0 only if no listed object is requested. "
-            "Examples: 'The human wants to pick up the brown teddy bear.' matches the brown teddy bear/doll object; "
-            "casual chat such as 'hello' is general_chat with selected_object_index=0."
+            "Route a robot commander conversation. Return intent=specific_task only when the human asks the robot "
+            "to pick/grab/get/fetch/take/hold something, or gives a direct object phrase as a task reply. "
+            "Do not identify, rank, or choose target objects here; object matching happens later."
         )
-        human = f"Objects:\n{listing}\n\nHuman message:\n{text}"
+        human = f"Human message:\n{text}"
         messages = [SystemMessage(content=system), HumanMessage(content=human)]
         result = await asyncio.get_event_loop().run_in_executor(None, self._classifier_model.invoke, messages)
         return result if isinstance(result, TaskClassification) else TaskClassification.model_validate(result)

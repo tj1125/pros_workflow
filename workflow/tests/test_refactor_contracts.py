@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import json
 import sqlite3
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -16,7 +17,7 @@ from agents.a2a_adapter import extract_result_payload, require_agent_card_modes
 from commander.brain import Brain, BrainDecision
 from commander.storage.artifact_store import ArtifactStore
 from commander.storage.session_store import SessionMemoryStore
-from commander.object_catalog import load_graspable_objects
+from commander.object_catalog import lexical_related_object_options, load_graspable_objects
 from commander.orchestrator import Orchestrator
 from commander.state import _append_history, create_initial_state
 from commander.web.app import _legacy_prompt_type
@@ -45,15 +46,12 @@ def test_task_classifier_matches_id_label_and_keeps_chat_general() -> None:
 
     apple = router._mock_task_classification("The human wants to pick up apple.", objects)
     assert apple.intent == "specific_task"
-    assert apple.selected_object_index == 1
 
     doll = router._mock_task_classification("請拿褐色小熊玩偶", objects)
     assert doll.intent == "specific_task"
-    assert doll.selected_object_index == 5
 
     chat = router._mock_task_classification("hello", objects)
     assert chat.intent == "general_chat"
-    assert chat.selected_object_index == 0
 
 
 def test_legacy_prompt_type_only_uses_detection_selection() -> None:
@@ -83,16 +81,34 @@ def test_item_info_uses_all_room1_upload_cameras() -> None:
 
 def test_related_object_options_use_llm_config_indices() -> None:
     objects = load_graspable_objects()
+    captured: dict[str, str] = {}
+
+    def _invoke(messages: list[object]) -> SimpleNamespace:
+        captured["prompt"] = "\n".join(str(getattr(message, "content", "")) for message in messages)
+        return SimpleNamespace(related_object_indices=[5, 6], reasoning="doll-like objects")
+
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.use_mock = False
-    orchestrator._related_object_model = SimpleNamespace(
-        invoke=lambda _messages: SimpleNamespace(related_object_indices=[5, 6], reasoning="doll-like objects")
-    )
+    orchestrator._related_object_model = SimpleNamespace(invoke=_invoke)
 
-    options = asyncio.run(orchestrator._resolve_related_object_options("pick doll", objects, 5))
+    options = asyncio.run(orchestrator._resolve_related_object_options("pick doll", objects))
 
     assert [option["id"] for option in options[:2]] == ["doll", "gaobear"]
     assert options[1]["match_reason"] == "llm_related_config_description"
+    assert "id=" not in captured["prompt"]
+    assert "aliases" not in captured["prompt"]
+
+
+def test_lexical_related_object_options_use_labels_only() -> None:
+    objects = load_graspable_objects()
+    doll = next(obj for obj in objects if obj.get("id") == "doll")
+    id_only_object = next(
+        obj for obj in objects
+        if str(obj.get("id", "")).casefold() not in str(obj.get("label", "")).casefold()
+    )
+
+    assert [option["id"] for option in lexical_related_object_options(str(doll["label"]), objects)] == ["doll"]
+    assert lexical_related_object_options(str(id_only_object["id"]), objects) == []
 
 
 def test_update_item_info_accepts_nearby_instance_id_reassignment() -> None:
@@ -121,6 +137,55 @@ def test_update_item_info_rejects_far_or_large_id_delta_candidates() -> None:
 
     assert refreshed is None
     assert match_info["match_mode"] == "missing"
+
+
+def test_item_info_no_sam3d_target_selection_respects_selected_instance() -> None:
+    server_root = Path(__file__).resolve().parents[2] / "3090server" / "VLM_RL"
+    if str(server_root) not in sys.path:
+        sys.path.insert(0, str(server_root))
+
+    from get_item_info_agent_no_sam3d.pipeline.steps.topic_input import (
+        parse_world_position_data,
+        select_target_object,
+        world_position_instance_key,
+    )
+
+    objects = parse_world_position_data(
+        {
+            "doll": [
+                {
+                    "item": "doll",
+                    "id": 237,
+                    "world_x": 1.07,
+                    "world_y": 0.51,
+                    "world_z": 7.58,
+                    "camsrc": ["Camera_Room1_12"],
+                    "bbox": [[10, 10, 40, 40]],
+                },
+                {
+                    "item": "doll",
+                    "id": 238,
+                    "world_x": 1.59,
+                    "world_y": 0.51,
+                    "world_z": 7.52,
+                    "camsrc": ["Camera_Room1_12"],
+                    "bbox": [[50, 10, 90, 40]],
+                },
+            ]
+        }
+    )
+
+    selected = select_target_object(
+        objects,
+        "doll",
+        target_instance_id=238,
+        target_instance_key="doll_238",
+        target_topic_key="doll",
+        target_center_world=[1.59, 0.51, 7.52],
+    )
+
+    assert selected.item_id == 238
+    assert world_position_instance_key(selected) == "doll_238"
 
 
 def test_artifact_store_json_text_bytes_and_db_rows() -> None:
@@ -417,8 +482,7 @@ def test_langgraph_route_matrix() -> None:
             cases = [
                 ("human_reply.goodbye", orchestrator._route_human_reply({"human_reply": "bye"}), "goodbye_node"),
                 ("human_reply.continue", orchestrator._route_human_reply({"human_reply": "hello"}), "task_classification_node"),
-                ("task_classification.specific_selected", orchestrator._route_task_classification({"task_intent": "specific_task", "selected_object_index": 1}), "input_node"),
-                ("task_classification.specific_missing", orchestrator._route_task_classification({"task_intent": "specific_task", "selected_object_index": 0}), "ai_reply_node"),
+                ("task_classification.specific", orchestrator._route_task_classification({"task_intent": "specific_task", "selected_object_index": 0}), "input_node"),
                 ("task_classification.general", orchestrator._route_task_classification({"task_intent": "general_chat", "selected_object_index": 0}), "ai_reply_node"),
                 ("find.selected", orchestrator._route_find({"selected_instance": {"instance_key": "apple_1"}}), "get_item_info_no_sam3d_node"),
                 ("find.empty", orchestrator._route_find({"selected_instance": {}}), "end"),
@@ -462,8 +526,10 @@ def run_all() -> None:
     test_legacy_prompt_type_only_uses_detection_selection()
     test_item_info_uses_all_room1_upload_cameras()
     test_related_object_options_use_llm_config_indices()
+    test_lexical_related_object_options_use_labels_only()
     test_update_item_info_accepts_nearby_instance_id_reassignment()
     test_update_item_info_rejects_far_or_large_id_delta_candidates()
+    test_item_info_no_sam3d_target_selection_respects_selected_instance()
     test_artifact_store_json_text_bytes_and_db_rows()
     test_artifact_store_register_file_and_clear_artifacts()
     test_world_snapshot_raw_and_goal_pose_are_sqlite_rows()
@@ -480,4 +546,4 @@ def run_all() -> None:
 
 if __name__ == "__main__":
     run_all()
-    print(json.dumps({"ok": True, "tests": 19, "run_id": uuid.uuid4().hex}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "tests": 21, "run_id": uuid.uuid4().hex}, ensure_ascii=False))

@@ -29,78 +29,6 @@ class BoundingBox:
     y2: float
 
 
-def _save_debug_npz(
-    *,
-    object_id: str,
-    camera_name: str,
-    depth_camera_x_mirrored: bool,
-    image_bgr: np.ndarray,
-    depth_m: np.ndarray,
-    intrinsic_matrix: np.ndarray,
-    bbox: BoundingBox,
-    seg_mask_bool: np.ndarray,
-    object_pc_camera: np.ndarray,
-    object_pc_local: np.ndarray,
-    scene_pc_camera: np.ndarray,
-    scene_pc_local: np.ndarray | None,
-    object_reference_center_camera: np.ndarray,
-    gripper_midpoint_camera_xyz: np.ndarray,
-    valid_grasps_local: np.ndarray,
-    valid_grasps_camera: np.ndarray,
-    valid_grasp_confidences: np.ndarray,
-    valid_grasp_distance_to_gripper_midpoint_m: np.ndarray,
-    best_grasp_local: np.ndarray,
-    best_grasp_camera: np.ndarray,
-    grasp_debug_npz: dict[str, np.ndarray],
-) -> Path:
-    output_dir = AGENT_ROOT / "data" / "debug_outputs"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "latest_grasp_debug.npz"
-    gripper_midpoint_camera_xyz = np.asarray(gripper_midpoint_camera_xyz, dtype=float)
-    object_reference_center_camera = np.asarray(object_reference_center_camera, dtype=float)
-    gripper_midpoint_local_xyz = gripper_midpoint_camera_xyz - object_reference_center_camera
-    save_data = dict(grasp_debug_npz)
-    save_data.update(
-        {
-            "object_id": np.array(object_id),
-            "camera_name": np.array(camera_name),
-            "depth_camera_x_mirrored": np.array(bool(depth_camera_x_mirrored)),
-            "image_bgr": np.asarray(image_bgr, dtype=np.uint8),
-            "depth_m": np.asarray(depth_m, dtype=np.float32),
-            "intrinsic_matrix": np.asarray(intrinsic_matrix, dtype=float),
-            "bbox_xyxy": np.array([bbox.x1, bbox.y1, bbox.x2, bbox.y2], dtype=float),
-            "seg_mask_bool": np.asarray(seg_mask_bool, dtype=bool),
-            "object_pc_camera": np.asarray(object_pc_camera, dtype=float),
-            "object_pc_local": np.asarray(object_pc_local, dtype=float),
-            "scene_pc_camera": np.asarray(scene_pc_camera, dtype=float),
-            "scene_pc_local": (
-                np.asarray(scene_pc_local, dtype=float)
-                if scene_pc_local is not None
-                else np.zeros((0, 3), dtype=float)
-            ),
-            "object_reference_center_camera": object_reference_center_camera,
-            "gripper_midpoint_camera_xyz": gripper_midpoint_camera_xyz,
-            "gripper_midpoint_local_xyz": gripper_midpoint_local_xyz,
-            "gripper_midpoint_coordinate_frame_camera": np.array("camera"),
-            "gripper_midpoint_coordinate_frame_local": np.array("object_local"),
-            "valid_grasps_local": np.asarray(valid_grasps_local, dtype=float),
-            "valid_grasps_camera": np.asarray(valid_grasps_camera, dtype=float),
-            "valid_grasp_confidences": np.asarray(valid_grasp_confidences, dtype=float),
-            "valid_grasp_distance_to_gripper_midpoint_m": np.asarray(
-                valid_grasp_distance_to_gripper_midpoint_m,
-                dtype=float,
-            ),
-            "best_grasp_local": np.asarray(best_grasp_local, dtype=float),
-            "best_grasp_camera": np.asarray(best_grasp_camera, dtype=float),
-            "valid_grasp_coordinate_frame_local": np.array("object_local"),
-            "valid_grasp_coordinate_frame_camera": np.array("camera"),
-            "best_grasp_coordinate_frame_local": np.array("object_local"),
-            "best_grasp_coordinate_frame_camera": np.array("camera"),
-        }
-    )
-    np.savez(str(output_path), **save_data)
-    return output_path
-
 
 def _load_intrinsic_matrix(path: Path) -> np.ndarray:
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -635,30 +563,6 @@ def run_pipeline(
             start=1,
         )
     ]
-    debug_npz_path = _save_debug_npz(
-        object_id=object_id,
-        camera_name=camera_name or str(cfg["camera"]["camera_name"]),
-        depth_camera_x_mirrored=mirror_depth_camera_x,
-        image_bgr=image_bgr,
-        depth_m=depth_m,
-        intrinsic_matrix=intrinsic_matrix,
-        bbox=bbox,
-        seg_mask_bool=seg_mask_bool,
-        object_pc_camera=object_pc_camera,
-        object_pc_local=object_pc_local,
-        scene_pc_camera=scene_pc_camera,
-        scene_pc_local=scene_pc_local,
-        object_reference_center_camera=object_reference_center_camera,
-        gripper_midpoint_camera_xyz=gripper_midpoint_camera_xyz,
-        valid_grasps_local=valid_grasps_local,
-        valid_grasps_camera=valid_grasps_camera,
-        valid_grasp_confidences=valid_grasp_confidences,
-        valid_grasp_distance_to_gripper_midpoint_m=valid_grasp_distance_to_gripper_midpoint_m,
-        best_grasp_local=best_grasp_local,
-        best_grasp_camera=best_grasp_camera,
-        grasp_debug_npz=grasp_debug_npz,
-    )
-
     object_depth_values = object_pc_camera[:, 2]
     return {
         "object_id": object_id,
@@ -685,7 +589,6 @@ def run_pipeline(
         },
         "num_object_points": int(len(object_pc_camera)),
         "num_scene_points": int(len(scene_pc_camera)),
-        "grasp_debug_npz_path": str(debug_npz_path),
         "best_grasp_pose_camera": _serialize_grasp_pose_camera(best_grasp_camera),
         "valid_grasp_poses_camera": valid_grasp_poses_camera,
         **grasp_stats,

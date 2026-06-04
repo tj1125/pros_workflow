@@ -35,6 +35,7 @@ from ..nav.goal_builder import (
     target_center_world_to_map_xy,
 )
 from ..object_catalog import lexical_related_object_options, load_graspable_objects, object_option, valid_object_index
+from ..prompts import RELATED_OBJECT_SELECTION_HUMAN_TEMPLATE, RELATED_OBJECT_SELECTION_SYSTEM_PROMPT
 from ..runtime_settings import (
     default_initial_pose,
     nav_runner_payload_defaults,
@@ -57,11 +58,9 @@ class PickFlowMixin:
         self,
         task_text: str,
         objects: list[dict[str, Any]],
-        selected_index: int,
+        selected_index: int = 0,
     ) -> list[dict[str, Any]]:
         selected_index = valid_object_index(selected_index, objects)
-        if not selected_index:
-            return []
         if self.use_mock or getattr(self, "_related_object_model", None) is None:
             return lexical_related_object_options(task_text, objects, selected_index=selected_index)
 
@@ -69,22 +68,12 @@ class PickFlowMixin:
 
         listing_lines = []
         for idx, obj in enumerate(objects, 1):
-            aliases = obj.get("aliases", [])
-            alias_text = ", ".join(str(alias) for alias in aliases) if isinstance(aliases, list) else str(aliases or "")
-            listing_lines.append(f"{idx}. id={obj.get('id','')} label={obj.get('label','')} aliases=[{alias_text}]")
+            listing_lines.append(f"{idx}. label={obj.get('label','')}")
         listing = "\n".join(listing_lines)
-        selected = objects[selected_index - 1]
-        system = (
-            "You choose which configured graspable objects should be considered for a robot pick request. "
-            "Use only the provided object config text: id, label, and aliases. Always include the selected object index. "
-            "Also include other configured objects when their descriptions are plausibly related, ambiguous, visually similar, "
-            "or could be intended by the same user wording. Do not invent objects or categories; return 1-based indices only."
-        )
-        human = (
-            f"Objects from config:\n{listing}\n\n"
-            f"Selected object index: {selected_index} (id={selected.get('id','')}, label={selected.get('label','')})\n"
-            f"Human request: {task_text}\n\n"
-            "Return related_object_indices ordered by relevance."
+        system = RELATED_OBJECT_SELECTION_SYSTEM_PROMPT
+        human = RELATED_OBJECT_SELECTION_HUMAN_TEMPLATE.format(
+            listing=listing,
+            task_text=task_text,
         )
         try:
             result = await asyncio.get_event_loop().run_in_executor(
@@ -98,7 +87,8 @@ class PickFlowMixin:
             return lexical_related_object_options(task_text, objects, selected_index=selected_index)
 
         ordered_indices: list[int] = []
-        for raw_idx in [selected_index, *raw_indices]:
+        seeded_indices = [selected_index] if selected_index else []
+        for raw_idx in [*seeded_indices, *raw_indices]:
             idx = valid_object_index(raw_idx, objects)
             if idx and idx not in ordered_indices:
                 ordered_indices.append(idx)
@@ -113,20 +103,16 @@ class PickFlowMixin:
         started = time.time()
         objects = load_graspable_objects()
         existing_request = str(state.get("human_reply", "") or "").strip()
-        selected_index = valid_object_index(state.get("selected_object_index", 0), objects)
-        if not selected_index:
+        task_text = existing_request
+        if not task_text:
             status = "TASK_OBJECT_NOT_SELECTED"
             return {
                 "task_intent": "general_chat",
-                "ai_reply": "我還沒有判斷出要抓哪一個物件，請直接說出目標物名稱。",
+                "ai_reply": "我還沒有收到要抓取的目標描述，請直接說出目標物名稱。",
                 "current_status": status,
-                "last_execution": self._execution(state, "input_node", status, started, success=False, message="selected_object_index missing"),
+                "last_execution": self._execution(state, "input_node", status, started, success=False, message="empty task text"),
             }
-        selected = objects[selected_index - 1]
-        label = str(selected.get("label") or selected.get("id") or "目標物")
-        object_id = str(selected.get("id") or label)
-        normalized_task = f"抓取{label}"
-        task_text = existing_request or normalized_task
+        normalized_task = task_text
         task = TaskContext(
             task_id=uuid.uuid4().hex,
             original_user_request=task_text,
@@ -135,11 +121,14 @@ class PickFlowMixin:
             success_criteria=["目標物已被抓取", "手臂與夾爪收尾完成", "任務完成後返回 home"],
             done_policy="When approach_result.success is true and arm_result.success is true, the task can be marked DONE and routed home.",
         )
-        candidate_options = await self._resolve_related_object_options(task_text, objects, selected_index)
-        if not any(option.get("id") == object_id for option in candidate_options):
-            candidate_options.insert(0, object_option(selected, selected_index, reason="selected_object", score=100))
+        status = "INPUT_RECEIVED"
+        print(f"\n任務已確認：{normalized_task}")
+        candidate_options = await self._resolve_related_object_options(task_text, objects)
         candidate_ids = [str(option.get("id", "")) for option in candidate_options if str(option.get("id", "")).strip()]
         candidate_labels = {str(option.get("id", "")): str(option.get("label", option.get("id", ""))) for option in candidate_options if str(option.get("id", "")).strip()}
+        primary_option = candidate_options[0] if candidate_options else {}
+        object_id = str(primary_option.get("id", ""))
+        label = str(primary_option.get("label", object_id or task_text))
         requested = RequestedObject(
             id=object_id,
             label=label,
@@ -147,11 +136,11 @@ class PickFlowMixin:
             candidate_labels=candidate_labels,
             candidate_match_notes=candidate_options,
         )
-        status = "INPUT_RECEIVED"
-        print(f"\n任務已確認：{normalized_task}")
-        if len(candidate_ids) > 1:
-            related_text = "、".join(f"{candidate_labels[obj_id]}({obj_id})" for obj_id in candidate_ids[1:])
-            print(f"也會檢查相近描述的不同物品：{related_text}")
+        if candidate_ids:
+            related_text = "、".join(f"{candidate_labels[obj_id]}({obj_id})" for obj_id in candidate_ids)
+            print(f"LLM 依 objects.yaml 找到相關物品候選：{related_text}")
+        else:
+            print("LLM 沒有從 objects.yaml 找到相關物品候選。")
         return {
             "task": dump_model(task),
             "requested_object": dump_model(requested),
@@ -426,6 +415,41 @@ class PickFlowMixin:
         if not success or not payload:
             status = "ITEM_INFO_NO_SAM3D_FAILED"
             return {"item_info": dump_model(ItemInfoResult()), "current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="empty item-info result")}
+        payload_target = payload.get("target_object", {}) if isinstance(payload.get("target_object", {}), dict) else {}
+        payload_instance_key = str(payload.get("target_instance_key") or payload_target.get("instance_key") or "")
+        selected_instance_key = str(selected.get("instance_key", "") or "")
+        payload_instance_id = payload.get("target_instance_id", payload_target.get("instance_id", payload_target.get("id")))
+        selected_instance_id = selected.get("instance_id")
+        try:
+            payload_instance_id_int = int(payload_instance_id)
+            selected_instance_id_int = int(selected_instance_id)
+        except (TypeError, ValueError):
+            payload_instance_id_int = None
+            selected_instance_id_int = None
+        if not payload_instance_key and payload_instance_id_int is not None and selected.get("item_id"):
+            payload_instance_key = f"{selected.get('item_id')}_{payload_instance_id_int}"
+        instance_key_mismatch = bool(payload_instance_key and selected_instance_key and payload_instance_key != selected_instance_key)
+        instance_id_mismatch = bool(
+            payload_instance_id_int is not None
+            and selected_instance_id_int is not None
+            and payload_instance_id_int != selected_instance_id_int
+        )
+        if instance_key_mismatch or instance_id_mismatch:
+            status = "ITEM_INFO_NO_SAM3D_FAILED"
+            message = f"item-info target mismatch: selected={selected_instance_key or selected_instance_id}, got={payload_instance_key or payload_instance_id}"
+            return {
+                "item_info": dump_model(ItemInfoResult()),
+                "current_status": status,
+                "last_execution": self._execution(
+                    state,
+                    "get_item_info_no_sam3d_node",
+                    status,
+                    started,
+                    success=False,
+                    error=message,
+                ),
+            }
+
         group_ranking = payload.get("group_ranking", []) or []
         item_info = ItemInfoResult(
             center_world=[float(v) for v in payload.get("center_world", selected.get("center_world", []))],
@@ -800,17 +824,6 @@ class PickFlowMixin:
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}
-        raw_result_ref = None
-        if payload:
-            try:
-                raw_result_ref = self._artifact_store(state).save_json(
-                    "grasp_raw_result",
-                    payload,
-                    created_by_node="car_grasp_node",
-                    metadata={"object_id": object_id, "target_instance_key": target_instance_key, "camera_name": payload.get("camera_name", "Camera_Car")},
-                )
-            except Exception as exc:
-                logger.warning("[car_grasp_node] failed to save raw grasp result artifact: %s", exc)
         grasp = GraspResult(
             object_id=payload.get("object_id") or object_id,
             camera_name=payload.get("camera_name", "Camera_Car"),
@@ -825,7 +838,6 @@ class PickFlowMixin:
             best_grasp_pose_camera=payload.get("best_grasp_pose_camera", {}),
             valid_grasp_poses_camera=payload.get("valid_grasp_poses_camera", []) if isinstance(payload.get("valid_grasp_poses_camera", []), list) else [],
             object_reference_center_camera=payload.get("object_reference_center_camera", []),
-            raw_result_ref=raw_result_ref,
             a2a_task_id=str(result.get("a2a_task_id", "")),
         )
         status = "GRASP_READY" if success else "GRASP_FAILED"

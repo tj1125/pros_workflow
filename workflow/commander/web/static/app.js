@@ -56,7 +56,7 @@ let sessionId = "";
       scrollTimelineToBottom();
       const update = event.state_update || {};
       if (event.node_name === "task_classification_node") {
-        task.textContent = `intent=${update.task_intent || ""}, selected=${update.selected_object_index || 0}`;
+        task.textContent = update.task_intent || "";
       }
       if (event.node_name === "input_node" && update.task) {
         task.textContent = update.task.normalized_task || update.task.original_user_request || "";

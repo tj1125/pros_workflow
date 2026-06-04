@@ -34,9 +34,7 @@ def _progress_message_from_update(
         intent = str(state_update.get("task_intent", "") or "")
         if intent == "general_chat":
             return "已判斷為一般聊天。接下來產生聊天回覆。"
-        selected = int(state_update.get("selected_object_index", 0) or 0)
-        selected_text = f"目標編號 {selected}" if selected else "目標物尚未完全確認"
-        return f"已判斷為機器人抓取任務，{selected_text}。接下來確認任務目標。"
+        return "已判斷為機器人抓取任務。接下來確認任務文字，並由 LLM 從 objects.yaml 搜尋相關物件候選。"
 
     if node_name == "chat_memory_node":
         return "已更新聊天記憶。這一輪一般聊天已完成。"

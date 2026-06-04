@@ -32,12 +32,7 @@ def normalize_match_text(value: Any) -> str:
 
 
 def object_terms(obj: dict[str, Any]) -> list[str]:
-    raw_terms: list[Any] = [obj.get("id", ""), obj.get("label", "")]
-    aliases = obj.get("aliases", [])
-    if isinstance(aliases, str):
-        raw_terms.append(aliases)
-    elif isinstance(aliases, list):
-        raw_terms.extend(aliases)
+    raw_terms: list[Any] = [obj.get("label", "")]
     terms: list[str] = []
     for term in raw_terms:
         normalized = normalize_match_text(term)

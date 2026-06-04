@@ -33,3 +33,20 @@ Respond with exactly one raw JSON object:
 {"reasoning":"short reason","call_module":"major_nav_node|grasp_agent|car_approach_agent|DONE","module_params":{}}
 Do not wrap the JSON in markdown fences. Do not use "decision".
 """
+
+# ---------------------------------------------------------------------------
+# Related object selection: choose object ids from objects.yaml only
+# ---------------------------------------------------------------------------
+
+RELATED_OBJECT_SELECTION_SYSTEM_PROMPT = (
+    "Select all related graspable objects from the provided labels only. "
+    "Return 1-based indices ordered by label relevance. Do not invent categories."
+)
+
+RELATED_OBJECT_SELECTION_HUMAN_TEMPLATE = """Objects from config:
+{listing}
+
+Human request: {task_text}
+
+Return related_object_indices ordered by relevance."""
+

@@ -21,6 +21,8 @@ from get_item_info_agent_no_sam3d.pipeline.steps.topic_input import (
     canonical_camera_name,
     normalize_label,
     parse_world_position_data,
+    select_target_object,
+    world_position_instance_key,
 )
 from get_item_info_agent_no_sam3d.pipeline.types import BoundingBox, TopicObservation, WorldPositionObject
 from tool.grasp.graspgen import (
@@ -801,6 +803,10 @@ def run_pipeline(
     image_paths_by_camera: dict[str, Path],
     world_position_data: Any,
     primary_camera_id: str | None = None,
+    target_instance_id: Any = None,
+    target_instance_key: str = "",
+    target_topic_key: str = "",
+    target_center_world: Any = None,
 ) -> dict:
     pipeline_start = time.perf_counter()
     topic_parse_s = 0.0
@@ -819,11 +825,14 @@ def run_pipeline(
     topic_parse_start = time.perf_counter()
     objects = parse_world_position_data(world_position_data)
     topic_parse_s = float(time.perf_counter() - topic_parse_start)
-    target_candidates = [obj for obj in objects if obj.label == target_label]
-    if not target_candidates:
-        available = sorted({obj.label for obj in objects})
-        raise RuntimeError(f"Target '{target_label}' not found in world_position_data. Available: {available}")
-    target_obj = target_candidates[0]
+    target_obj = select_target_object(
+        objects,
+        target_label,
+        target_instance_id=target_instance_id,
+        target_instance_key=target_instance_key,
+        target_topic_key=target_topic_key,
+        target_center_world=target_center_world,
+    )
 
     selected_primary = _normalize_selected_camera(primary_camera_id)
     if (
@@ -865,6 +874,8 @@ def run_pipeline(
         report = {
             "label": obj.label,
             "id": obj.item_id,
+            "instance_id": obj.item_id,
+            "instance_key": world_position_instance_key(obj),
             "topic_key": obj.topic_key,
             "center_world_unity": size_report["center_world_unity"],
             "bbox_observations": {
@@ -1086,9 +1097,14 @@ def run_pipeline(
         "group_ranking": goal_data["group_ranking"],
         "goal_pose_path": str(goal_output),
         "primary_camera_id": selected_primary,
+        "target_instance_key": world_position_instance_key(target_obj),
+        "target_topic_key": target_obj.topic_key,
         "target_object": {
             "label": target_obj.label,
             "id": target_obj.item_id,
+            "instance_id": target_obj.item_id,
+            "instance_key": world_position_instance_key(target_obj),
+            "topic_key": target_obj.topic_key,
             "height_depth_m": None,
             "height_bbox_cap_m": None,
             "height_geometry_base_m": float(target_report["selected_height_before_scale_m"]),

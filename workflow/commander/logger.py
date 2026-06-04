@@ -15,8 +15,8 @@ class TraceLogger:
     Each line contains timing, agent identity, reasoning, and success status.
     """
 
-    def __init__(self, log_file: str = "trace_logger.jsonl"):
-        self.log_file = log_file
+    def __init__(self, log_file: str = ""):
+        self.log_file = str(log_file or "").strip()
 
     def log_trace(
         self,
@@ -32,7 +32,9 @@ class TraceLogger:
         state_refs: Optional[Dict[str, Any]] = None,
         extra_info: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Append one complete trace entry to the JSONL log file."""
+        """Append one complete trace entry to the JSONL log file when enabled."""
+        if not self.log_file:
+            return
         entry = {
             # ISO 8601 timestamp for easy parsing
             "iso_timestamp": datetime.now(timezone.utc).isoformat(),

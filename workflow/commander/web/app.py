@@ -90,7 +90,7 @@ def _resolve_mock_mode(requested: bool | None) -> bool:
 
 
 def _trace_log_file(log_file: str | None = None) -> str:
-    return log_file or os.getenv("TRACE_LOG_FILE", "logs/trace_logger.jsonl")
+    return log_file or os.getenv("TRACE_LOG_FILE", "")
 
 
 def _thread_config(session: WebSession) -> Dict[str, Any]:
@@ -181,7 +181,7 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 
 def _preview_url(session_id: str, preview_path: Any) -> str:
     if isinstance(preview_path, dict):
-        preview_path = preview_path.get("artifact_path", "")
+        preview_path = preview_path.get("artifact_path") or preview_path.get("path") or ""
     preview_text = str(preview_path or "").strip()
     if not preview_text:
         return ""
@@ -202,70 +202,148 @@ def _dedupe_preview_paths(preview_paths: list[Any]) -> list[str]:
     return deduped
 
 
-def _candidate_preview_paths(detection: Dict[str, Any]) -> list[str]:
-    preview_paths: list[Any] = [detection.get("preview_path", "")]
+def _session_logs_dir(session_id: str) -> Path:
+    return (_REPO_ROOT / "logs" / "sessions" / session_id).resolve()
+
+
+def _candidate_preview_dirs(session_id: str) -> list[Path]:
+    session_dir = _session_logs_dir(session_id)
+    return [
+        (session_dir / "artifacts" / "find_candidates").resolve(),
+        (session_dir / "find_candidates").resolve(),
+        (_REPO_ROOT / "logs" / "find_candidates").resolve(),
+    ]
+
+
+def _relative_preview_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(_REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _parse_candidate_preview_path(path: Path, fallback_index: int = 0) -> dict[str, Any]:
+    stem = path.stem
+    parts = stem.split("__")
+    index = fallback_index
+    if len(parts) >= 3 and parts[0].isdigit():
+        index = int(parts[0])
+        instance_key = parts[1]
+        camera_name = "__".join(parts[2:])
+    elif len(parts) >= 2 and parts[0].isdigit():
+        index = int(parts[0])
+        instance_key = parts[1]
+        camera_name = "__".join(parts[2:]) if len(parts) > 2 else ""
+    elif len(parts) >= 2:
+        instance_key = parts[0]
+        camera_name = "__".join(parts[1:])
+    else:
+        instance_key = stem
+        camera_name = ""
+    return {
+        "index": index,
+        "instance_key": instance_key,
+        "camera_name": camera_name,
+        "exact_instance_file": "__" not in stem,
+    }
+
+
+def _candidate_file_sort_key(path: Path) -> tuple[int, float, str]:
+    prefix = path.stem.split("__", 1)[0]
+    return (int(prefix) if prefix.isdigit() else 9999, path.stat().st_mtime, path.name)
+
+
+def _matching_candidate_preview_paths(session_id: str, instance_key: str) -> list[Path]:
+    matches: list[Path] = []
+    seen: set[Path] = set()
+    for directory in _candidate_preview_dirs(session_id):
+        if not directory.exists():
+            continue
+        for suffix in _ALLOWED_PREVIEW_SUFFIXES:
+            exact = (directory / f"{instance_key}{suffix}").resolve()
+            if exact.exists() and exact.is_file() and exact not in seen:
+                seen.add(exact)
+                matches.append(exact)
+        for path in directory.iterdir():
+            if not path.is_file() or path.suffix.lower() not in _ALLOWED_PREVIEW_SUFFIXES:
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            if _parse_candidate_preview_path(path).get("instance_key") != instance_key:
+                continue
+            seen.add(resolved)
+            matches.append(resolved)
+    return sorted(matches, key=_candidate_file_sort_key)
+
+
+def _candidate_preview_paths(detection: Dict[str, Any], session_id: str = "") -> list[str]:
+    preview_paths: list[Any] = [detection.get("preview_path", ""), detection.get("preview_ref", "")]
 
     raw_preview_paths = detection.get("preview_paths", [])
     if isinstance(raw_preview_paths, (list, tuple)) and raw_preview_paths:
-        preview_paths.append(raw_preview_paths[0])
+        preview_paths.extend(raw_preview_paths)
     elif raw_preview_paths:
         preview_paths.append(raw_preview_paths)
 
+    raw_preview_refs = detection.get("preview_refs", [])
+    if isinstance(raw_preview_refs, (list, tuple)) and raw_preview_refs:
+        preview_paths.extend(raw_preview_refs)
+    elif raw_preview_refs:
+        preview_paths.append(raw_preview_refs)
+
     instance_key = str(detection.get("instance_key", "") or "").strip()
-    if instance_key:
-        find_candidates_dir = (_REPO_ROOT / "logs" / "find_candidates").resolve()
-        for suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-            candidate = find_candidates_dir / f"{instance_key}{suffix}"
-            if not candidate.exists() or not candidate.is_file():
-                continue
-            try:
-                preview_paths.append(str(candidate.relative_to(_REPO_ROOT)))
-            except ValueError:
-                preview_paths.append(str(candidate))
-            break
+    if instance_key and session_id:
+        for path in _matching_candidate_preview_paths(session_id, instance_key):
+            preview_paths.append(_relative_preview_path(path))
 
     deduped = _dedupe_preview_paths(preview_paths)
     return deduped[:1]
 
 
 def _find_candidate_image_items(session_id: str) -> list[Dict[str, Any]]:
-    find_candidates_dir = (_REPO_ROOT / "logs" / "find_candidates").resolve()
-    if not find_candidates_dir.exists():
-        return []
-
-    grouped: dict[str, tuple[Path, str, bool, float]] = {}
-    for path in find_candidates_dir.iterdir():
-        if not path.is_file() or path.suffix.lower() not in _ALLOWED_PREVIEW_SUFFIXES:
+    grouped: dict[str, tuple[Path, str, bool, float, int, int]] = {}
+    for priority, directory in enumerate(_candidate_preview_dirs(session_id)):
+        if not directory.exists():
             continue
-        stem = path.stem
-        exact_instance_file = "__" not in stem
-        instance_key, camera_name = (stem.split("__", 1) + [""])[:2] if "__" in stem else (stem, "")
-        mtime = path.stat().st_mtime
-        current = grouped.get(instance_key)
-        if (
-            current is None
-            or (exact_instance_file and not current[2])
-            or (exact_instance_file == current[2] and mtime > current[3])
-        ):
-            grouped[instance_key] = (path, camera_name, exact_instance_file, mtime)
+        for path in directory.iterdir():
+            if not path.is_file() or path.suffix.lower() not in _ALLOWED_PREVIEW_SUFFIXES:
+                continue
+            parsed = _parse_candidate_preview_path(path)
+            instance_key = str(parsed.get("instance_key", "") or path.stem)
+            camera_name = str(parsed.get("camera_name", "") or "")
+            exact_instance_file = bool(parsed.get("exact_instance_file", False))
+            index = int(parsed.get("index", 0) or 0)
+            mtime = path.stat().st_mtime
+            current = grouped.get(instance_key)
+            if (
+                current is None
+                or priority < current[5]
+                or (priority == current[5] and exact_instance_file and not current[2])
+                or (priority == current[5] and exact_instance_file == current[2] and mtime > current[3])
+            ):
+                grouped[instance_key] = (path, camera_name, exact_instance_file, mtime, index, priority)
 
     items: list[Dict[str, Any]] = []
-    for instance_key, (path, camera_name, _exact_instance_file, mtime) in sorted(
-        grouped.items(),
-        key=lambda item: item[1][3],
-        reverse=True,
+    for fallback_index, (instance_key, (path, camera_name, _exact_instance_file, mtime, index, _priority)) in enumerate(
+        sorted(
+            grouped.items(),
+            key=lambda item: (item[1][4] if item[1][4] else 9999, -item[1][3], item[0]),
+        ),
+        start=1,
     ):
-        try:
-            relative_path = str(path.relative_to(_REPO_ROOT))
-        except ValueError:
-            relative_path = str(path)
+        relative_path = _relative_preview_path(path)
         stat = path.stat()
         items.append(
             {
+                "id": index or fallback_index,
                 "name": path.name,
                 "path": relative_path,
+                "preview_path": relative_path,
+                "preview_paths": [relative_path],
                 "preview_url": _preview_url(session_id, relative_path),
                 "instance_key": instance_key,
+                "label": instance_key,
                 "camera": camera_name,
                 "mtime": mtime,
                 "size": stat.st_size,
@@ -274,7 +352,7 @@ def _find_candidate_image_items(session_id: str) -> list[Dict[str, Any]]:
     return items
 
 
-def _resolve_preview_file(session: WebSession | None, raw_path: str) -> Path:
+def _resolve_preview_file(session: WebSession | None, raw_path: str, *, session_id: str = "") -> Path:
     preview_text = str(raw_path or "").strip()
     if not preview_text:
         raise HTTPException(status_code=404, detail="Preview path is empty.")
@@ -282,10 +360,13 @@ def _resolve_preview_file(session: WebSession | None, raw_path: str) -> Path:
     input_path = Path(preview_text)
     logs_dir = (_REPO_ROOT / "logs").resolve()
     find_candidates_dir = (logs_dir / "find_candidates").resolve()
-    session_dir = _resolved_session_dir(session) if session is not None else None
+    session_dir = _resolved_session_dir(session) if session is not None else (_session_logs_dir(session_id) if session_id else None)
     allowed_roots = [find_candidates_dir]
     if session_dir is not None:
-        allowed_roots.append(session_dir)
+        allowed_roots.extend([
+            (session_dir / "artifacts").resolve(),
+            (session_dir / "find_candidates").resolve(),
+        ])
 
     candidates: list[Path] = []
     if input_path.is_absolute():
@@ -296,9 +377,20 @@ def _resolve_preview_file(session: WebSession | None, raw_path: str) -> Path:
             (logs_dir / input_path).resolve(),
         ])
         if session_dir is not None:
-            candidates.append((session_dir / input_path).resolve())
+            candidates.extend([
+                (session_dir / input_path).resolve(),
+                (session_dir / "artifacts" / input_path).resolve(),
+                (session_dir / "artifacts" / "find_candidates" / input_path.name).resolve(),
+                (session_dir / "find_candidates" / input_path.name).resolve(),
+            ])
+        if session_id:
+            candidates.extend((directory / input_path.name).resolve() for directory in _candidate_preview_dirs(session_id))
 
+    seen: set[Path] = set()
     for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
         if candidate.suffix.lower() not in _ALLOWED_PREVIEW_SUFFIXES:
             continue
         if not candidate.exists() or not candidate.is_file():
@@ -321,7 +413,7 @@ def _attach_preview_urls_to_interrupt(
         for detection in value.get("detections", []) or []:
             if not isinstance(detection, dict):
                 continue
-            preview_paths = _candidate_preview_paths(detection)
+            preview_paths = _candidate_preview_paths(detection, session.session_id)
             if preview_paths:
                 detection["preview_paths"] = preview_paths
                 detection["preview_path"] = detection.get("preview_path") or preview_paths[0]
@@ -444,41 +536,33 @@ def _legacy_prompt_type(prompt: str) -> str:
 
 
 def _legacy_detection_items(session_id: str) -> list[Dict[str, Any]]:
-    session_candidates_dir = (_REPO_ROOT / "logs" / "sessions" / session_id / "find_candidates").resolve()
-    legacy_candidates_dir = (_REPO_ROOT / "logs" / "find_candidates").resolve()
-    candidate_dirs = [session_candidates_dir] if session_candidates_dir.exists() else [legacy_candidates_dir]
-
     now = time.time()
     recent_files: list[Path] = []
-    for directory in candidate_dirs:
+    seen: set[Path] = set()
+    for directory in _candidate_preview_dirs(session_id):
         if not directory.exists():
             continue
+        directory_files: list[Path] = []
         for path in directory.iterdir():
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
             if not path.is_file() or path.suffix.lower() not in _ALLOWED_PREVIEW_SUFFIXES:
                 continue
             if now - path.stat().st_mtime <= 120.0:
-                recent_files.append(path)
+                seen.add(resolved)
+                directory_files.append(path)
+        if directory_files:
+            recent_files.extend(directory_files)
+            break
 
     items: list[Dict[str, Any]] = []
-    def sort_key(path: Path) -> tuple[int, float, str]:
-        prefix = path.stem.split("__", 1)[0]
-        return (int(prefix) if prefix.isdigit() else 9999, path.stat().st_mtime, path.name)
-
-    for fallback_index, path in enumerate(sorted(recent_files, key=sort_key), start=1):
-        stem = path.stem
-        parts = stem.split("__")
-        if parts and parts[0].isdigit():
-            index = int(parts[0])
-            instance_key = parts[1] if len(parts) > 1 else stem
-            camera_name = parts[2] if len(parts) > 2 else ""
-        else:
-            index = fallback_index
-            instance_key = parts[0] if parts else stem
-            camera_name = parts[1] if len(parts) > 1 else ""
-        try:
-            relative_path = str(path.relative_to(_REPO_ROOT))
-        except ValueError:
-            relative_path = str(path)
+    for fallback_index, path in enumerate(sorted(recent_files, key=_candidate_file_sort_key), start=1):
+        parsed = _parse_candidate_preview_path(path, fallback_index=fallback_index)
+        index = int(parsed.get("index", 0) or fallback_index)
+        instance_key = str(parsed.get("instance_key", "") or path.stem)
+        camera_name = str(parsed.get("camera_name", "") or "")
+        relative_path = _relative_preview_path(path)
         items.append(
             {
                 "id": index,
@@ -817,7 +901,7 @@ def create_app() -> Any:
     @app.get("/api/sessions/{session_id}/preview")
     async def preview(session_id: str, path: str) -> FileResponse:
         session = ACTIVE_SESSIONS.get(session_id)
-        preview_file = _resolve_preview_file(session, path)
+        preview_file = _resolve_preview_file(session, path, session_id=session_id)
         return FileResponse(preview_file)
 
     @app.get("/api/sessions/{session_id}/find-candidates")

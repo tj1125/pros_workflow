@@ -159,12 +159,13 @@ class SessionMemoryStore:
             if not payload:
                 continue
             raw_ref = payload.get("raw_result_ref") or {}
+            output_refs = {"raw_result_ref": raw_ref} if raw_ref else {}
             self.artifact_store.record_agent_run(
                 step=step,
                 node_name=node_name,
                 agent_name=agent_name,
                 success=bool(payload.get("success", True)),
-                output_refs={"raw_result_ref": raw_ref},
+                output_refs=output_refs,
                 raw_result_artifact_id=artifact_ref_id(raw_ref),
                 summary=self._compact_agent_summary(result_key, payload),
             )

@@ -3,18 +3,18 @@
 
 graspable_objects:
   - id: apple
-    label: 紅色蘋果
+    label: Red Apple
   - id: box
-    label: 褐色紙箱
+    label: Brown Cardboard Box
   - id: coffee
-    label: 白色咖啡外帶杯
+    label: White Takeaway Coffee Cup
   - id: cup
-    label: 咖啡色羊圖案馬克杯
+    label: Brown Mug with Sheep Illustration
   - id: doll
-    label: 褐色小熊玩偶
+    label: Brown Teddy Bear Doll
   - id: gaobear
-    label: 抱著愛心的黑色高雄熊
+    label: Black Kaohsiung Bear Doll Holding a Heart
   - id: hpb
-    label: HP黑色水壺
+    label: Black HP Water Bottle
   - id: xbox
-    label: 黑色Xbox電動搖桿
+    label: Black Xbox Controller
