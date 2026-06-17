@@ -40,6 +40,11 @@ PICK_NODES = [
 
 NODES = ["START", *CHAT_NODES, *PICK_NODES, "END"]
 
+A2A_NODES = {
+    "get_item_info_no_sam3d_node",
+    "car_grasp_node",
+}
+
 EDGES = [
     ("START", "greeting_node", "", ""),
     ("greeting_node", "human_reply_node", "", ""),
@@ -79,6 +84,7 @@ EDGES = [
 NODE_STYLES = {
     "START": {"shape": "oval", "fillcolor": "#dcfce7", "color": "#16a34a", "label": "START", "penwidth": "1.8"},
     "END": {"shape": "oval", "fillcolor": "#fee2e2", "color": "#dc2626", "label": "END", "penwidth": "1.8"},
+    **{node: {"fillcolor": "#fef3c7", "color": "#f59e0b"} for node in A2A_NODES},
 }
 
 CLUSTERS = [

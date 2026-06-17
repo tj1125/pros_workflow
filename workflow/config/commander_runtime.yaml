@@ -13,8 +13,8 @@ nav_runner:
 
 initial_pose:
   frame_id: map
-  x: -5.9734
-  y: 4.6721
+  x: 0.0
+  y: 0.0
   z: 0.0
   qx: 0.0
   qy: 0.0

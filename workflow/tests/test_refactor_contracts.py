@@ -414,9 +414,35 @@ def test_brain_prompt_keeps_human_context_compact_and_omits_retry_count() -> Non
     assert "Available ranked goal poses" not in prompt
 
 
-def test_decision_safety_guard_forces_major_nav_after_failed_attempt_when_next_rank_exists() -> None:
+def test_brain_owns_decision_and_history_surfaces_failure_phase() -> None:
     orchestrator = Orchestrator.__new__(Orchestrator)
-    state = create_initial_state("ctx-guard")
+
+    # The hardcoded grasp->major_nav override has been removed: the VLM owns the
+    # grasp-vs-switch-viewpoint decision and judges it from the execution history.
+    assert not hasattr(orchestrator, "_apply_decision_safety_guard")
+    assert not hasattr(orchestrator, "_should_force_major_nav_after_failed_attempt")
+
+    # A before-the-car-moves approach failure is surfaced with its phase and the
+    # viewpoint rank, so the VLM can decide to switch viewpoints by itself.
+    state = create_initial_state("ctx-history")
+    state["navigation"]["current_goal_rank"] = 2
+    state["approach_result"] = {"success": False, "phase": "no_feasible_sample", "message": "no feasible grasp"}
+    _, approach_facts = orchestrator._memory_summary(state)
+    assert approach_facts["at_rank"] == 2
+    assert approach_facts["approach_phase"] == "no_feasible_sample"
+    assert approach_facts["approach_success"] is False
+
+    # A grasp service that returns no pose is likewise recorded as a failure.
+    grasp_state = create_initial_state("ctx-history-grasp")
+    grasp_state["grasp_result"] = {"success": False}
+    _, grasp_facts = orchestrator._memory_summary(grasp_state)
+    assert grasp_facts["at_rank"] == 1
+    assert grasp_facts["grasp_success"] is False
+
+
+def test_pre_move_failure_backstop_switches_after_two_failures() -> None:
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    state = create_initial_state("ctx-backstop")
     state["navigation"]["current_goal_rank"] = 1
     state["item_info"] = {
         "center_world": [2.0, 0.5, 4.0],
@@ -425,16 +451,40 @@ def test_decision_safety_guard_forces_major_nav_after_failed_attempt_when_next_r
             {"rank": 2, "best_goal_pose_ros_map": [1.5, 0.5]},
         ],
     }
-    state["approach_result"] = {"success": False, "phase": "grasp_verification_failed"}
-    decision = BrainDecision(reasoning="path clear", call_module="grasp_agent", module_params={"object_id": "doll"})
+    grasp_decision = BrainDecision(reasoning="looks graspable", call_module="car_approach_agent", module_params={"object_id": "doll"})
 
-    guarded = orchestrator._apply_decision_safety_guard(state, decision)
-    assert guarded.call_module == "major_nav_node"
-    assert guarded.module_params["overridden_from"] == "grasp_agent"
+    # One before-the-car-moves failure at this viewpoint: the VLM still owns it.
+    state["history_buffer"] = [
+        {"action": "car_approach_agent", "key_facts": {"at_rank": 1, "approach_success": False, "approach_phase": "no_feasible_sample"}},
+    ]
+    assert orchestrator._consecutive_pre_move_failures_at_viewpoint(state) == 1
+    assert orchestrator._apply_pre_move_backstop(state, grasp_decision).call_module == "car_approach_agent"
 
+    # Two consecutive before-the-car-moves failures: the backstop forces a switch.
+    state["history_buffer"] = [
+        {"action": "car_approach_agent", "key_facts": {"at_rank": 1, "approach_success": False, "approach_phase": "no_grasp"}},
+        {"action": "car_approach_agent", "key_facts": {"at_rank": 1, "grasp_success": False}},
+    ]
+    assert orchestrator._consecutive_pre_move_failures_at_viewpoint(state) == 2
+    switched = orchestrator._apply_pre_move_backstop(state, grasp_decision)
+    assert switched.call_module == "major_nav_node"
+    assert switched.module_params["backstop_overridden_from"] == "car_approach_agent"
+
+    # A failure AFTER the car moved breaks the streak and does not count.
+    state["history_buffer"] = [
+        {"action": "car_approach_agent", "key_facts": {"at_rank": 1, "approach_success": False, "approach_phase": "no_feasible_sample"}},
+        {"action": "car_approach_agent", "key_facts": {"at_rank": 1, "approach_success": False, "approach_phase": "arm_sequence_failed"}},
+    ]
+    assert orchestrator._consecutive_pre_move_failures_at_viewpoint(state) == 0
+    assert orchestrator._apply_pre_move_backstop(state, grasp_decision).call_module == "car_approach_agent"
+
+    # No remaining viewpoint to fall back to: the VLM's choice stands.
     state["item_info"]["group_ranking"] = [{"rank": 1, "best_goal_pose_ros_map": [1.0, 0.0]}]
-    unguarded = orchestrator._apply_decision_safety_guard(state, decision)
-    assert unguarded.call_module == "grasp_agent"
+    state["history_buffer"] = [
+        {"action": "car_approach_agent", "key_facts": {"at_rank": 1, "grasp_success": False}},
+        {"action": "car_approach_agent", "key_facts": {"at_rank": 1, "grasp_success": False}},
+    ]
+    assert orchestrator._apply_pre_move_backstop(state, grasp_decision).call_module == "car_approach_agent"
 
 
 def test_langgraph_general_chat_returns_to_input_without_replaying_reply() -> None:
@@ -539,11 +589,12 @@ def run_all() -> None:
     test_a2a_card_validation_accepts_required_modes()
     test_a2a_adapter_accepts_direct_message_and_task_artifact()
     test_brain_prompt_keeps_human_context_compact_and_omits_retry_count()
-    test_decision_safety_guard_forces_major_nav_after_failed_attempt_when_next_rank_exists()
+    test_brain_owns_decision_and_history_surfaces_failure_phase()
+    test_pre_move_failure_backstop_switches_after_two_failures()
     test_langgraph_general_chat_returns_to_input_without_replaying_reply()
     test_langgraph_route_matrix()
 
 
 if __name__ == "__main__":
     run_all()
-    print(json.dumps({"ok": True, "tests": 21, "run_id": uuid.uuid4().hex}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "tests": 22, "run_id": uuid.uuid4().hex}, ensure_ascii=False))

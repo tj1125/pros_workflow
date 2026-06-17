@@ -48,6 +48,30 @@ from ..storage.artifact_store import ArtifactStore
 
 logger = logging.getLogger(__name__)
 
+# Approach phases the car_approach pipeline emits BEFORE it ever drives to the
+# base pose (see agents/car_approach/pipeline.py + base_sampler.py). A grasp that
+# dies at one of these is a property of the viewpoint geometry, not execution, so
+# repeating it from the same viewpoint fails the same way. Used only by the
+# backstop in _reason_node — the VLM still owns the normal decision.
+_PRE_MOVE_APPROACH_PHASES = frozenset(
+    {
+        "base_sampling_exception",
+        "base_sampling_failed",
+        "no_selected_solution",
+        "missing_selected_goal_pose",
+        "pointcloud_failed",
+        "no_grasp",
+        "no_sample",
+        "no_feasible_sample",
+        "no_ros_map_feasible_sample",
+        "missing_amcl_for_ros_map",
+    }
+)
+
+# Consecutive before-the-car-moves failures at one viewpoint before the backstop
+# forces a viewpoint switch regardless of the VLM's choice.
+_PRE_MOVE_FAILURE_BACKSTOP_LIMIT = 2
+
 
 class PickFlowMixin:
     @staticmethod
@@ -643,45 +667,71 @@ class PickFlowMixin:
                 "current_status": status,
                 "last_execution": self._execution(state, "reason_node", status, started, success=False, error=str(exc)),
             }
-        decision = self._apply_decision_safety_guard(state, out["prediction"])
+        # The VLM owns the grasp-vs-switch-viewpoint decision. It judges the live
+        # image plus the execution history (Action History + Last grasp/approach
+        # phase, both scoped to the current viewpoint) and applies the policy in
+        # commander/prompts.py:SYSTEM_PROMPT. The only Python override is a narrow
+        # backstop for repeated before-the-car-moves failures at one viewpoint.
+        decision = self._apply_pre_move_backstop(state, out["prediction"])
         record = DecisionRecord(reasoning=decision.reasoning, call_module=decision.call_module, module_params=decision.module_params, latency_sec=float(out["latency"]), model=out.get("model", ""))
         status = "REASONED"
         return {"decision": dump_model(record), "module_params": decision.module_params, "current_status": status, "last_execution": self._execution(state, "reason_node", status, started, message=decision.reasoning)}
 
-
-    def _apply_decision_safety_guard(self, state: CommanderState, decision: BrainDecision) -> BrainDecision:
+    def _apply_pre_move_backstop(self, state: CommanderState, decision: BrainDecision) -> BrainDecision:
+        """Backstop only. The VLM is asked to switch viewpoints after the first
+        before-the-car-moves failure (SYSTEM_PROMPT). If it instead keeps trying to
+        grasp and the current viewpoint has already produced
+        ``_PRE_MOVE_FAILURE_BACKSTOP_LIMIT`` consecutive such failures, force a
+        switch — provided another ranked viewpoint exists. Every other case
+        (post-movement failures, feasible-looking views) is left to the VLM."""
         if decision.call_module not in {"grasp_agent", "car_approach_agent"}:
             return decision
-        should_override, reason = self._should_force_major_nav_after_failed_attempt(state)
-        if not should_override:
+        failures = self._consecutive_pre_move_failures_at_viewpoint(state)
+        if failures < _PRE_MOVE_FAILURE_BACKSTOP_LIMIT:
             return decision
+        current_rank = int((state.get("navigation", {}) or {}).get("current_goal_rank", 1) or 1)
+        _, next_goal_error = self._goal_pose_for_rank(state.get("item_info", {}) or {}, current_rank + 1)
+        if next_goal_error:
+            return decision  # no alternative viewpoint to fall back to
         params = dict(decision.module_params or {})
-        params["overridden_from"] = decision.call_module
-        params["override_reason"] = reason
+        params["backstop_overridden_from"] = decision.call_module
+        params["backstop_pre_move_failures"] = failures
         return BrainDecision(
-            reasoning=f"Safety override: {reason}",
+            reasoning=(
+                f"Backstop: {failures} consecutive before-the-car-moves grasp failures at viewpoint "
+                f"rank {current_rank}; switching viewpoint instead of retrying."
+            ),
             call_module="major_nav_node",
             module_params=params,
         )
 
-    def _should_force_major_nav_after_failed_attempt(self, state: CommanderState) -> tuple[bool, str]:
-        navigation = state.get("navigation", {}) or {}
-        item_info = state.get("item_info", {}) or {}
-        current_rank = int(navigation.get("current_goal_rank", 1) or 1)
-        _, next_goal_error = self._goal_pose_for_rank(item_info, current_rank + 1)
-        if next_goal_error:
-            return False, ""
+    def _consecutive_pre_move_failures_at_viewpoint(self, state: CommanderState) -> int:
+        """Count trailing grasp/approach attempts at the CURRENT viewpoint that
+        failed before the car moved. Reads the execution history that the brain
+        also sees; ``at_rank`` in each attempt's key_facts scopes it to one
+        viewpoint, and the streak breaks on any non-pre-move attempt outcome."""
+        current_rank = int((state.get("navigation", {}) or {}).get("current_goal_rank", 1) or 1)
+        count = 0
+        for entry in reversed(list(state.get("history_buffer", []) or [])):
+            facts = entry.get("key_facts") or {}
+            if "at_rank" not in facts:
+                continue  # not a grasp/approach attempt (nav/other node)
+            if int(facts.get("at_rank", -1) or -1) != current_rank:
+                break  # reached an earlier viewpoint's attempts
+            if self._attempt_facts_are_pre_move_failure(facts):
+                count += 1
+            else:
+                break  # a success or post-movement failure breaks the streak
+        return count
 
-        approach = state.get("approach_result", {}) or {}
-        if approach and approach.get("success") is False:
-            phase = str(approach.get("phase", "") or approach.get("status_code", "") or "approach_failed")
-            return True, f"latest approach attempt failed at rank {current_rank} ({phase}); use next ranked goal pose before repeating grasp"
+    @staticmethod
+    def _attempt_facts_are_pre_move_failure(facts: Dict[str, Any]) -> bool:
+        if facts.get("grasp_success") is False:
+            return True  # grasp service returned no pose — before the car moves
+        if facts.get("approach_success") is False:
+            return str(facts.get("approach_phase", "") or "") in _PRE_MOVE_APPROACH_PHASES
+        return False
 
-        grasp = state.get("grasp_result", {}) or {}
-        if grasp and grasp.get("success") is False:
-            return True, f"latest grasp attempt failed at rank {current_rank}; use next ranked goal pose before repeating grasp"
-
-        return False, ""
 
     def _route_decision(self, state: CommanderState) -> Literal["major_nav_node", "car_grasp_node", "end"]:
         module = (state.get("decision", {}) or {}).get("call_module", "")
@@ -704,7 +754,10 @@ class PickFlowMixin:
             return {"task_complete": True, "current_status": status, "last_execution": self._execution(state, "major_nav_node", status, started, success=False, message=err)}
         nav_state = NavigationState(**{**navigation, "current_goal_rank": next_rank, "current_goal_pose_index": 0, "nav_goal": self._nav_goal_from_pose(goal), "nav_goal_pose_source": "major_nav", "nav_move_source": "major_nav", "force_initialpose": False})
         status = "MAJOR_NAV_CONTEXT_READY"
-        return {"navigation": dump_model(nav_state), "current_status": status, "last_execution": self._execution(state, "major_nav_node", status, started, message=f"rank {next_rank}")}
+        # New viewpoint: drop the previous viewpoint's grasp/approach results so the
+        # brain's "Last grasp/approach" reflects only the current viewpoint. The full
+        # per-viewpoint history still lives in history_buffer and the session DB.
+        return {"navigation": dump_model(nav_state), "grasp_result": {}, "approach_result": {}, "current_status": status, "last_execution": self._execution(state, "major_nav_node", status, started, message=f"rank {next_rank}")}
 
     def _route_major_nav(self, state: CommanderState) -> Literal["nav_move_node", "nav_home_node"]:
         return "nav_home_node" if state.get("task_complete") or state.get("current_status") == "MAJOR_NAV_EXHAUSTED" else "nav_move_node"
@@ -885,12 +938,18 @@ class PickFlowMixin:
 
     def _memory_summary(self, state: CommanderState) -> tuple[str, dict[str, Any]]:
         execution = state.get("last_execution", {}) or {}
+        current_rank = int((state.get("navigation", {}) or {}).get("current_goal_rank", 1) or 1)
         if state.get("approach_result"):
             payload = state["approach_result"]
-            return payload.get("message") or payload.get("status_code", "approach complete"), {"approach_success": payload.get("success"), "arm_success": bool((payload.get("arm_result") or {}).get("success", False))}
+            # at_rank + approach_phase let the brain tell which viewpoint failed and
+            # whether the failure was before the car moved (e.g. no_feasible_sample)
+            # or after (e.g. arm_sequence_failed) — see SYSTEM_PROMPT.
+            return payload.get("message") or payload.get("status_code", "approach complete"), {"at_rank": current_rank, "approach_success": payload.get("success"), "approach_phase": payload.get("phase", ""), "arm_success": bool((payload.get("arm_result") or {}).get("success", False))}
         if state.get("grasp_result"):
             payload = state["grasp_result"]
-            return "grasp result ready" if payload.get("success") else "grasp failed", {"grasp_confidence": payload.get("grasp_confidence"), "pose_ready": bool(payload.get("best_grasp_pose_camera"))}
+            # grasp_success=false here means the grasp service returned no pose — a
+            # before-the-car-moves failure that condemns the current viewpoint.
+            return "grasp result ready" if payload.get("success") else "grasp failed", {"at_rank": current_rank, "grasp_success": payload.get("success"), "grasp_confidence": payload.get("grasp_confidence"), "pose_ready": bool(payload.get("best_grasp_pose_camera"))}
         nav = (state.get("navigation", {}) or {}).get("result", {}) or {}
         if nav:
             return nav.get("message", "navigation updated"), {"arrived": nav.get("arrived"), "plan_ready": nav.get("plan_ready")}

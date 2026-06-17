@@ -58,6 +58,7 @@ class ArmMotionConfig:
     waypoint_steps: int = 3
     reset_hold_sec: float = 3.0
     gripper_close_timeout_sec: float = 2.0
+    gripper_settle_hold_sec: float = 1.0
     publisher_match_timeout_sec: float = 1.0
     cube_z_distance_topic: str = DEFAULT_CUBE_Z_DISTANCE_TOPIC
     cube_z_distance_final_waypoint_stop_threshold_m: float = 0.025
@@ -223,6 +224,7 @@ def execute_grasp_joint_sequence(goal_joint_rad: Sequence[Any], *, config: ArmMo
     target_positions[gripper_index] = coord.deg_to_rad(config.gripper_open_deg)
     close_positions = list(target_positions)
     close_positions[gripper_index] = coord.deg_to_rad(config.gripper_close_deg)
+    settle_hold_sec = float(getattr(config, "gripper_settle_hold_sec", 1.0))
 
     owns_rclpy = False
     node = None
@@ -356,7 +358,22 @@ def execute_grasp_joint_sequence(goal_joint_rad: Sequence[Any], *, config: ArmMo
         phases.append(open_result)
         _debug_joint_phase_result("joint sequence waypoint 結果：open_gripper", open_result)
 
-        if bool(phases[-1].get("success", False)):
+        if bool(open_result.get("success", False)):
+            debug_stage("move_arm", "joint sequence 階段：open_gripper_settle，開爪後維持夾爪等待", hold_sec=settle_hold_sec)
+            open_settle_result = _publish_joint_positions_for_duration(
+                rclpy,
+                node,
+                publisher,
+                get_latest_positions,
+                open_positions,
+                phase="open_gripper_settle",
+                duration_sec=settle_hold_sec,
+                republish_interval_sec=config.republish_interval_sec,
+                ignored_joint_indices=(),
+            )
+            phases.append(open_settle_result)
+            _debug_joint_phase_result("joint sequence command 結果：open_gripper_settle", open_settle_result)
+
             waypoints = _linear_interpolated_joint_positions(
                 open_positions,
                 target_positions,
@@ -422,6 +439,20 @@ def execute_grasp_joint_sequence(goal_joint_rad: Sequence[Any], *, config: ArmMo
             )
             phases.append(close_result)
             _debug_joint_phase_result("joint sequence command 結果：close_gripper", close_result)
+            debug_stage("move_arm", "joint sequence 階段：close_gripper_settle，夾取後維持夾爪等待", hold_sec=settle_hold_sec)
+            close_settle_result = _publish_joint_positions_for_duration(
+                rclpy,
+                node,
+                publisher,
+                get_latest_positions,
+                close_positions,
+                phase="close_gripper_settle",
+                duration_sec=settle_hold_sec,
+                republish_interval_sec=config.republish_interval_sec,
+                ignored_joint_indices=ignored_joint_state_indices,
+            )
+            phases.append(close_settle_result)
+            _debug_joint_phase_result("joint sequence command 結果：close_gripper_settle", close_settle_result)
         else:
             debug_stage("move_arm", "joint sequence 階段失敗：move_to_target 沒完成，略過 close_gripper")
             phases.append({"success": False, "skipped": True, "phase": "close_gripper", "message": "target move failed"})
@@ -474,7 +505,7 @@ def execute_grasp_joint_sequence(goal_joint_rad: Sequence[Any], *, config: ArmMo
         "success": success,
         "phase": "done" if success else str((failed_phase or {}).get("phase", "failed")),
         "message": "arm open/move/grasp/return_reset/cube_z_verify sequence finished" if success else str((failed_phase or {}).get("message", "arm sequence failed")),
-        "execution_sequence": ["recompute_ik", "open_gripper_confirm_60deg", "move_to_target", "close_gripper_confirm_not_60deg", "return_reset", "verify_cube_z_distance_after_reset"],
+        "execution_sequence": ["recompute_ik", "open_gripper_confirm_60deg", "open_gripper_settle", "move_to_target", "close_gripper_confirm_not_60deg", "close_gripper_settle", "return_reset", "verify_cube_z_distance_after_reset"],
         "joint_start_source": start_source if "start_source" in locals() else "unavailable",
         "observed_joint_start_source": observed_start_source if "observed_start_source" in locals() else "unavailable",
         "joint_state_frame": "absolute_joint_positions",

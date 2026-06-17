@@ -49,647 +49,1017 @@
 \titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.7em}{}
 \titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.7em}{}
 
-\title{基於視覺語言模型與多代理人協同架構之主動感知移動操作系統}
-\author{VLM Grasp Project}
+\newcounter{algorithmblock}
+\newenvironment{algorithmblock}[1]{%
+  \refstepcounter{algorithmblock}
+  \vspace{0.6em}
+  \noindent\begin{minipage}{\linewidth}
+  \textbf{Algorithm \thealgorithmblock. #1}
+  \begin{enumerate}[label=\arabic*.,leftmargin=2em]
+}{%
+  \end{enumerate}
+  \end{minipage}
+  \vspace{0.6em}
+}
+
+\newcommand{\figsuggestion}[4]{%
+  \begin{figure}[htbp]
+    \centering
+    \fbox{%
+      \begin{minipage}{0.92\linewidth}
+      \textbf{[Figure Suggestion]}\\
+      \textbf{Figure Title:} #1\\
+      \textbf{Recommended Image:} #2\\
+      \textbf{Image Source:} #3\\
+      \textbf{Caption:} #4
+      \end{minipage}
+    }
+    \caption{#1}
+  \end{figure}
+}
+
+\title{基於視覺語言模型之高階語意至低階控制：結合代理人架構與數位孿生之居家輔助機器人系統}
+\author{陳亭潔}
 \date{\today}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-本論文提出一套基於視覺語言模型與多代理人協同架構之主動感知移動操作系統，目標是在室內數位孿生與 ROS2 控制環境中，完成由自然語言指定的目標物抓取任務。系統以 LangGraph 作為中央狀態機，將對話理解、目標確認、多視角物體定位、導航候選點排序、視覺語言模型決策、抓取姿態生成與底盤/手臂收尾整合為可追蹤、可恢復的閉環流程。高層決策由視覺語言模型根據當前觀察、任務狀態與歷史行動輸出結構化決策；低層感知與抓取推論則透過 A2A 協議委派至 RTX 3090 端服務，包括物件偵測、no-SAM3D 物體資訊估計與 GraspGen 抓取姿態生成。導航與實體控制由 ROS2/Nav2、車體控制節點與手臂控制節點執行，使系統能在目標移動、候選導航點失效或抓取前狀態變化時重新估計並恢復任務。
 
-本文將此系統形式化為一個狀態驅動的多代理人移動操作問題，定義任務狀態、觀察、代理人動作、座標轉換、導航候選評分、抓取姿態選擇與閉環記憶更新等數學模型。相較於單次感知或單次大模型推理方法，本系統強調任務生命週期內的狀態持續性、模組邊界清晰性與部署可維護性。透過此架構，視覺語言模型不直接輸出低層控制命令，而是作為中央推理器選擇下一個可驗證的功能模組，降低大模型幻覺對機器人動作安全性的影響。
+本論文旨在設計與實作一套以視覺語言模型（Vision-Language Model, VLM）與代理人架構（Agent Architecture）為核心之居家服務機器人系統，能將使用者以自然語言表達之高階語意請求（High-Level Semantic Request），透過代理人工作流程自動轉換為機器人可執行之低階控制指令（Low-Level Control）。本論文以居家環境為主要部署情境，期望使家中各類使用者（包含老人、行動不便者等）能以直覺且自然的語言方式，委派機器人協助完成日常生活中的各類服務任務，無需具備任何技術背景。為了印證系統的功能，論文使用數位孿生（Digital Twin）技術進行上述工作的模擬，包含環境建模與任務驗證。
+
+此外，在居家場景中，環境資訊具有高度私密性，使用者之語音、影像與室內狀態等資料若上傳至雲端伺服器，將引發顯著的隱私疑慮。有鑑於此，本系統全面採用可於本地端運行之開源視覺語言模型，確保所有感知、推論與決策過程均在使用者家中的運算裝置上完成，資料不經由外部網路傳送，從根本上保障居家隱私安全。此設計亦使系統在無穩定網路連線的居家環境下仍能可靠運作。
+
+在系統架構方面，我們整合 LangGraph 與 A2A（Agent-to-Agent）協議管理整體任務流程，將物體感知定位、場景理解、機器人導航與控制等功能拆分為可獨立呼叫之代理人模組。VLM 不直接輸出機器人之速度、關節角度或夾爪動作，而是根據當前任務狀態與觀察結果決定下一步應被觸發之機器代理人，再由 ROS2 控制節點發佈命令，該機器人可自主完成任務或是執行節點所接收之低階之命令。此架構使系統能根據環境變化持續調整行動策略，具備可追蹤、可重新估計與失敗回退能力，並允許後續在不重寫整體架構的前提下新增或替換功能模組，提升系統之可維護性與擴充彈性。
+
+為驗證上述架構於居家環境中的實際可行性，本研究以「移動抓取」作為代表性示範任務，並整合 Unity 與 ROS2 建立室內數位孿生環境加以測試。示範情境設定為：目標物可以不在機器人初始視野範圍內，且任務執行過程中可能遭遇目標遮擋、導航失敗或觀察資訊不足等挑戰。系統透過環境相機預先估計目標物位置及尺寸，利用 GraspGen 產生無碰撞抓取姿態，並根據車載相機之即時觀察由 VLM 動態決策後續行動並自主完成，示範了從自然語言指令到實際抓取動作之完整閉環流程。實驗結果顯示，事先規劃適合之車體停靠點，使機器人抵達後能直接進入觀察與抓取流程，有效避免到達目標附近後仍需反覆調整底盤位置之問題，降低任務執行成本並提升整體流程之穩定性。
+
+整體而言，本論文提出一套以居家場景為核心出發點、兼顧隱私保護與任務彈性之機器人服務系統架構，具備全域語意感知、閉環決策、地端推論、代理人模組化擴充與數位孿生驗證等能力，為未來居家服務機器人之落地部署與彈性擴充提供一可行之系統設計參考。
 \end{abstract}
 
-\noindent\textbf{關鍵詞：}視覺語言模型、多代理人系統、移動操作、主動感知、LangGraph、A2A、Nav2、GraspGen
+\noindent\textbf{關鍵詞：}視覺語言模型、居家服務機器人、代理人架構、數位孿生、Unity、ROS2
 
 \newpage
 \tableofcontents
 \newpage
+\listoftables
+\newpage
+\listoffigures
+\newpage
 
-\section{緒論}
 
-\subsection{研究背景與動機}
 
-具身智慧機器人若要在真實或數位孿生家庭環境中完成抓取任務，不能只依靠單次影像辨識或單次抓取姿態估計。使用者的指令通常是語意層級的，例如「幫我抓紅色蘋果」，但機器人真正需要的是可執行的操作序列：辨識目標類別、在多個相似物件中確認目標 instance、估計目標三維位置、選擇可導航觀察點、移動底盤、重新觀察、生成抓取姿態，最後控制底盤、手臂與夾爪完成動作。這些步驟跨越自然語言理解、視覺感知、三維幾何、導航規劃與機器人控制，任何一個步驟失敗都可能導致整體任務中斷。
+\section{Introduction}
 
-視覺語言模型（Vision-Language Model, VLM）具備跨模態理解能力，適合用於高層任務推理與狀態判斷。然而，VLM 並不適合直接輸出低層馬達命令，原因包括推理延遲、輸出不確定性、對幾何限制不敏感，以及缺乏與機器人控制器直接相容的安全約束。因此，本研究採取「VLM 做高層決策，專門代理人執行可驗證子任務」的系統設計。中央 Commander 以 LangGraph 維護任務狀態，並透過 A2A 協議呼叫 RTX 3090 上的推論服務，使大模型推理、GPU 感知與 ROS2 控制彼此解耦。
+近年來，隨著大型語言模型（Large Language Model, LLM）與視覺語言模型（Vision-Language Model, VLM）的快速發展，機器人系統理解自然語言指令與視覺觀察的能力已有顯著提升，使居家服務機器人的實用化逐漸成為重要研究方向。相較於工廠或實驗室環境，居家場景具有物件種類多、擺放位置不固定、遮擋情況頻繁、使用者需求難以預先窮舉等特性。因此，理想的居家服務機器人不應只執行固定按鈕或預先寫死的腳本，而應能理解使用者以日常語言提出的需求，並自動將任務拆解成多個可執行步驟。
 
-\subsection{研究問題}
+近期研究已開始探討如何將語言模型與機器人行為結合，例如利用語言模型進行高階行動選擇、將多模態感測資料整合至具身推理模型，或將視覺語言模型延伸至機器人動作生成。這些研究顯示，LLM/VLM 技術具備輔助機器人理解語意任務與規劃行動的潛力。然而，居家服務機器人要從自然語言指令真正執行任務，仍需同時處理物體定位、三維幾何、導航可行性、抓取姿態、安全檢查與失敗恢復。因此，如何將語意推理能力與可驗證的機器人控制流程結合，仍是居家服務機器人落地應用中的關鍵問題。
 
-本研究欲解決的問題可定義為：給定一個自然語言任務指令 $u$、一組可抓取物件清單 $\mathcal{O}$、多視角相機觀察 $\mathcal{I}_{t}$、世界座標資料 $\mathcal{W}_{t}$，以及機器人當前狀態 $x_{t}$，系統需在有限步數內產生一串可執行動作
-\begin{equation}
-  \tau = \left(a_0, a_1, \ldots, a_T\right),
-\end{equation}
-使目標物件 $o^\star \in \mathcal{O}$ 被成功抓取，且每一步動作皆可由對應模組驗證其成功或失敗。
+具體而言，從一句自然語言指令到實際機器人動作之間仍有多個未被直接指定的中間步驟。使用者可能只說「幫我拿桌上的杯子」，但機器人必須進一步判斷目標物是哪一個、物體是否在視野內、應導航到哪個位置觀察、手臂是否可達、抓取姿態是否會碰撞，以及失敗時應如何重新嘗試。這些問題同時涉及語意理解、三維幾何、路徑規劃、感測不確定性與低階控制，並非單一模型或單一控制節點即可完整處理。若直接要求 VLM 輸出速度、關節角度或夾爪控制等低階命令，則會面臨控制精度、安全性與物理可行性難以保證的問題；若只採用固定流程，則又難以應對遮擋、目標不在初始視野、導航失敗或抓取不可行等居家場景常見情況。
 
-此問題的困難點在於，系統狀態不是靜態的。目標物可能在 Unity/ROS2 回報中移動，導航候選點可能因地圖或障礙物不可行而失效，抓取姿態也可能因相機觀察品質不足而不穩定。因此，本研究將抓取任務視為一個閉環決策問題，而非單次 pipeline 問題。
+基於上述限制，本研究的動機是將傳統「單一機器人依固定流程完成任務」的設計，重新表述為「單一機器人由多個專責代理人共同協作完成任務」。在此觀點下，機器人仍是執行服務的實體，但其能力被拆解為多個功能明確的 agents，例如物體定位與尺寸估計 agent、導航 agent、抓取姿態生成 agent、車體靠近與手臂控制 agent 等。VLM 不直接控制馬達或關節，而是根據目前任務狀態、觀察結果與歷史紀錄，選擇下一個應被觸發的 agent；需要精確幾何、安全檢查與硬體控制的部分，則交由專門模組處理。此設計使語言模型能發揮語意理解與流程決策能力，同時避免讓其直接承擔連續控制與物理可行性判斷。
 
-\subsection{研究目標}
+本論文提出一套以 VLM 與代理人架構為核心之居家服務機器人系統，將高階語意理解與低階機器人控制明確解耦。在任務協調層面，本研究使用 LangGraph 維護長任務狀態，使系統能記錄目前目標、導航結果、車載觀察、抓取結果與失敗原因，並在觀察不足或執行失敗時回到合適節點重新估計或切換策略。對於 GraspGen、SAM （Segment Anything Model）與物體資訊估計等需要較高算力的推論服務，則透過 A2A（Agent-to-Agent）協議以獨立代理人方式整合，使不同功能模組能獨立部署、呼叫與替換。此外，居家環境中的影像、語音與室內狀態具有高度私密性，因此本研究將 VLM 決策與主要任務流程設計為可於本地端或受控環境中執行，以降低對外部雲端服務的依賴。
 
-本文的研究目標如下：
+為具體說明此架構的運作方式，本研究以移動抓取任務作為代表性情境。系統首先透過環境相機取得目標物的全域位置與尺寸資訊，並據此規劃適合觀察與抓取的車體停靠點，使機器人能直接導航至合適位置，避免抵達後反覆調整底盤。當機器人抵達目標附近後，系統進一步啟用車載第一人稱相機進行近距離觀察，由 VLM 判斷當前視角是否足以進入抓取流程，或是否需要切換至其他停靠位置以取得更完整的場景資訊。在抓取流程中，系統結合 GraspGen 候選抓取姿態與 PyBullet 可達性及碰撞檢查，以降低執行時發生碰撞或不可達的風險。機器人控制層基於 ROS2（Robot Operating System 2）實現，並整合 Unity 數位孿生環境進行系統驗證。未來工作將進一步擴充更多居家任務設定，並將此代理人式流程推進至實體環境驗證。
 
-\begin{enumerate}
-  \item 建立一個以 LangGraph 為核心的狀態化 Commander，使任務可在對話、感知、導航、推理與抓取之間循環。
-  \item 設計清楚的多代理人協同邊界，使 GPU 推論、ROS2 控制與 VLM 決策能獨立部署與維護。
-  \item 將多視角目標定位、Nav2 導航候選點、GraspGen 抓取姿態與底盤/手臂收尾串接成完整移動操作流程。
-  \item 形式化系統狀態、決策函數、座標轉換、候選點排序、抓取姿態選擇與評估指標，作為後續實驗與論文分析基礎。
-\end{enumerate}
+\section{Related Works}
 
-\subsection{研究貢獻}
+\subsection{Robots for Home Service}
 
-本研究的主要貢獻包括：
+\subsubsection{VLMs for Task Understanding}
+
+近年來，大型語言模型（Large Language Model, LLM）與 VLM 逐漸被應用於機器人任務理解與高階決策中。對於實體機器人而言，使用者的自然語言指令通常只描述任務目標，例如拿取、搬運或整理物件，而不會明確指定機器人應執行的技能序列、導航終點、手臂姿態或控制參數。因此，機器人系統需要將高階語意請求轉換為可執行的行為流程，並在過程中考慮目前環境狀態與機器人自身能力。
+
+SayCan 是將大型語言模型應用於機器人任務理解與技能選擇的代表性工作之一。該方法並不直接讓語言模型輸出低階控制命令，而是將語言模型對候選技能「是否符合任務語意」的評估，與機器人 value function 對該技能「是否能在目前狀態成功執行」的評估結合，使系統能選擇同時有用且可執行的下一個技能 \cite{ahn2022saycan}. 這種設計突顯了 LLM 在機器人系統中的適當角色：模型可協助判斷任務意圖與高階行為順序，但實際執行仍需由預先定義的技能、控制器或規劃模組負責。
+
+此後，LLM-based robot planning 的研究逐漸從單次技能選擇延伸到較長時序的任務規劃與執行監控。BrainBody-LLM 將機器人任務分為 high-level planning 與 low-level control，並利用模擬器或控制器回傳的錯誤作為 closed-loop state feedback，使系統能在計畫無法執行時進行修正 \cite{bhat2024brainbody}. 此類方法指出，語言模型生成的計畫若缺乏執行回饋，可能會在實際環境中因物體位置、可達性、動作限制或控制失敗而無法完成。因此，任務理解不應只停留在語意層面，也必須與環境狀態和執行結果形成閉環。
+
+針對服務型機器人，LLM-based Robot Task Planning with Exceptional Handling 進一步探討語言模型在一般服務機器人任務中的例外處理問題。該研究透過 constrained prompt 與 exceptional handling module，限制 LLM 產生符合目前環境與可接受動作集合的 action sequence，並降低模型 hallucination 對任務執行造成的影響 \cite{wang2024exception}. 這說明在實體機器人應用中，LLM/VLM 的輸出需要受到任務狀態、可執行動作集合與錯誤恢復機制的約束，而不能僅依賴模型本身的自由生成能力。
+
+除了線性任務計畫，也有研究將 LLM 與結構化任務表示結合。LLM-as-BT-Planner 使用 LLM 生成 Behavior Tree，以支援 robotic assembly task planning and execution \cite{ao2024btplanner}. Behavior Tree 具有模組化、條件分支、狀態檢查與失敗恢復等特性，因此適合描述需要反覆觀察、判斷與執行的機器人任務。相較於單純文字形式的 action list，結構化 workflow 更有助於將模型推理結果銜接到實際機器人系統。
+
+在多代理人機器人任務方面，MALMM 提出 multi-agent large language model framework，將 high-level planning、low-level control code generation 與 transition management 分配給不同 agents，並透過環境觀察進行 adaptive re-planning \cite{singh2024malmm}. 這類方法反映出近期 robotic AI agent 的一個重要趨勢：複雜機器人任務往往不適合由單一模型一次完成，而需要透過多個具不同職責的模組或代理人協同完成任務理解、規劃、執行與修正。
+
+\subsubsection{Home Service Robots and Mobile Manipulation}
+
+在居家服務機器人方面，系統需要將使用者的自然語言需求，轉換成實際環境中的目標搜尋、物件辨識、移動導航與抓取操作。由於居家場景通常包含多房間、多物件、遮擋與未知物件類別，機器人不僅需要理解任務語意，也需要根據目前環境狀態決定如何移動、從哪個角度觀察目標，以及是否具備可執行的操作條件。因此，如何讓機器人在未知居家場景中理解自然語言指令並正確執行任務，成為居家服務機器人研究中的重要課題。
+
+HomeRobot 提出 Open-Vocabulary Mobile Manipulation（OVMM）問題，將其定義為機器人在未知環境中抓取任意物件，並將其放置到指定位置的任務 \cite{yenamandra2023homerobot}. 該研究指出，OVMM 同時涉及感知、語言理解、導航與操作，而這些子系統的整合本身即是一項重要挑戰。此問題定義與本研究的任務脈絡相近：使用者以自然語言指定目標物，系統需要在環境中確認實際目標，估計其空間位置，移動至適合觀察與操作的位置，並進一步完成抓取。不同的是，HomeRobot 的標準任務包含完整的抓取與放置；本研究則聚焦於 OVMM 脈絡下的自然語言驅動移動抓取流程，亦即將開放詞彙目標理解、移動導航與抓取執行整合為可追蹤的閉環任務。
+
+在 open-vocabulary mobile manipulation 中，語意理解與空間定位需要被共同處理。LOVMM 提出 Language-conditioned Open-Vocabulary Mobile Manipulation 架構，將 LLM 與 VLM 納入家庭環境中的移動操作任務，用以處理自然語言指令與未知物件操作 \cite{tan2025lovmm}. 此類方法顯示，居家移動操作不應只依賴固定類別偵測，而需要讓自然語言描述、視覺觀察與任務流程相互銜接。本研究採取相似的問題設定，但系統並不訓練新的操作策略，而是將 VLM 限制為高階流程判斷模組。使用者輸入經任務分類與目標候選確認後，VLM 僅在預先定義的代理人模組間進行選擇；實際的物件資訊估計、導航、抓取姿態生成與低階控制則由專門模組負責。
+
+除了語意理解，OVMM 也需要維持可用的場景資訊。DynaMem 提出一種用於開放世界移動操作的動態三維語意記憶方法，讓機器人能以三維點雲形式記錄環境，並透過多模態語言模型或開放詞彙視覺特徵回答物件位置查詢 \cite{liu2024dynamem}. 該方向說明，居家移動操作不能只依賴單次物件偵測，因為物件可能移動、出現或消失，系統需要在任務過程中持續更新場景狀態。本研究雖未建立完整的長期語意記憶地圖，但在任務流程中使用房間相機、多視角世界座標與車載觀察來更新目標資訊；若目標位置變動超過設定門檻，系統會清除舊的物件資訊與導航狀態，重新估計目標位置與候選導航點。
+
+另一些研究則從三維語意地圖與線上規劃角度處理 OVMM。Open-vocabulary Mobile Manipulation in Unseen Dynamic Environments with 3D Semantic Maps 結合 VLM 的開放詞彙偵測、三維物件重建、LLM 空間推理與線上規劃，使機器人能在未知且會變動的環境中，根據三維語意地圖執行任務 \cite{qiu2024ovmm3dsemantic}. 這類方法強調，語言與視覺理解需要被轉換為可供導航與操作使用的空間表示，才能支援目標搜尋、路徑規劃與操作位置判斷。本研究採取較工程化且可落地的做法：系統使用 Unity/ROS2 的世界座標與多視角觀察估計目標位置，再將目標中心、地圖可通行性與抓取方向轉換為排序後的導航候選點，使機器人能優先移動至較適合觀察與抓取的位置。
+
+\subsection{AI Agents and Workflows}
+
+\subsubsection{LangChain and LangGraph}
+
+LangChain 是一套用於建立 LLM 應用與代理人的開源框架，提供模型呼叫、prompt 管理、工具整合、資料檢索與 agent 等抽象介面，使開發者能快速串接不同模型、向量資料庫、API 與外部工具。對一般 LLM 應用而言，LangChain 的優點在於整合性高、工具生態完整，適合快速建立 retrieval-augmented generation、tool-using agent 與多模型串接應用。
+
+在 LangChain 生態中，相關工具可依功能分為下列幾類。第一，LangChain library 主要提供模型、prompt、retriever、tool 與 agent 的基礎組件，用於建立一般 LLM 應用與工具呼叫流程。第二，LangSmith 偏向觀測、除錯與評估，可用於追蹤 LLM 應用的輸入輸出、工具呼叫、錯誤原因與執行紀錄。第三，LangGraph 則是同一生態中的代理人流程協調框架，主要用於建立長時間執行、具狀態且需要分支或循環的工作流程。
+
+LangGraph 的核心概念是將任務表示為由節點與邊構成的狀態圖。每個節點對應一個明確的任務步驟或工具呼叫，邊則描述節點之間的轉移條件；共享狀態可在節點間傳遞與更新，使系統能記錄目前任務進度、觀察結果、模型決策與執行回饋。官方文件將 LangGraph 定位為用於建立長時間執行、具狀態 workflow 或 agent 的框架，並強調其支援 durable execution、streaming、human-in-the-loop 與 memory 等能力 \cite{langgraph_workflows}。相較於一般線性 chain，LangGraph 更適合描述具有分支、循環、重試與恢復機制的任務。
+
+本研究選擇 LangGraph 作為任務流程管理工具，主要是因為機器人任務具有長時間執行、多階段狀態、外部感測回饋與錯誤恢復等特性，難以僅用一般線性 chain 或單次 agent loop 清楚描述。以移動抓取任務為例，系統可能因導航失敗、目標遮擋、觀察不足或抓取不可行，而需要切換候選路徑或返回前一階段重新判斷。LangGraph 的狀態圖設計能將不同任務階段表示為可追蹤的節點，並透過共享狀態保存觀察結果、模型決策、工具輸出與失敗原因，使後續節點能依目前狀態進行條件路由與重試。因此，LangGraph 較一般 LangChain chain 更符合本研究所需的長任務、閉環控制與失敗恢復需求。
+
+\subsubsection{A2A}
+
+A2A 是一種用於代理人之間通訊與協作的開放協定，目標是讓由不同框架、不同服務或不同環境建立的 AI 代理人，能以一致的方式交換訊息、委派任務並回傳結果 \cite{a2a_spec}。在 A2A 架構中，A2A Client 是發起請求的一方，負責向其他代理人送出任務請求；A2A Server，也可稱為 Remote Agent，則是提供 A2A endpoint 的一方，負責接收請求、執行任務並回傳結果。A2A Server 會透過 Agent Card 描述自身名稱、能力、服務端點與可提供的功能，使 Client 能知道該代理人適合處理哪些任務。除此之外，A2A 也定義 Message、Task 與 Artifact 等概念，用於表示代理人之間的訊息交換、任務狀態與任務產生的結果。
+
+在安全性方面，A2A 提供的是代理人通訊與任務委派的標準格式，實際安全性仍取決於系統部署方式與存取控制設計。由於 Agent Card 可能包含服務端點、代理人能力與認證需求，若直接暴露在公開網路中，可能造成未授權呼叫或能力資訊外洩。因此，在實務部署上，A2A 服務應搭配身分驗證、權限控管、加密通訊、內網限制與日誌紀錄等機制。若部署於地端或受控網路環境，A2A 可讓不同推論代理人在本地網路中交換任務與結果，降低影像、場景資訊或模型輸出傳送至外部雲端服務的需求。
+
+本研究並非將 A2A 作為整體系統的主要通訊架構，而是在 LangGraph workflow 的特定節點中使用 A2A 呼叫遠端 agent。當流程執行到需要外部推論能力的階段時，該節點會扮演 A2A Client，依任務需求向對應的 A2A Server 發送請求，並將遠端 agent 回傳的結果寫回 workflow state，供後續節點使用。透過這種方式，較高成本或較專門化的推論模組可以獨立部署為 Remote Agent，而主流程不需要直接綁定各模型或服務的內部實作。此設計使系統在維持 workflow 結構清楚的同時，也方便日後替換模型、調整推論服務或新增新的 agent 功能。
+
+\subsubsection{Workflow Automation Tools}
+
+除了前述用於代理人流程管理的 LangGraph，以及用於代理人之間通訊的 A2A 之外，工作流程自動化工具也常被用於串接不同應用與服務。這類工具通常以視覺化流程為核心，讓使用者透過觸發條件、節點與連線關係建立跨系統流程。常見工具包含 Zapier、Make 與 n8n：
 
 \begin{itemize}
-  \item \textbf{狀態化多代理人移動操作架構：}提出一個由 LangGraph 管理的任務狀態圖，將自然語言任務、世界座標更新、導航結果、抓取結果與歷史記憶整合至同一個 CommanderState。
-  \item \textbf{VLM 安全調度策略：}VLM 僅輸出高層模組選擇，而不直接輸出低層控制命令；每個被呼叫模組皆回傳結構化成功狀態與結果資料。
-  \item \textbf{多視角物體資訊與導航候選整合：}利用 \texttt{/world\_position\_data}、room camera bbox 與 no-SAM3D item-info 服務產生 ranked goal poses，讓機器人能根據不同候選導航點進行主動感知與接近。
-  \item \textbf{部署導向之 A2A 解耦設計：}RTX 3090 上的 Find、ItemInfo 與 Grasp 服務以 A2A server 暴露，Commander 端以 A2A client 呼叫，使模型服務與機器人控制可分別更新。
+  \item Zapier：Zapier 的特色在於應用整合數量多，主要面向商務使用者與一般團隊。它支援大量雲端服務，讓使用者能將 Gmail、Slack、Google Sheets、Notion、CRM、表單工具與 AI 服務等應用串接成自動化流程。Zapier 的優勢是上手門檻低、既有應用支援完整，適合處理通知、表單回覆、資料同步、客戶關係管理與辦公室日常自動化。其近年的 AI workflows 與 AI agents 功能，也延續這個方向，讓 AI 能直接和既有雲端應用一起運作。
+  \item Make：Make 的特色在於視覺化流程設計與資料流控制。相較於以「觸發條件加動作」為主的簡單自動化，Make 更強調在畫布上建立多步驟流程，使用者可以清楚看到每個模組之間的資料傳遞、條件分支、資料轉換與錯誤處理。因此，Make 較適合需要觀察流程結構、設計多分支路徑、處理多個服務之間資料轉換的自動化情境。它的優勢不是單純應用數量，而是讓流程邏輯與資料流向更容易被設計與檢查。
+  \item n8n：n8n 的特色在於技術彈性與自架部署 \cite{n8n_nodes}。它同樣提供視覺化流程設計，但更強調自訂程式碼、API 呼叫、資料庫連接、AI 節點，以及與內部服務或私有資料庫的整合。相較於主要面向雲端服務串接的工具，n8n 更適合技術團隊建立可控程度較高的自動化流程，也適合部署在自己的伺服器上，與自架模型、內部 API 或本地資料服務整合。
 \end{itemize}
 
-\subsection{論文架構}
+本研究選擇 LangGraph 作為主要流程管理工具，而非 Zapier、Make 或 n8n 這類工作流程自動化工具，原因在於相較之下，LangGraph 可直接以程式碼定義節點邏輯、共享狀態、條件路由、循環與錯誤恢復，使系統能根據模型輸出、工具結果與失敗原因動態決定下一步，讓整體工作流程能更加彈性。
 
-第二章回顧視覺語言模型、多代理人工作流、三維物體定位、導航與抓取相關技術。第三章定義系統問題與數學符號。第四章介紹整體系統架構與資料流。第五章詳細說明任務分類、目標定位、候選點排序、VLM 決策、抓取姿態生成與底盤/手臂執行方法。第六章描述實作與部署。第七章提出實驗設計與評估指標。第八章討論限制與未來工作，最後第九章總結本文。
+\subsection{ROS2-Unity Digital Twin Robot Platform}
 
-\section{相關工作}
+\subsubsection{ROS2}
 
-\subsection{視覺語言模型於機器人任務}
+ROS2 是機器人系統中常用的通訊與軟體整合架構，其設計目標是將複雜的機器人系統拆分成多個可獨立執行的節點。每個節點負責特定功能，例如感測資料接收、導航、控制、影像處理或任務執行；節點之間則透過 ROS2 提供的通訊機制交換資料。這種模組化設計使不同功能可以分開開發、測試與替換，也使大型機器人系統能夠由多個獨立程式共同組成。
 
-近年視覺語言模型被廣泛應用於機器人語意理解、任務分解與場景推理。其優勢在於能將影像內容、自然語言任務與歷史上下文共同納入推理。然而，在機器人控制場景中，VLM 輸出仍需受到嚴格約束。若模型直接輸出座標或控制量，可能因場景幾何理解不足而產生不可執行甚至危險的動作。本研究採用結構化輸出約束，使 VLM 僅在有限模組集合中選擇下一步：
+ROS2 的主要通訊方式包含 topic、service 與 action \cite{ros2_interfaces}。Topic 採用 publish/subscribe 模式，適合持續傳送資料，例如感測器資料、影像、位置資訊或控制指令。發布端只需將資料送到指定 topic，訂閱端即可接收對應訊息，因此 topic 適合用於高頻率或連續性的資料交換。Service 採用 request/response 模式，適合處理一次性的請求與回覆，例如查詢狀態、取得參數或執行短時間計算。Action 則適合用於較長時間的任務，例如導航到指定位置或執行一段動作；它除了能送出目標與取得最終結果，也能在執行過程中回傳進度，並支援取消任務。
+ROS2 底層使用 DDS 作為通訊基礎，使節點能在同一台電腦、不同程序，甚至不同機器之間進行分散式通訊。DDS 也提供 QoS 設定，使開發者能依照資料特性調整可靠性、佇列深度、延遲與資料保存方式。對機器人系統而言，不同資料對通訊品質的需求並不相同：感測器資料通常重視即時性，控制命令可能更重視穩定傳遞，而任務狀態則需要能被後續節點正確取得。因此，ROS2 的 topic、service、action 與 QoS 設計，能讓不同類型的機器人資料採用合適的通訊方式。
+
+\subsubsection{SLAM}
+
+SLAM（Simultaneous Localization and Mapping）是移動機器人導航中的基礎技術，目標是在未知環境中同時估計機器人自身位置，並建立周圍環境的地圖。對室內移動機器人而言，常見做法是利用 LiDAR（Light Detection and Ranging）、depth camera、odometry 與 IMU（Inertial Measurement Unit）等感測資料，估計機器人的移動軌跡，並將牆面、障礙物與可通行區域建立成 occupancy grid map，供後續 localization、path planning 與 navigation 使用。在 ROS2 生態中，slam\_toolbox 是常見的 2D SLAM 工具，支援 mapping、localization、map saving 與 map reloading 等功能 \cite{slam_toolbox}。
+
+\subsubsection{Nav2}
+
+Nav2（Navigation2）是 ROS2 中常用的 mobile robot navigation framework，負責讓機器人根據目前 pose、目標 pose 與環境地圖，自動規劃並執行移動路徑 \cite{nav2_concepts}。Nav2 並不是單一演算法，而是由多個模組組成的 navigation stack，包含 planner、controller、costmap、behavior tree 與 recovery behavior 等元件。Planner 負責根據地圖產生從目前位置到目標位置的 path；controller 則根據機器人附近的環境資訊與運動限制，產生實際 velocity command，使機器人沿著 path 前進；costmap 則將障礙物、膨脹區域與可通行空間轉換成 navigation 可使用的空間表示。
+
+Nav2 的另一個特色是使用 behavior tree 管理 navigation task。透過 behavior tree，導航流程可以被拆分成 path planning、path following、goal checking、failure detection 與 recovery behavior 等步驟。當導航過程中發生 path 不可行、障礙物阻擋或控制失敗時，系統可以重新規劃路徑、清除 costmap，或執行其他 recovery behavior。這使 Nav2 不只是輸出一條固定路徑，而是能在任務執行過程中根據狀態進行調整。
+
+在 path generation 方面，Nav2 由 Planner Server 接收 navigation goal，並呼叫對應的 planner plugin 產生 path。既有系統使用 SmacPlanner2D 作為 global planner；SmacPlanner2D 屬於 Nav2 Smac Planner 系列，採用 A*-based path planning，可根據 costmap 與 navigation goal 產生可通行路徑。路徑產生後，Controller Server 會透過 FollowPath controller 執行 path following。既有系統中的 FollowPath 由 RotationShimController 與 DWBLocalPlanner 組成，其中 RotationShimController 用於在開始追蹤新路徑時修正機器人朝向，DWBLocalPlanner 則根據局部環境與候選速度產生可執行的 velocity command。透過 planner 與 controller 的分工，Nav2 能先產生全域移動路徑，再於執行過程中根據局部環境輸出實際控制命令。
+
+\subsubsection{pros System}
+
+pros System 是基於 ROS2-Unity 數位孿生平台中的底層控制系統，主要負責系統啟動、模組管理、車體導航控制與機械手臂操作 \cite{yushiang2025}。該系統建立在 ROS2 架構上，並將不同功能拆分為獨立套件，使 Unity 數位孿生環境能透過 ROS2 通訊機制接收控制訊號，並執行對應的車體與手臂動作。pros System 的主要組成如下：
+
+\begin{itemize}
+  \item pros\_app：負責系統啟動與模組管理。pros\_app 提供 Terminal UI 作為操作入口，並透過 Python script 顯示選單與接收使用者輸入。當使用者選擇特定功能後，pros\_app 會呼叫對應的 shell script，接著啟動 Docker Compose 建立執行環境，並透過 ROS launch files 啟動相關 ROS 節點。由於 ROS2 系統包含多個需要共同運作的節點，pros\_app 將啟動流程包裝成可操作的介面，使使用者能以一致方式啟動 SLAM、Camera、導航與控制等模組。
+  \item pros\_car：負責機器人操作邏輯，內部可分為 Central Control、Car Control 與 Arm Control。Central Control 作為任務分配中心，負責協調車體與手臂任務，並將導航或夾取等執行時間較長的任務派送至對應控制模組。Car Control 負責車體導航與移動控制，Arm Control 負責機械手臂動作與夾取流程。此分層方式將任務協調、車體控制與手臂控制分開，使各模組的責任範圍更清楚，也降低控制流程之間的耦合。
+  \item ROS2 控制方式：pros\_car 以 action server 管理 navigation 與 grasping 等執行時間較長的任務。Car Control 的 action server 接收 navigation goal 並負責任務執行狀態管理；Arm Control 的 action server 則負責 grasping 任務的執行流程。由於 action server 管理的是任務層級的 goal、feedback 與 result，實際車體與手臂的控制命令仍需在任務執行過程中發布至對應 topic。根據既有系統設計，車體控制命令發布至 \texttt{car\_C\_rear\_wheel} 與 \texttt{car\_C\_front\_wheel}，機械手臂控制命令則以 \texttt{JointTrajectoryPoint} 訊息發布至 \texttt{/robot\_arm}。換言之，action server 負責管理任務狀態，topic 則負責傳送實際控制命令。
+  \item Follow path：在導航控制方面，pros\_car 使用 Nav2 產生的 path 進行車體控制。Car Control 會根據目前車體位置、navigation goal、Nav2 path 上的 local target point 與車體朝向計算 heading error。當車體尚未抵達 navigation goal 時，系統會沿 path 選取下一個 local target point，並比較車體目前朝向與該目標點方向的角度差。若 heading error 過大，車體會先旋轉修正方向；若 heading error 在可接受範圍內，車體則向前移動。當車體接近 navigation goal 後，系統會停止導航流程，並依後續任務狀態進入觀察、對準或操作階段。
+\end{itemize}
+
+\subsubsection{Unity-Based Digital Twin Environment}
+
+Unity 是本研究用於建立居家機器人任務場景的模擬環境。本研究使用自建居家場景作為主要測試空間，並延續既有 ROS2-Unity 數位孿生平台的基本設定，使 Unity 場景中的機器人、相機、物件與環境資訊能與 ROS2 控制流程連接 \cite{yushiang2025}。Unity 端負責呈現居家場景、機器人模型、車載相機與環境相機，並提供任務執行所需的影像與感測器資訊。透過此可視化且可重複測試的居家場景，本研究能驗證自然語言任務理解、目標確認、候選導航點選擇、車載觀察與移動抓取流程。
+
+\subsection{Visual Perception and 3D Scene Understanding}
+
+\subsubsection{Camera Calibration}
+
+在相機成像過程中，3D 空間中的點會經由相機模型投影到 2D 影像平面，因此若要由影像座標推回空間關係，必須先取得相機的內參與外參。內參用於描述相機本身的成像特性，包含焦距與主點位置；外參則描述相機座標系與外部座標系之間的相對姿態，通常以 rotation 與 translation 表示。除此之外，實際鏡頭也會產生徑向與切向畸變，使影像中的直線、邊界與投影位置產生偏移，因此需要透過 camera calibration 估計並修正這些參數。
+
+OpenCV 的 camera calibration 流程通常使用 chessboard 作為 calibration pattern \cite{opencv_calib}。棋盤格角點具有規則且已知的幾何排列，可作為影像點與空間點之間的對應基準。校正時，系統會從多張不同角度與距離拍攝的 chessboard 影像中偵測角點，並將影像中的 2D corner points 對應到棋盤格上已知位置的 3D object points。接著，OpenCV 可透過這些對應關係估計 camera matrix、distortion coefficients、rotation vectors 與 translation vectors。
+
+\subsubsection{YOLO}
+
+YOLO（You Only Look Once）是一種常用於即時物件偵測的深度學習模型，其核心概念是將物件分類與位置回歸整合在單一次前向推論中完成，因此能在影像或影片中快速預測物件類別與 bounding box \cite{ultralytics_yolo}。相較於需要多階段候選區域生成的偵測方法，YOLO 系列模型以端到端方式直接輸出偵測結果，因此常被應用於需要即時反應的機器人視覺任務。
+
+本研究使用 YOLOv26 作為物件偵測模型，用於辨識 Unity 居家場景中的目標物。YOLOv26 延續 YOLO 系列重視即時性的設計，並加入 end-to-end NMS-free inference，使模型能直接產生偵測結果，降低後處理流程對推論延遲的影響。此外，YOLOv26 也針對 edge 與 low-power devices 進行最佳化，並透過改良的訓練策略提升小物件偵測能力。本研究以 YOLOv26 pretrained model 作為微調的初始權重，並使用 Roboflow 平台建立與訓練自訂資料集。透過 Roboflow 進行影像標註、資料集管理與模型訓練後，得到能辨識本研究目標物的 YOLOv26 偵測模型。模型輸出的類別與 bounding box 會作為後續目標確認、候選導航點選擇、車載觀察與移動抓取流程的視覺依據。
+
+\subsubsection{SAM}
+
+SAM（Segment Anything Model）是由 Meta AI 提出的影像分割基礎模型，目標是讓模型能根據不同形式的提示產生物件遮罩 \cite{sam}。相較於一般物件偵測模型主要輸出 bounding box，SAM 著重於產生像素層級的 segmentation mask，因此能更精確地描述物件輪廓。原始 SAM 可透過 point、box 或 mask prompt 對影像中的物件進行分割，並具備良好的 zero-shot segmentation 能力。後續的 SAM 2 將此能力延伸至 image 與 video segmentation，使模型能在影片中追蹤並分割目標物。SAM 3 則進一步支援以文字、影像範例與視覺提示進行 detection、segmentation 與 tracking；SAM 3D 則將 SAM 系列的概念延伸至 3D reconstruction 與 3D perception 任務。本研究使用 SAM 作為輔助視覺模組，用於取得目標物更精細的 segmentation mask，使系統在物件定位、目標確認與後續移動抓取流程中能取得比 bounding box 更完整的物件區域資訊。
+
+\subsubsection{Object Localization}
+
+物件定位的目標是將影像中的 2D 偵測結果轉換為 3D 世界座標，使系統能知道目標物在場景中的實際位置，並將此資訊提供給後續的目標確認、導航點產生與移動抓取流程。本研究在空間中放置四台相機以獲得多視角的相機畫面來進行物體定位。首先，系統在各個相機的 RGB 影像中執行 YOLO object detection，取得物體類別與 bounding box。對每一個 bounding box，系統取其中心點作為該相機觀察到的目標影像位置，並根據該相機的內參與外參建立投影關係，將 2D bbox center 反投影為一條由相機中心出發的 3D ray。
+
+由於單一 RGB 相機只能知道物體「在哪個方向」，但不知道物體「離相機多遠」，因此無法只靠一張影像得到完整的 3D 位置。此系統利用多台相機從不同角度觀察同一個物體。每台相機都會根據影像中的 bounding box 中心點，推算出一條從相機出發、指向物體方向的 3D ray。當多台相機都看到同一類物體時，系統會把這些 3D rays 放在一起比較。如果多條 rays 在空間中指向相近的位置，就代表它們很可能是在看同一個物體；如果差太多，則可能是偵測錯誤或不同 instance。系統會先把可能屬於同一物體的 rays 分成同一群，再計算這些 rays 最接近的交會位置。這個交會位置就被視為該物體在世界座標中的位置。
+
+為了提升定位結果的可靠性，系統在求得候選 3D 位置後，會將該位置重新投影回來源相機影像，並檢查投影點是否落在原始 bounding box 附近。只有通過此 reprojection consistency check 的候選點才會被保留。若多個候選點在 3D 空間中距離過近，系統會將其合併，以避免同一物體被重複輸出。接著，定位結果會交由 tracking 模組處理，根據 3D 空間距離與時間連續性維持穩定的 instance id，降低 YOLO 偵測抖動、短暫漏偵與多個同類物體造成的 instance 混淆。最後，系統將定位結果作為後續目標確認、候選導航點產生與移動抓取流程的輸入。
+
+\subsubsection{Point Cloud}
+
+Point cloud 是由大量三維座標點組成的資料形式，可用來表示物體表面、場景結構與空間幾何關係。相較於 2D image，point cloud 保留了每個點在三維空間中的位置，因此常被用於 3D perception、物體幾何分析與機器人操作等任務。在 RGB-D camera 中，point cloud 可由 RGB image 與 depth image 產生；其中 depth image 提供影像中每個像素對應的深度值，而 camera intrinsic 則提供焦距與主點位置。根據 pinhole camera model，每個 depth pixel 可由其像素座標與深度值反投影為 camera frame 下的 3D point，進而將影像平面上的資訊轉換為三維空間資料。
+
+\subsection{Grasp Planning and Mobile Manipulation}
+
+\subsubsection{Inverse Kinematics}
+
+Inverse Kinematics（IK）是機械手臂控制中的基礎問題，其目標是在已知 end-effector 期望位置與姿態的情況下，求解一組可使機械手臂到達該目標 pose 的 joint angles。相對於 Forward Kinematics 由已知關節角度計算 end-effector pose，Inverse Kinematics 則是反向由目標 pose 推回關節配置。由於機械手臂通常具有多個自由度，且關節角度會受到機構限制、工作空間、奇異點與碰撞條件影響，因此 IK 不一定具有唯一解，也可能在目標超出工作空間時無解。實際機器人系統常使用解析式方法、數值迭代方法或最佳化方法求解 IK，並根據關節限制、姿態誤差與任務需求選擇合適解。對抓取任務而言，IK 可用來判斷候選抓取姿態是否能被手臂實際執行，因此是從 grasp pose 轉換到低階關節控制的重要步驟。
+
+\subsubsection{PyBullet}
+
+PyBullet 是 Bullet Physics SDK 的 Python 介面，常用於機器人模擬、物理運算與強化學習環境 \cite{pybullet}。透過 PyBullet，使用者可以載入 URDF、SDF 或 MJCF 等機器人模型與場景物件，並在模擬環境中進行剛體動力學、關節控制、forward kinematics、inverse kinematics 與 collision detection 等操作。對機器人操作任務而言，PyBullet 的價值在於能在實際執行前先檢查候選姿態是否可達、是否會與場景或機器人本體發生碰撞，並以較低成本驗證動作的幾何可行性。因此，PyBullet 常被用作機器人控制與抓取規劃中的模擬與安全檢查工具。
+
+\subsubsection{GraspGen for Grasp Pose Generation}
+
+Grasp pose generation 是機器人抓取任務中的核心問題，其目標是在已知物體或場景幾何資訊的情況下，產生機械手臂末端夾爪可執行的抓取姿態。對平行夾爪或吸盤式夾爪而言，一個 grasp pose 通常需要同時決定夾爪在三維空間中的位置與方向，因此屬於 6-DoF grasping 問題。相較於只在影像平面上預測抓取矩形的 2D grasp detection，6-DoF grasp pose generation 能直接描述夾爪在三維空間中的 approach direction、rotation 與 contact configuration，較適合用於機械手臂在真實三維場景中的抓取規劃。
+
+GraspGen 是 Murali et al. 提出的 diffusion-based 6-DoF grasping framework，目標是在不同物體、不同夾爪形式與不同觀察完整度下產生可執行的抓取姿態 \cite{graspgen}。該模型將 grasp generation 視為一個迭代式 diffusion process，並以 3D point cloud 作為幾何輸入，產生多個候選 6-DoF grasp poses。其架構包含 Diffusion-Transformer grasp generator 與 discriminator：generator 負責從物體或場景點雲中取樣候選抓取姿態，discriminator 則負責對生成的 grasp poses 進行評分與過濾。透過此設計，GraspGen 不只輸出單一抓取結果，而是提供一組候選抓取姿態，使後續系統能依照碰撞、可達性與任務條件進一步篩選。
+
+GraspGen 的另一個重點是 on-generator training。傳統 grasp discriminator 若只在離線資料集中的正負樣本上訓練，可能無法有效辨識 generator 實際產生的錯誤樣本。GraspGen 因此在 generator 所產生的 grasps 上訓練 discriminator，使評分模型更貼近生成器在推論時會產生的候選分布。為了提升模型的泛化能力，作者也建立大規模 simulated grasp dataset，涵蓋多種物件與夾爪形式，使模型能支援不同 gripper embodiments、partial 或 complete point clouds，以及 single-object 或 cluttered scenes。
+
+對機器人操作而言，GraspGen 的價值在於將目標物的 3D 幾何資訊轉換為多個可排序的 6-DoF grasp candidates。這些候選姿態可以作為後續 inverse kinematics、collision checking 與 motion planning 的輸入。然而，GraspGen 輸出的候選 grasp pose 並不代表一定能被特定機械手臂直接執行；最終抓取動作仍需結合機器人工作空間、關節限制、底盤位置、障礙物分布與碰撞檢查進行驗證。因此，GraspGen 較適合作為 grasp candidate generator，負責產生多樣且具有幾何合理性的抓取候選，再由機器人系統根據實際控制限制選擇可執行解。
+
+\section{Method}
+
+\subsection{Overview}
+
+\subsubsection{System Overview}
+
+本章說明本研究如何將使用者的自然語言請求轉換為可執行的移動抓取任務。整體系統建立於 Unity 數位孿生環境中，並以 LangGraph 管理任務流程，以 A2A（Agent-to-Agent）協議整合需要較高運算資源的推論服務。系統將任務拆解為多個具有明確功能的 agents，分別負責任務分類、目標物鎖定、候選導航點產生、導航、VLM 決策、抓取姿態生成、車體接近、手臂執行與記憶更新。部分流程依照預先定義的任務邏輯執行，而在需要根據車載影像與任務狀態判斷下一步行為時，系統則由 VLM 在有限的 agent action set 中選擇下一個應被呼叫的功能模組。ROS2 則位於數位孿生環境與控制流程之間，負責感測器資料傳輸、導航任務執行，以及將控制命令傳送至 Unity 中的車輪與機械手臂，使 agent workflow 的決策能轉換為數位孿生環境中的實際機器人動作。
+
+為了使機器人能取得整體居家場景資訊，本研究在環境中架設多台環境相機，作為全域感知來源。系統透過這些相機觀察房間中的可抓取物件，並結合 YOLO 偵測結果、相機標定資訊與多視角幾何，估計物體在世界座標中的位置。此設計使機器人即使尚未從車載相機看到目標物，也能先根據環境相機取得目標物的大致位置、物體資訊與候選導航點。相對地，安裝於機械手臂上的第一人稱相機則負責近距離觀察。當機器人導航至目標附近後，第一人稱相機會提供當前視角下的即時影像，使 VLM 能判斷目標物是否清楚可見、是否受到遮擋，以及目前位置是否適合進入抓取流程。除此之外，第一人稱相機也能提供更近距離的目標物影像與深度資訊，作為後續目標確認、抓取姿態生成與手臂執行前幾何判斷的重要依據。
+
+整體任務由使用者輸入開始。系統首先透過 task classifier 判斷輸入屬於 general chat 或 specific robot task。若輸入只是一般對話，系統會進入 general chat 分支並產生回覆，不會觸發機器人控制流程；若輸入為具體機器人任務，則進入 pick workflow。進入 pick workflow 後，系統會根據使用者請求與目前場景中的物體資訊鎖定 target instance。若場景中存在多個同類物體，系統需進一步確認使用者欲操作的實際目標，以避免自然語言描述造成的歧義。
+
+目標物鎖定後，系統會呼叫物體資訊估計 agent，根據多相機定位結果、目標物影像資訊、尺寸估計、地圖可行性與抓取需求，產生多個可供 Nav2 使用的候選 goal poses。這些候選點會被排序為 ranked goal poses，使系統能優先嘗試較適合觀察與抓取的位置。當候選 goal pose 被選定後，導航模組會透過 ROS2/Nav2 執行移動任務。機器人抵達目標附近後，系統再由第一人稱相機取得近距離觀察，並將影像、導航結果、目標資訊與歷史記憶提供給 VLM。VLM 會在有限的 agent action set 中選擇下一步，例如進入抓取姿態生成、切換至下一個導航候選點、執行車體接近與手臂抓取，或結束任務。
+
+整個 workflow 透過一份共同維護的任務狀態串接各 agents。每個 agent 會讀取目前任務中與自身相關的資訊，執行完成後將結果寫回狀態中，使後續節點能接續使用前一階段的輸出。若任務過程中發生目標移動、目標遺失、導航失敗、觀察不足、抓取失敗或接近失敗，workflow 會依據目前狀態進入重新估計、候選點切換、記憶更新或返航流程。透過 LangGraph 的節點與條件路由，本研究能將自然語言任務轉換為可追蹤、可重試且具備失敗回復能力的移動抓取流程。
+
+形式化而言，令使用者在時間 $t$ 的輸入為 $u_t$，任務分類器輸出 $c_t$ 為一般對話或具體機器人任務，分類可寫成
 \begin{equation}
-  a_t \in \mathcal{A}
-  =
-  \{\texttt{major\_nav}, \texttt{grasp}, \texttt{car\_approach}, \texttt{done}\}.
+    c_t=\arg\max_{c\in\{\textsc{General},\textsc{Specific}\}}p_\theta(c\mid u_t,\mathcal{O}),
 \end{equation}
-如此可將 VLM 的能力集中在高層語意與狀態判斷，而將幾何與控制交給專門模組處理。
-
-\subsection{狀態機與 Agentic Workflow}
-
-長程機器人任務往往需要循環與條件分支。傳統 pipeline 假設資料由前往後單向流動，一旦中間結果失敗，系統往往缺乏恢復機制。Agentic workflow 與狀態機設計則將任務拆成節點與邊，並依狀態決定下一個節點。本研究使用 LangGraph 形式化此流程，其核心可表示為有向狀態圖
+其中 $\mathcal{O}$ 為目前可抓取物件清單與其別名資訊；若模型或外部服務不可用，系統仍保留以關鍵動詞與物件名稱為基礎的 fallback 判斷。整體 pick workflow 可視為共享任務狀態上的狀態轉移過程，第 $i$ 個 agent 只讀取與自身相關的部分狀態，產生局部更新後寫回共享狀態：
 \begin{equation}
-  \mathcal{G} = (\mathcal{V}, \mathcal{E}, v_0, \rho),
+    s_{t+1}=F_i(s_t)=s_t\oplus \Delta_i, \qquad \Delta_i=f_i(P_i(s_t)),
 \end{equation}
-其中 $\mathcal{V}$ 為節點集合，$\mathcal{E}$ 為邊集合，$v_0$ 為入口節點，$\rho(s_t)$ 為根據當前狀態 $s_t$ 決定下一節點的路由函數。
+其中 $P_i(\cdot)$ 為 agent 對共享狀態的投影，$f_i$ 為該 agent 的感知、推理或控制函式，$\oplus$ 表示將更新合併回任務狀態。
 
-\subsection{多代理人協同與 A2A 協議}
+\begin{algorithmblock}{System-level task routing}
+\item Receive the user utterance and append it to the dialogue state.
+\item Classify the utterance as general chat or a specific robot task.
+\item If the utterance is general chat, generate a conversational reply and store the chat turn.
+\item If the utterance is a specific task, resolve the target object and initialize the pick workflow.
+\item During the pick workflow, keep updating the shared task state after every agent execution.
+\item Terminate the workflow when the task succeeds, the user exits, or no feasible recovery remains.
+\end{algorithmblock}
 
-多代理人系統強調功能模組間的明確分工。對於本研究而言，Find Agent、ItemInfo Agent 與 Grasp Agent 分別處理偵測、三維資訊估計與抓取姿態生成。Commander 不需要知道每個模型的內部實作，只需遵守輸入輸出契約。令第 $i$ 個服務為函數
+\subsubsection{General Chat}
+
+一開始使用者輸入訊息後，系統會先將該訊息送入 Task Classifier，由模型判斷此輸入屬於 general chat 或 specific robot task。若使用者輸入只是一般對話，例如問候、閒聊、詢問系統狀態，或是不涉及機器人實際操作的內容，Task Classifier 會將其導向 general chat 分支。此分支主要負責產生自然語言回覆，維持基本的人機互動，而不會啟動後續的物體定位、導航、抓取姿態生成或車體與手臂控制流程。
+
+在 general chat 流程中，系統會根據使用者輸入產生對應回覆，並將該輪對話內容記錄至對話記憶中，使後續回覆能保留基本的上下文連貫性。由於此分支不屬於機器人任務流程，因此不會改變目前鎖定的目標物、候選導航點、導航結果或抓取狀態，也不會對 Unity 數位孿生環境中的車體或機械手臂發送控制命令。完成回覆後，workflow 會回到等待使用者輸入的節點，直到使用者提出新的請求。一次對話更新可寫成
 \begin{equation}
-  y_i = f_i(q_i; \theta_i),
+    h^{\mathrm{chat}}_{t+1}=\operatorname{Keep}_{K}\left(h^{\mathrm{chat}}_t\cup\{(u_t,r_t)\}\right),
 \end{equation}
-其中 $q_i$ 為 A2A request，$\theta_i$ 為服務內部模型或設定，$y_i$ 為結構化回傳結果。此設計使服務部署與模型更新能獨立於 Commander 主程式。
+其中 $r_t$ 為系統回覆，$\operatorname{Keep}_{K}$ 表示只保留最近 $K$ 輪對話。
 
-\subsection{三維目標定位與多視角融合}
+\subsubsection{Specific Robot Task}
 
-機器人抓取需要的不只是類別標籤，而是目標在世界中的位置、尺寸與可接近方向。多視角相機可提供較穩定的幾何觀測。一般而言，世界點 $\bm{p}_w=[x_w,y_w,z_w,1]^\top$ 投影到第 $i$ 個相機影像座標可寫為
+當 Task Classifier 判斷使用者輸入屬於 specific robot task 時，系統會將該輸入導向機器人任務分支。本研究目前以 pick task 作為主要任務情境，也就是使用者以自然語言要求機器人拿取指定物體。與 general chat 不同，specific robot task 不只是產生文字回覆，而是會啟動後續的 agents workflow，將使用者請求逐步轉換為可由機器人執行的任務流程。
+
+進入 specific robot task 後，系統首先會解析使用者請求中的目標描述，並根據目前場景資訊尋找符合需求的目標物。若場景中只有一個符合條件的物體，系統可直接將其作為任務目標；若存在多個同類物體，系統則需進一步確認使用者欲操作的實際目標，以避免自然語言描述造成的歧義。目標確認完成後，workflow 會接續呼叫對應 agents 取得物體資訊，並產生可供機器人導航與觀察的候選位置。
+
+接著，系統會根據候選位置安排導航任務，使機器人移動至目標附近。當機器人抵達候選位置後，系統會取得第一人稱相機的近距離觀察影像，並將目前影像、導航結果、目標資訊與任務狀態提供給 VLM 進行下一步決策。VLM 會在有限的 agent action set 中選擇下一個流程方向，例如繼續進入抓取流程、切換至其他候選位置重新觀察，或在任務完成與無法繼續時進入結束流程。
+
+在任務執行過程中，workflow 會持續更新任務記憶，記錄目前嘗試過的候選位置、VLM 決策、導航結果、觀察狀態、抓取結果與失敗原因。這些記憶不只用於保存執行歷史，也會作為後續決策的依據，使系統能避免在相同條件下重複嘗試已失敗的候選位置或動作。若目前候選位置無法完成任務，系統可根據記憶切換至下一個候選位置；若目標遺失或任務狀態已無法恢復，workflow 則會進入結束或返航流程。
+
+當任務成功完成，或系統判斷無法繼續執行時，workflow 會進入任務收尾階段。此時系統會更新最終任務狀態，保存成功或失敗結果，並依照設定觸發 go home 流程，使機器人返回初始位置或指定 home pose。透過此設計，specific robot task 不只包含目標確認、導航、觀察與抓取，也包含任務過程中的記憶更新與任務結束後的返回機制，使整體流程具備完整的開始、執行、恢復與收尾結構。整體流程可概括為
 \begin{equation}
-  \lambda
-  \begin{bmatrix}
-    u_i \\ v_i \\ 1
-  \end{bmatrix}
-  =
-  \mathbf{K}_i
-  \left[
-    \mathbf{R}_i \mid \bm{t}_i
-  \right]
-  \bm{p}_w,
+\begin{aligned}
+    &\text{user request}
+    \rightarrow \text{target instance}
+    \rightarrow \text{object information} \\
+    &\rightarrow \text{ranked goal poses}
+    \rightarrow \text{navigation}
+    \rightarrow \text{observation}
+    \rightarrow \text{VLM decision}
+    \rightarrow \text{grasp or recovery}.
+\end{aligned}
 \end{equation}
-其中 $\mathbf{K}_i$ 為內參矩陣，$\mathbf{R}_i,\bm{t}_i$ 為外參，$\lambda$ 為深度尺度。本文系統使用 Unity/ROS 提供的 \texttt{/world\_position\_data} 作為目標中心候選，再結合各 camera bbox 與 no-SAM3D 幾何估計取得導航與抓取所需資訊。
 
-\subsection{移動操作與抓取姿態生成}
+\subsubsection{Workflow State and Communication Architecture}
 
-移動操作任務同時涉及底盤導航與手臂抓取。底盤必須先移動至可觀察、可接近且地圖可行的位置；手臂則需根據車載相機 RGBD 生成可行抓取姿態。本文使用 Nav2 執行地圖導航，GraspGen 生成候選抓取姿態，最後由 car approach runtime 完成底盤靠近與手臂/夾爪收尾。此方式避免將所有決策集中在單一模型，而是利用各模組的專長組合成可部署系統。
+本研究依據通訊對象與功能職責，將資料傳遞劃分為三個層次：LangGraph 負責主控流程的任務狀態管理與節點路由；A2A 作為主控流程向外部推論 agents 委派任務所依循的跨代理人通訊協定；ROS2 則銜接 Unity 數位孿生環境，承擔感測資料傳輸與機器人控制命令的收發。
 
-\section{問題定義與數學符號}
-
-\subsection{任務狀態}
-
-令系統在時間步 $t$ 的全域狀態為
+\noindent{\footnotesize\textbf{LangGraph 任務狀態管理}}\par
+在主控流程內部，各節點並不直接互相傳遞訊息，而是透過共享的任務狀態進行協作。此狀態作為任務執行期間的全域紀錄，涵蓋使用者請求、目標物件、物體世界座標、候選導航點、導航結果、VLM 決策、抓取結果與車體接近結果等欄位。每個節點執行時僅讀取與自身功能相關的欄位，完成後僅回傳本次新增或修改的內容，由 LangGraph 將其合併回全域狀態，使前一節點的輸出自然成為後續節點的輸入，各節點無需彼此直接耦合。共享狀態可寫成
 \begin{equation}
-  s_t =
-  \left(
-    u,\,
-    o^\star_t,\,
-    \mathcal{W}_t,\,
-    \mathcal{I}_t,\,
-    \mathcal{G}_t,\,
-    h_t,\,
-    r_t
-  \right),
+    s_t=\{u,q,o^\star,w_t,G_t,k_t,n_t,z_t,d_t,g_t,a_t,m_t\},
 \end{equation}
-其中 $u$ 為使用者任務指令，$o^\star_t$ 為目前確認的目標物件，$\mathcal{W}_t$ 為 world position database，$\mathcal{I}_t$ 為影像觀察，$\mathcal{G}_t$ 為 goal pose database，$h_t$ 為歷史行動記憶，$r_t$ 為 retry count 或任務進度。
+其中 $u$ 為使用者請求，$q$ 為目標物描述，$o^\star$ 為鎖定的目標 instance，$w_t$ 為最新 world position data，$G_t=\{g^{(1)},\ldots,g^{(K)}\}$ 為候選導航點序列，$k_t$ 為目前嘗試的候選點 rank，$n_t$ 為導航結果，$z_t$ 為車載觀察，$d_t$ 為 VLM decision，$g_t$ 為 grasp result，$a_t$ 為 approach result，$m_t$ 為任務記憶。
 
-歷史記憶採用固定長度滑動視窗：
+以物件拾取任務為例：任務啟動後，系統依序將目標物件資訊、候選導航點、導航結果與相機觀察等內容寫入狀態，VLM 節點再根據當前狀態中的摘要欄位判斷後續動作，包含進入抓取及靠近流程、移往下一候選導航點重新觀察，或終止任務。若目標位置更新節點偵測到目標移動，系統才會重新整理物體資訊與導航候選點。LangGraph 的作用因此不僅在於排定節點執行順序，更在於將每一步驟的結果系統性地保留為後續決策的依據。此目標移動判斷可寫成
 \begin{equation}
-  h_t =
-  \operatorname{KeepLastK}
-  \left(
-    h_{t-1} \cup
-    \{(a_t, y_t, \sigma_t, \kappa_t)\}
-  \right),
-  \quad K=3,
+    \lVert\hat{\mathbf{x}}^{\mathrm{new}}-\hat{\mathbf{x}}^{\mathrm{old}}\rVert_2>\tau_{\mathrm{move}}
+    \quad\Rightarrow\quad
+    s_{t+1}=F_{\mathrm{item\ info}}(s_t).
 \end{equation}
-其中 $a_t$ 為執行模組，$y_t$ 為模組回傳摘要，$\sigma_t \in \{0,1\}$ 表示成功與否，$\kappa_t$ 為 key facts。
 
-\subsection{動作空間}
+任務狀態主要服務於單次任務執行期間的流程銜接。對話紀錄、任務摘要、執行歷史與成功／失敗結果等摘要性資訊會另行持久化至 session-scoped 資料庫，主要供流程追蹤、錯誤分析與實驗紀錄使用，而非作為後續 VLM 決策的直接輸入。原始影像與大量感測資料則僅作為當下推論或控制的即時輸入，不納入持久化紀錄，以控制狀態規模。
 
-本研究的高層動作空間定義為
-\begin{equation}
-  \mathcal{A}=
-  \{
-  a^{nav}, a^{grasp}, a^{approach}, a^{done}
-  \},
-\end{equation}
-分別對應 major navigation、抓取姿態生成、底盤/手臂接近與任務完成。VLM 決策器實作為受限策略
-\begin{equation}
-  \pi_{\text{VLM}}:
-  (s_t, P)
-  \rightarrow
-  (a_t, \eta_t, m_t),
-\end{equation}
-其中 $P$ 為 system prompt，$\eta_t$ 為自然語言 reasoning，$m_t$ 為模組參數。實作上，$\pi_{\text{VLM}}$ 必須輸出符合 schema 的 JSON，因此其可行輸出受到 $\mathcal{A}$ 限制。
+\noindent{\footnotesize\textbf{基於 A2A 協定的跨代理人協作}}\par
+對於運算量較高的推論任務，本研究將物體資訊估計與抓取姿態生成實作為符合 A2A 規範的獨立外部 agents。A2A 在本系統中是 HTTP-based agent communication；主控流程作為 client，透過 HTTP 通訊與 A2A SDK 呼叫遠端 agent server，在需要外部推論時向對應 agent 發派任務，將結構化資訊與影像資料一併傳送，並解析 agent 回傳的結構化結果後寫入任務狀態，供後續節點使用。值得注意的是，並非所有功能節點皆透過 A2A 運作；導航與車體接近控制主要透過本地流程與 ROS2 執行。此設計使外部推論 agents 得以獨立部署於不同執行環境或主機，並可在不影響整體 workflow 結構的前提下進行更新或替換。
 
-\subsection{任務成功條件}
+\noindent{\footnotesize\textbf{ROS2 感測與控制通訊}}\par
+Unity 數位孿生環境中的感測資料與控制命令主要透過 ROS2 傳遞。系統透過 ROS2 接收來自 Unity 端的物體世界座標、相機影像、定位資訊、導航結果與手臂關節狀態，並透過 ROS2 發布導航目標與控制命令至移動底盤及機械手臂。ROS2 節點之間的 topic、service 與 action 通訊採用 ROS2 原生通訊機制完成；而 rosbridge websocket 則作為 Unity 或外部視覺化工具連接 ROS2 graph 的橋接介面，使非 ROS2 原生環境也能讀取或發布 ROS2 訊息。
 
-令 $z_t^{cube}$ 表示抓取驗證或目標高度相關的完成訊號，$\sigma_t^{approach}$ 表示 car approach 模組成功狀態。本文將任務完成條件定義為
-\begin{equation}
-  \mathbb{I}_{success}
-  =
-  \mathbb{I}
-  \left[
-    \sigma_t^{approach}=1
-    \land
-    \sigma_t^{arm}=1
-  \right],
-\end{equation}
-其中 $\sigma_t^{arm}$ 由手臂與夾爪 finish sequence 的回傳結果決定。當成功條件成立，下一次 VLM 決策應輸出 $a^{done}$，系統再執行 home navigation 或結束流程。
+\subsection{Agents}
 
-\section{系統架構}
+本節說明本研究 pick workflow 中各個自建 agents 的功能與角色，並進一步介紹各 agents 在任務中的具體責任。表~\ref{tab:agent_roles} 摘要本研究使用的主要 agents 與 workflow nodes，後續小節將依照任務執行順序，分別說明各 agents 的設計方式與其在整體移動抓取流程中的作用。
 
-\subsection{整體架構}
-
-本系統分成 Commander、RTX 3090 A2A Services 與 ROS2/Unity 三個部署邊界。Commander 為任務中樞，RTX 3090 負責 GPU 推論，ROS2/Unity 負責相機資料、世界座標與實體控制。此架構的核心設計原則是：任何高成本或模型相依的推論服務都應與 Commander 解耦；任何低層控制皆由 ROS2 節點或 action server 驗證執行。
-
-\begin{longtable}{>{\raggedright\arraybackslash}p{0.24\linewidth}p{0.28\linewidth}p{0.38\linewidth}}
+\begingroup
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\begin{longtable}{@{}p{0.26\textwidth}p{0.31\textwidth}p{0.35\textwidth}@{}}
+\caption{Main agents and workflow nodes used in the pick workflow.}\label{tab:agent_roles}\\
 \toprule
-\textbf{層級} & \textbf{主要模組} & \textbf{功能} \\
+Agent or node & Main input/output & Workflow role \\
 \midrule
-Commander & 主流程、狀態圖、VLM 決策器 & 管理 LangGraph 狀態、A2A client、記憶與 trace。 \\
-RTX 3090 & Find、ItemInfo、Grasp 服務 & 執行 YOLO、三維資訊估計、GraspGen 抓取姿態生成。 \\
-ROS2/Unity & 導航橋接、車體控制、手臂控制 & 發布相機與 world position，執行 Nav2、底盤、手臂與夾爪控制。 \\
+\texttt{task\_classification\_node} & User utterance and object aliases / task intent & Route the input to general chat or robot task. \\
+\texttt{input\_node} & User request and object list / requested object & Resolve the target object class or related object option. \\
+\texttt{find\_node} & World position data and room cameras / selected instance & Lock a concrete target instance and provide visual confirmation when needed. \\
+\texttt{get\_item\_info\_no\_sam3d\_node} & Target instance, room camera observations, map / ranked goal poses & Estimate object information and generate feasible navigation candidates. \\
+\texttt{nav\_move\_node} & Selected goal pose / navigation result & Send goal to navigation and record plan, arrival, and status. \\
+\texttt{observe\_node} & Car camera stream / close-range observation & Capture the current viewpoint for VLM reasoning. \\
+\texttt{reason\_node} & Task state, observation, history / next agent action & Choose the next high-level agent from a constrained action set. \\
+\texttt{major\_nav\_node} & Ranked goal pose list / next navigation goal & Switch to the next candidate viewpoint when current view is insufficient. \\
+\texttt{car\_grasp\_node} & RGB-D observation and target id / grasp candidates & Generate 6-DoF grasp poses from local point cloud. \\
+\texttt{car\_approach\_node} & Grasp pose and scene geometry / execution result & Sample feasible base poses, drive the base, and execute the arm sequence. \\
+\texttt{update\_memory\_node} & Latest decision and execution result / task memory & Record success, failure phase, and key facts for later reasoning. \\
+\texttt{nav\_home\_node} & End condition / return-home result & Return the robot to the home state after success or termination. \\
+\bottomrule
+\end{longtable}
+\endgroup
+
+\begin{algorithmblock}{Complete pick workflow}
+\item Classify the user utterance. If it is general chat, answer conversationally and wait for the next utterance.
+\item For a pick task, parse the requested object and read the latest world position data.
+\item Lock the target instance. If multiple instances match, ask the user to select one using the candidate views.
+\item Send the selected instance and room-camera evidence to the item-information agent.
+\item Generate ranked goal poses and navigate to the highest-ranked feasible candidate.
+\item Capture the car-camera observation and ask the VLM decision agent for the next high-level action.
+\item If the decision is major navigation, refresh the target state and move to the next ranked goal pose.
+\item If the decision is grasping, refresh the target state, generate grasp poses, and run base-arm approach.
+\item Update memory after each navigation, decision, grasp, or approach result.
+\item Return home after success, target loss, candidate exhaustion, or an unrecoverable failure.
+\end{algorithmblock}
+
+\subsubsection{目標物鎖定}
+
+目標物鎖定的目的，是將使用者以自然語言描述的物體，對應到場景中實際存在的 target instance。由於使用者通常只會說出物體類別，例如「幫我拿杯子」或「幫我拿小熊」，系統必須先知道空間中有哪些可操作物體，以及這些物體在場景中的 3D 位置，才能進入後續導航與抓取流程。
+
+在使用者提出任務前，系統會先透過多台環境相機取得空間中物體的 3D 座標資訊。本研究延續 Fang-Chen Hsu、Yi-Hsien Hsieh 與 Wen-Yu Su 於智慧家庭多相機感知與可觀測性模擬框架中的概念 \cite{hsu_multicam}，利用多台固定式環境相機從不同視角觀察同一居家場景，使系統能在機器人尚未接近目標物之前，先建立場景中可操作物體的空間資訊。各相機會偵測影像中的物體類別與影像位置，並根據相機標定資訊將影像中的物體位置轉換為空間中的觀察方向。由於單一 RGB 相機只能提供目標物相對於相機的方向，無法直接決定完整深度，因此系統會結合多台相機的觀察結果，透過多視角幾何估計物體在世界座標中的位置。最後，系統會為每個定位到的物體建立 instance 資訊，包含物體類別、instance id、世界座標、來源相機與對應影像區域，作為後續任務查詢與目標確認的依據。
+
+當使用者輸入任務後，系統會先從自然語言請求中解析出欲操作的物體類別。例如，若使用者說「幫我拿小熊」，系統會將任務目標解析為小熊；若使用者說「拿杯子給我」，則會將目標解析為杯子。此步驟只負責理解使用者想拿的物體類別，尚未決定場景中實際要操作的是哪一個 instance。接著，系統會將解析出的物體類別與目前場景中的 3D 物體資訊進行比對，找出所有符合條件的候選物體。若場景中只有一個符合使用者請求的候選物體，系統會直接將其鎖定為本次任務的 target instance；若場景中存在多個同類物體，則需要根據物體位置、來源視角或使用者補充描述進一步確認實際目標。完成目標物鎖定後，系統會將選定的 target instance、物體世界座標與相關觀察資訊寫入任務狀態，作為後續任務的共同輸入。形式化而言，令目標描述為 $q$、場景候選集合為 $\mathcal{D}=\{d_1,\ldots,d_N\}$，符合條件的候選集合與被選定的目標 instance 為
+\begin{equation}
+    \mathcal{C}(q)=\left\{d_i\in\mathcal{D}\mid \operatorname{match}(q,d_i)=1\right\},
+    \qquad
+    o^{\star}=\begin{cases}
+    \mathcal{C}(q)_1, & |\mathcal{C}(q)|=1,\\
+    \operatorname{Confirm}(\mathcal{C}(q)), & |\mathcal{C}(q)|>1.
+    \end{cases}
+\end{equation}
+
+在任務執行過程中，系統也會持續確認目標物是否仍存在於最新的場景資訊中。若目標物消失，或其位置與先前紀錄相差過大，代表目標可能已移動或感知結果需要更新，此時 workflow 會進入重新確認、重新估計或任務中止流程，降低後續導航與抓取流程操作錯誤物體的風險。
+
+\subsubsection{物體資訊估計與候選 goal pose}
+
+目標物鎖定後，系統已取得 target instance 與其世界座標。然而，僅憑物體中心位置不足以支撐完整的移動抓取流程，物體尺寸與朝向會直接影響導航停靠點的選擇、抓取姿態的可行性、手臂可達性與碰撞檢查。因此，系統在導航前先估計目標物的幾何資訊，再根據候選抓取姿態與場景可通行空間產生 ranked goal poses。整體流程分為三個階段：尺寸估計、GraspGen 抓取姿態生成，以及方向分群與候選導航點排序。
+
+\noindent{\footnotesize\textbf{尺寸估計}}\par
+尺寸估計的目標是在不依賴深度感測的情況下，根據四台環境相機的 RGB 影像、相機標定資訊，以及前一階段取得的物體中心世界座標，將目標物近似為一個帶有 yaw 的 3D box。系統首先在各視角中以 YOLO 偵測目標物的 bounding box，並以該 bounding box 作為 SAM 的提示，取得目標物的 segmentation mask。若 SAM 在某一視角中未能產生有效結果，則以該視角的 bounding box 矩形區域作為近似遮罩，以維持尺寸估計流程的穩定性。
+
+物體高度由兩種幾何估計方式共同決定。第一種方式依據針孔相機模型，利用目標物在影像中的 bounding box 高度、相機焦距，以及物體中心相對於相機的深度，推算其真實高度。第二種方式則利用多視角觀察建立空間中的垂直參考線。具體而言，各相機中 bounding box 的中心點可形成一條由相機中心出發的觀察射線；系統先在水平面上求得最接近多條射線的物體中心位置，並以此建立穿過物體中心的垂直方向參考。接著，系統將各視角 bounding box 的上緣與下緣投影回此垂直參考線，得到另一組高度估計。最後，系統將上述兩種方法得到的有效高度候選值合併，並取其中位數作為基礎高度，以降低單一視角或單一估計方法造成的誤差。以針孔模型估計的高度為
+\begin{equation}
+    H^{\mathrm{bbox}}_i=\frac{h_i\,z_i}{f_{y,i}},
+\end{equation}
+其中 $h_i$ 為 bbox 像素高度，$f_{y,i}$ 為垂直焦距，$z_i$ 為物體中心在相機 $i$ 座標下的深度。垂直參考線由各相機觀察射線 $L_i(\mu)=C_i+\mu\mathbf{d}_i$ 在水平面上的最近交會點決定，等價於求解正規方程
+\begin{equation}
+    A\mathbf{x}=b,\quad
+    A=\sum_i\left(I-\mathbf{d}_i\mathbf{d}_i^\top\right),\quad
+    b=\sum_i\left(I-\mathbf{d}_i\mathbf{d}_i^\top\right)C_i,
+\end{equation}
+而基礎高度 $H_{\mathrm{ref}}$ 為有效 bbox 高度與垂直參考線高度的中位數。
+
+水平尺寸則根據 SAM mask 的形狀比例估計。對每一個有效視角，系統會先依照相機與物體中心的相對位置，在影像平面上估計對應世界垂直方向與水平側向的投影軸。接著，系統將 mask 內的像素分別投影至這兩個軸上，並以 5\% 至 95\% 百分位範圍估計可見高度與可見寬度的像素尺度。此作法可避免 mask 邊界雜訊或少量離群點直接影響尺寸估計。最後，系統以前述基礎高度作為比例尺，將影像中的可見寬度換算為真實空間中的水平寬度：
+\begin{equation}
+    W^{\mathrm{mask}}_i=H_{\mathrm{ref}}\,\frac{w^{\mathrm{mask}}_i}{h^{\mathrm{mask}}_i}.
+\end{equation}
+
+為了估計物體在地面上的 footprint 與 yaw，系統將物體底面近似為一個旋轉矩形，並以水平尺寸 $(s_x, s_z)$ 與朝向角 $\varphi$ 描述。對於方位角為 $\theta_i$ 的相機，該旋轉矩形在該視角下的預測可見寬度為：
+\begin{equation}
+    \hat{w}_i = \left|\sin(\theta_i - \varphi)\right|\,s_x + \left|\cos(\theta_i - \varphi)\right|\,s_z.
+\end{equation}
+系統會在 $\varphi \in [0, \pi]$ 的範圍內均勻搜尋可能的 yaw（預設 $721$ 個樣本），並在每一個候選 yaw 下，以最小二乘法估計對應的 $(s_x, s_z)$。最後，系統選擇使各視角預測寬度與實際估計寬度之間 RMSE 最小的結果，作為物體的水平尺寸與 yaw。為避免生成不合理的細長模型，系統會限制 footprint 的長寬比（預設上限 $1.8$）；若有效視角不足，則以各視角水平寬度的中位數作為 $s_x$ 與 $s_z$，並將 yaw 設為零。
+
+取得基礎高度與水平尺寸後，系統會再依據物體形狀比例對高度進行縮放修正，以補償不同外形物體在幾何估計上的偏差。以 $\rho=H_{\mathrm{ref}}/(s_x+s_z)$ 為形狀比例，透過線性插值在錨點 $[0.70,1.03,2.28]\mapsto[0.65,0.80,0.90]$ 上查得權重 $w(\rho)$，最終輸出為物體尺寸 $\texttt{size\_xyz\_m} = [s_x,\, h,\, s_z]$ 與對應的 yaw，其中 $h=H_{\mathrm{ref}}\cdot w(\rho)\cdot\gamma$、$\gamma$ 為 height scale（預設 $1.0$）。
+
+\begin{algorithmblock}{Geometric size estimation}
+\item For each camera, obtain a SAM mask from the bounding-box prompt, falling back to the bounding-box rectangle if SAM fails.
+\item Estimate height from the pinhole bbox model and from vertical-line fitting, then take the median as the reference height.
+\item Estimate per-view visible width from the mask using robust percentiles and the reference height as scale.
+\item Search yaw over $[0,\pi]$ and solve least squares for $(s_x,s_z)$, choosing the yaw with the smallest width RMSE.
+\item Rescale the height by the shape ratio and output \texttt{size\_xyz\_m} and yaw.
+\end{algorithmblock}
+
+\noindent{\footnotesize\textbf{GraspGen 夾取姿態生成}}\par
+完成尺寸估計後，系統會將目標物轉換成 GraspGen 可使用的幾何輸入。由於 GraspGen 需要根據物體的三維形狀產生候選抓取姿態，因此本研究將前一階段估計出的物體中心、長寬高與 yaw 組合成一個 3D box approximation。此 3D box 代表目標物在世界座標中的大致佔據範圍；系統會從 box 表面或內部取樣幾何點，形成目標物的近似點雲，作為 GraspGen 的輸入。相同地，場景中的其他物體也會以其估計尺寸與位置建立 3D box approximation，作為後續判斷碰撞時的障礙物模型。box 內取樣的局部點 $p_{\mathrm{local}}$ 會套上 yaw 旋轉並平移至物體中心：
+\begin{equation}
+    R_\varphi=\begin{bmatrix} \cos\varphi & 0 & \sin\varphi\\ 0 & 1 & 0\\ -\sin\varphi & 0 & \cos\varphi\end{bmatrix},
+    \qquad
+    p_{\mathrm{world}}=R_\varphi\,p_{\mathrm{local}}+\hat{\mathbf{x}}.
+\end{equation}
+
+GraspGen 會根據目標物的近似點雲產生多個候選 6-DoF grasp poses。這些候選姿態描述夾爪可以從哪些位置與方向接近目標物，但它們仍只是物體局部幾何下的抓取候選，尚未考慮機器人目前所在位置、導航地圖、周圍障礙物與車體接近限制。因此，系統不會直接採用 GraspGen 的輸出作為最終動作，而是先將候選抓取姿態轉換到與導航地圖一致的座標表示，使抓取姿態、目標物位置、障礙物位置、導航地圖與機器人 pose 能在同一個空間中進行比較。
+
+完成座標對齊後，系統會進行碰撞與可行性過濾。此步驟會檢查候選抓取姿態是否與目標物以外的障礙物 box 發生衝突，也會排除會使車體停靠位置落在不可通行區域的候選。只有通過碰撞檢查與空間可行性判斷的候選姿態，才會被保留下來，作為後續方向分群與 goal pose 排序的依據。
+
+\noindent{\footnotesize\textbf{方向分群與候選 Goal Pose 排序}}\par
+通過碰撞過濾的候選抓取姿態會進一步依據 approach direction 進行分群。本研究將水平面的接近方向劃分為八個 grasp orientation groups，每一群代表一個主要的車體接近角度。對於每一個候選抓取姿態，系統會根據其 approach direction 推算對應的車體停靠位置，並檢查該停靠位置的車體 footprint 是否落在 Occupancy Grid Map 的 free space 中。若車體 footprint 不與障礙物或 keepout 區域重疊，則該抓取姿態被視為可行姿態，並依其接近方向存入對應的 orientation group。令目標物中心為 $\hat{\mathbf{x}}$、接近方向為 $\mathbf{d}_m$、操作距離為 $\rho_m$，候選停靠點與其朝向為
+\begin{equation}
+    \mathbf{p}_m=\Pi_{xy}(\hat{\mathbf{x}}+\rho_m\mathbf{d}_m),\quad
+    \psi_m=\operatorname{atan2}(\hat{y}-p_{m,y},\,\hat{x}-p_{m,x}),\quad
+    \chi(g_m)=\mathbb{I}\!\left[\mathcal{B}(g_m)\subseteq\Omega_{\mathrm{free}}\right],
+\end{equation}
+其中 $g_m=(p_{m,x},p_{m,y},\psi_m)$，$\mathcal{B}(g_m)$ 為車體 footprint，$\Omega_{\mathrm{free}}$ 為可通行區域。
+
+完成分群後，系統會根據各 group 的可行性進行排序。若某一方向群中保留的可行抓取姿態數量較多，代表該方向有較多可能的抓取方式；若該方向在碰撞過濾後仍保留較高比例的候選姿態，代表該方向較不容易受到周圍障礙物限制；若其對應的車體停靠位置也位於可通行區域，則表示該方向同時滿足抓取與導航需求。因此，系統會優先選擇可行姿態數量較多、碰撞過濾通過率較高，且對應車體停靠位置位於 free space 的方向群，作為 ranked goal poses 的排序依據：
+\begin{equation}
+    \operatorname{score}(r)=\left(n_r,\;\max_{m\in r}\beta_m,\;\chi(g_m)\right),
+\end{equation}
+其中 $n_r$ 為第 $r$ 群的可行候選數量，$\beta_m$ 為對應候選的 grasp 或 observation confidence。排序後的 $G=\{g^{(1)},\ldots,g^{(K)}\}$ 會寫入 navigation state。
+
+\subsubsection{Nav2 FollowPath 改良}
+
+在移動抓取流程中，導航的目標不只是讓機器人抵達目標物附近，而是要使機器人停在適合觀察與後續抓取的位置與朝向。pros 系統已能規劃路徑並驅動車體沿路抵達指定位置 \cite{yushiang2025}，然而原有流程主要以位置到達作為導航完成條件，未完整處理目標朝向。因此，即使車體成功移動至目標點，仍可能未面向目標物，導致安裝於機械手臂上的第一人稱相機無法取得正確觀察視角，進而影響後續的視覺判斷。為解決此問題，本研究對導航流程進行兩項改良。
+
+\noindent{\footnotesize\textbf{朝向修正}}\par
+系統在產生候選停靠點時，會根據停靠點與目標物中心的相對位置計算車體應面向的方向，並將此朝向納入目標位姿。車體沿規劃路徑抵達終點、位置誤差進入容許範圍後，系統會進一步比對當前車體朝向與目標朝向之間的角度誤差，若誤差超出可接受範圍，則執行原地旋轉修正。由於原地旋轉本身會產生平移誤差，朝向修正完成後不再重新檢查位置誤差，而是以旋轉角度落入容許範圍作為導航成功的最終判定條件。若目標在 map frame 中位置為 $(x_o,y_o)$、候選停靠點為 $(x_g,y_g)$，則 goal yaw 為
+\begin{equation}
+    \psi_g=\operatorname{atan2}(y_o-y_g,\,x_o-x_g),
+\end{equation}
+車體沿全域路徑移動時，會選取距離車體至少 $d_{\min}=0.2$ m 的 local target point 並計算 heading error $e^{\ell}_t$，依角度誤差決定前進或左右旋轉；導航成功的最終條件為
+\begin{equation}
+    \lVert \mathbf{x}_t-\mathbf{x}_g\rVert_2\leq \tau_d
+    \quad\text{and}\quad
+    |\operatorname{wrap}(\psi_g-\theta_t)|\leq \tau_{\psi}.
+\end{equation}
+
+\noindent{\footnotesize\textbf{Keepout 區域限制}}\par
+佔用格網地圖（Occupancy Grid Map）記錄的可通行區域依賴感測器掃描結果，然而 LiDAR 在實際環境中存在掃描盲區。以桌子為例，LiDAR 通常只能掃到桌腳，桌面下方的空間在地圖上可能被標示為可通行，但車體實際上無法安全進入或停靠於此。本研究在導航地圖中額外加入 keepout 層，將這些因感測器盲區或任務需求而不適合車體通過或停靠的位置明確標記為限制區域，使路徑規劃在產生路徑與檢查停靠點時能主動迴避。對每一個候選停靠點 $g_m$，系統會檢查車體 footprint 是否完全位於 keepout map 的 free area：
+\begin{equation}
+    \chi_{\mathrm{keep}}(g_m)=\mathbb{I}\!\left[\mathcal{B}(g_m)\subseteq\Omega_{\mathrm{free}}^{\mathrm{keepout}}\right],
+\end{equation}
+只有 $\chi_{\mathrm{keep}}(g_m)=1$ 的候選點會被保留並排序；相同的 keepout map 也會在近距離車體接近階段再次使用。
+
+\begin{algorithmblock}{Improved Nav2 FollowPath with keepout map}
+\item Generate ranked goal poses from the selected target, grasp approach directions, and keepout-map feasibility.
+\item Convert the selected goal pose to a ROS map pose whose yaw faces the target center.
+\item Follow the Nav2 global path by selecting a local target point at least $0.2$ m from the robot.
+\item Rotate when the heading error is too large; otherwise move forward, using slow actions near the final goal.
+\item Switch to final yaw alignment near the goal and report success only when both distance and heading tolerances are satisfied.
+\item If the goal is blocked by keepout map, navigation failure, or poor observation, update memory and switch to the next ranked goal pose.
+\end{algorithmblock}
+
+\subsubsection{車載觀察與 VLM 決策}
+
+當機器人完成 Nav2 導航並抵達目前候選 goal pose 後，系統會進入車載觀察與 VLM 決策階段。前一階段的導航流程已使車體停在目標物附近，並讓車體朝向目標物。然而，從環境相機與候選導航點所得到的資訊仍屬於遠距離且較粗略的估計，無法完全保證目標物在近距離視角下清楚可見，也無法確認目前停靠點是否適合直接進入抓取。因此，本研究在進入抓取流程前，透過車載第一人稱相機取得近距離觀察，並由 VLM 根據當前影像與任務狀態選擇後續行動。
+
+\noindent{\footnotesize\textbf{Observe node}}\par
+Observe node 的主要功能，是在車體抵達候選 goal pose 後取得第一人稱觀察影像。本研究的第一人稱相機安裝於機械手臂上，因此其視角接近機器人實際執行抓取前所能觀察到的畫面。相較於環境相機，車載第一人稱相機能提供更接近抓取階段的視覺資訊，適合用來確認目標物是否位於車體前方、是否出現在目前視野中、是否受到其他物體遮擋，以及目前停靠位置是否足以支援後續抓取姿態生成與車體接近流程。
+
+在此節點中，系統會擷取車載 RGB 影像，並將其與目前 workflow state 一併整理為後續 VLM 決策的輸入。此狀態包含使用者請求、已鎖定的 target instance、目前候選 goal pose、導航結果、先前估計的目標物位置與尺寸，以及歷史執行紀錄。
+
+\noindent{\footnotesize\textbf{Reason node}}\par
+Reason node 負責根據 observe node 取得的第一人稱影像與目前任務狀態，判斷下一步應呼叫哪一個 agent。系統會將目前影像、目標物描述、導航結果、候選點資訊與近期歷史紀錄整理成 prompt，使 VLM 判斷目前視角是否足以繼續任務。此判斷包含目標物是否出現在影像中、影像中的物體是否符合使用者指定目標、目標是否被遮擋、目前視角是否適合進入抓取流程，以及是否需要切換至下一個候選 goal pose 重新觀察。
+
+為了避免 VLM 產生不可執行或不穩定的自由文字控制命令，本研究將 VLM 的輸出限制在預先定義的 agent action set 中。若 VLM 判斷目標物清楚可見，且目前視角足以支援後續抓取，workflow 會進入抓取姿態生成階段；若 VLM 判斷目標物未出現在畫面中、受到遮擋，或目前視角不適合抓取，workflow 則會切換至下一個 ranked goal pose，讓機器人從另一個方向重新導航與觀察。此決策可寫成在有限動作集合上的選擇
+\begin{equation}
+    \mathcal{A}=\{\textsc{MajorNav},\textsc{GraspPipeline},\textsc{Done}\},
+    \qquad
+    a_t=\arg\max_{a\in\mathcal{A}}p_{\phi}(a\mid\Phi(s_t,o_t,m_t)),
+\end{equation}
+其中 $o_t$ 為車載影像觀察，$m_t$ 為最近任務記憶，輸出以結構化 JSON 表示。
+
+Reason node 的決策結果會被寫回 workflow state，包含 VLM 對目前影像的判斷、選擇的 agent action、失敗原因、已嘗試的候選點與後續流程方向。這些資訊會成為後續決策依據，使系統避免在相同候選點與相同視角下重複做出相同錯誤選擇。例如，若某個候選 goal pose 已被判定為目標不可見或遮擋嚴重，系統在後續重試時會降低該候選點的優先度，或直接切換至下一個候選方向。
+
+\subsubsection{抓取pipeline}
+
+當 reason node 判斷目前車載觀察已足以嘗試抓取時，workflow 會進入抓取 pipeline。本階段的目標，是將近距離 RGB-D 觀察轉換為可實際執行的車體接近與手臂抓取動作。雖然抓取流程內部包含目標狀態更新、抓取姿態生成、底盤接近、手臂執行與結果記錄等多個步驟，但本研究將其設計為一條連續 pipeline，而不是在每個子階段都重新呼叫 VLM 決策。其原因在於，當 VLM 已經根據車載影像與任務狀態判斷目前視角適合進入抓取後，後續問題主要轉為幾何估計、點雲處理、碰撞檢查、IK 可達性判斷與低階控制執行。這些步驟的輸入與輸出相對明確，若每個階段都再次要求 VLM 推論，不僅會增加推論時間，也可能在原本可由規則與幾何檢查完成的流程中引入不必要的不確定性。
+
+進入抓取 pipeline 後，workflow 會依序執行 \texttt{update\_\allowbreak item\_\allowbreak info\_\allowbreak node}、\texttt{car\_\allowbreak grasp\_\allowbreak node}、\texttt{car\_\allowbreak approach\_\allowbreak node}，並在失敗時進入 \texttt{update\_\allowbreak memory\_\allowbreak node} 記錄結果。若 \texttt{car\_\allowbreak approach\_\allowbreak node} 成功完成抓取，workflow 會直接進入任務收尾與返航流程；若抓取姿態生成或車體接近失敗，系統才會更新記憶，並回到後續觀察與決策迴圈，使 VLM 根據失敗原因判斷是否切換至下一個候選導航點。此 pipeline 可表示為
+\begin{equation}
+    \textsc{GraspPipeline}:
+    s_t \xrightarrow{\mathrm{update}} s_t'
+    \xrightarrow{\mathrm{grasp}} g_t
+    \xrightarrow{\mathrm{approach}} a_t
+    \xrightarrow{\mathrm{memory}} m_{t+1}.
+\end{equation}
+
+\noindent{\footnotesize\textbf{\texttt{update\_item\_info\_node}}}\par
+update\_item\_info\_node 是抓取 pipeline 的入口，此節點的設計目的，是在抓取前加入一次狀態一致性檢查。它避免系統因為目標位置變化，而對錯誤物體或過期位置執行抓取。同時，這也讓抓取 pipeline 在真正進入低階控制前，仍保留重新估計與安全退出的能力。
+
+此節點會更新目標物座標資訊，若目標物已不存在於最新觀察中，系統會清空當前導航與抓取相關狀態，並進入任務結束或返航流程。若目標仍存在，但最新位置與先前估計位置的差距超過門檻，代表目標物可能已移動，系統會回到物體資訊估計流程，重新估計物體資訊與 ranked goal poses。只有當目標物仍存在，且位置變化仍在可接受範圍內時，workflow 才會將更新後的目標狀態寫回任務狀態，並繼續進入 car\_grasp\_node。其判斷可寫成
+\begin{equation}
+    \delta_t=\left\lVert \hat{\mathbf{x}}^{\mathrm{new}}_t-\hat{\mathbf{x}}^{\mathrm{old}}_t\right\rVert_2,
+    \qquad
+    \delta_t>\tau_{\mathrm{move}} \Rightarrow \textsc{ReEstimateItemInfo}.
+\end{equation}
+
+\noindent{\footnotesize\textbf{\texttt{car\_grasp\_node}}}\par
+car\_grasp\_node 負責根據車載第一人稱相機的近距離觀察產生候選抓取姿態。在 workflow 中，car\_grasp\_node 是抓取 pipeline 的其中一個節點；在系統實作上，它扮演 A2A client 的角色，負責將目前任務狀態與車載觀察資料送至外部 grasp agent。這樣設計的原因在於，GraspGen、影像分割、點雲建立與候選抓取姿態生成需要較高的運算資源，因此本研究將此類推論服務獨立為 A2A agent，使主控流程不需要直接處理模型內部推論細節，只需以標準化資料呼叫服務並接收回傳結果。
+
+進入 car\_grasp\_node 後，系統會整理車載 RGB 影像、深度影像、目前機器人定位資訊、目標物描述、target instance 與最新目標物資訊，並透過 A2A request 傳送給外部 grasp agent。grasp agent 接收資料後，會在車載 RGB 影像中確認目標物，並以目標 bounding box 取得 segmentation mask。接著，系統將 mask 與 depth map 對齊，根據相機內參把目標物區域的深度像素回投影為 target point cloud；同時，非目標區域的有效深度點會形成 scene point cloud，作為周圍環境與障礙物的表示。其回投影與目標點雲集合為
+\begin{equation}
+    X=\frac{(u-c_x)Z(u,v)}{f_x},\;
+    Y=\frac{(v-c_y)Z(u,v)}{f_y},\;
+    Z=Z(u,v),
+\end{equation}
+\begin{equation}
+    \mathcal{P}_{\mathrm{obj}}=
+    \left\{(X,Y,Z)\mid M(u,v)=1,\;Z_{\min}<Z(u,v)<Z_{\max}\right\},
+\end{equation}
+其中 $M(u,v)$ 為目標 mask。
+
+建立點雲後，grasp agent 會先移除無效或不合理深度點，並對點雲進行降採樣，將 target point cloud 與 scene point cloud 輸入 GraspGen，產生多個候選 6-DoF grasp poses，並透過 collision filtering 移除會與周圍場景衝突的姿態。最後，grasp agent 會將有效候選姿態與相關偵測資訊回傳給 car\_grasp\_node，由 car\_grasp\_node 將 grasp result 寫回 workflow state，作為後續 car\_approach\_node 的輸入。有效候選姿態 $\mathcal{R}=\{(T_m,\beta_m)\}$（$T_m\in SE(3)$、$\beta_m$ 為 grasp confidence）的排序不只看 confidence，而是先依 grasp position 與目前 gripper midpoint 的距離排序，再以 confidence 作為次要準則：
+\begin{equation}
+    \kappa_m=\left(\left\lVert \mathbf{t}_m-\mathbf{p}_{\mathrm{gripper}}\right\rVert_2,\;-\beta_m\right).
+\end{equation}
+
+\begin{algorithmblock}{Grasp pose generation in the grasp agent}
+\item Receive RGB-D, AMCL pose, object id, target instance, and world center through an A2A request.
+\item Detect the target with YOLO and obtain a SAM mask from the chosen bounding box.
+\item Align the mask with the depth map and back-project target pixels into a target point cloud; non-target pixels form the scene point cloud.
+\item Filter invalid depth, downsample, and run GraspGen with collision filtering.
+\item Rank valid grasp poses by gripper-midpoint distance and confidence, and return them to \texttt{car\_grasp\_node}.
+\end{algorithmblock}
+
+\noindent{\footnotesize\textbf{\texttt{car\_approach\_node}}}\par
+car\_approach\_node 是抓取 pipeline 中將候選 grasp pose 轉換為實際底盤與手臂動作的節點。即使 car\_grasp\_node 已產生可行的抓取姿態，車體仍需要更接近目標物，找到一個能讓手臂到達該姿態、且車體不會碰撞的底盤位置。因此，此節點不會直接執行手臂抓取，而是先根據 grasp pose、目標物位置、機器人目前 pose 與場景障礙物，搜尋可執行的抓取策略。
+
+在微調車體位置階段，系統會根據 grasp approach direction，在目標物周圍產生多個候選底盤 pose。每個候選 pose 都需要通過三類檢查。第一是地圖可行性檢查：系統會檢查候選底盤 pose 對應的車體 footprint 是否位於 keepout map 的 free space，並避免進入不適合停靠區域。第二是碰撞檢查：底盤、手臂與夾爪接近方向不能與場景障礙物或目標物以外的物體發生碰撞。第三是 IK 可達性檢查：手臂必須能從該底盤 pose 到達指定 grasp pose，且末端位置與姿態誤差需落在可接受範圍內。可行解選擇可表示為
+\begin{equation}
+    b^{\star}=\arg\min_{b\in\mathcal{B}}J(b,T_m)
+    \quad\text{s.t.}\quad
+    b\in\Omega_{\mathrm{free}},\;
+    \operatorname{CollisionFree}(b,T_m)=1,\;
+    \operatorname{IK}(b,T_m)=1.
+\end{equation}
+
+若系統找到同時滿足地圖可行、無碰撞與 IK 可達的底盤解，該解會被選為 selected base pose，並進入實際執行階段。若系統沒有找到完全滿足 IK 條件的可行解，但存在不碰撞且距離目標較近的候選底盤位置，則會將其記錄為 closest solution，作為後續執行或 fallback 判斷的參考。這樣設計的原因在於，GraspGen 產生的 grasp pose 只是眾多可能抓取姿態中的候選之一，實際抓取並不必然只能精確執行該姿態。對於同一個物體而言，夾爪的接近方向、末端位置與底盤停靠點可能存在多個近似可行解；即使某些候選姿態無法完全通過 IK 求解，只要車體位置不與環境碰撞，且手臂末端與目標之間的誤差仍在可接受範圍內，系統仍可能透過後續車體微調或手臂控制完成抓取。
+
+在實際執行階段，車體移動至 selected base pose 後，系統會根據實際 AMCL pose 重新計算目標物相對於機器人底座的位置，再進行 IK 求解。這樣做是為了補償車體導航時產生的定位誤差，避免手臂仍依照導航前假設的位置執行，導致夾爪對不準目標。夾取完畢後，無論抓取成功或失敗，car\_approach\_node 都會使手臂回到 reset joints，並讓車體返回接近前的位置或安全狀態。最後，此節點會回傳 selected solution、closest solution、取樣摘要、車體導航結果、手臂執行結果、車體返回結果與失敗階段。透過這些資訊，上層 workflow 可以判斷失敗發生在哪個確切的階段，而不是只得到一個模糊的失敗訊號。
+
+\begin{algorithmblock}{Base-arm approach}
+\item Sample base poses around the target along the grasp approach direction for each valid grasp pose.
+\item Reject candidates whose footprint leaves the keepout-map free space, that collide, or that fail IK reachability.
+\item Select the executable base pose; if none is fully feasible, keep the closest collision-free pose as a fallback.
+\item Drive the base to the selected pose, recompute arm compensation from the actual AMCL pose, and run the arm grasp sequence.
+\item Reset the arm and return the base, then report the selected/closest solution, per-stage results, and failure phase.
+\end{algorithmblock}
+
+\subsubsection{導航至下一個候選點}
+
+在 pick workflow 中，系統不假設第一個候選 goal pose 一定能完成任務。若機器人抵達目前候選點後，車載相機觀察結果不佳，例如目標物未出現在畫面中、受到遮擋，或 VLM 判斷目前視角不適合進入抓取流程，系統便會切換至下一個候選 goal pose。
+
+此流程由 major\_nav\_node 負責。major\_nav\_node 會從 ranked goal poses 中選取下一個尚未嘗試的候選點，並將其更新為新的 navigation goal。接著，workflow 會再次呼叫 nav\_move\_node，使機器人依照新的 goal pose 導航至下一個停靠位置。令排序後的候選點為 $G=\{g^{(1)},\ldots,g^{(K)}\}$、目前嘗試第 $k$ 個，則切換更新為 $k\leftarrow k+1,\; g_t\leftarrow g^{(k)}$。
+
+當機器人抵達新的候選點後，系統會再次進入 observe node，擷取新的第一人稱影像，並交由 reason node 判斷是否可以進入抓取 pipeline。若新的視角仍不可行，系統會繼續切換至下一個候選點；若所有候選點皆已嘗試完畢，workflow 則會將任務標記為無可行觀察位置，並進入任務結束或返航流程。
+
+\subsubsection{記憶更新}
+
+在本研究的 pick workflow 中，update\_memory\_node 的目的是將最近一次導航、觀察或抓取嘗試整理成下一輪決策可用的摘要記憶。由於任務可能經歷多次候選點切換與抓取嘗試，若系統不記錄先前結果，就可能在相同視角或相同失敗條件下重複執行相同動作。因此，update\_memory\_node 會將最近一次執行的 action、VLM reasoning、執行結果、成功與否，以及關鍵失敗資訊整理後寫入 history buffer，並供後續 reason node 建立 prompt 時使用。任務記憶可表示為有界歷史序列
+\begin{equation}
+    m_{t+1}=\operatorname{Keep}_{K}\left(m_t\cup\{(a_t,r_t,e_t,\eta_t)\}\right),
+\end{equation}
+其中 $a_t$ 為高層動作，$r_t$ 為決策原因或節點摘要，$e_t$ 為執行結果，$\eta_t$ 為關鍵事實。
+
+表~\ref{tab:memory_fields} 整理本研究記憶更新機制中主要保存的資訊與其用途。
+
+\begingroup
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\begin{longtable}{@{}p{0.22\textwidth}p{0.42\textwidth}p{0.30\textwidth}@{}}
+\caption{記憶更新機制中主要保存的資訊與其用途。}\label{tab:memory_fields}\\
+\toprule
+記憶欄位 & 內容 & 用途 \\
+\midrule
+\endfirsthead
+\toprule
+記憶欄位 & 內容 & 用途 \\
+\midrule
+\endhead
+history\_buffer & 每次記憶更新時新增一筆歷史紀錄，包含 action、reasoning、result、success、key facts 與 trace id & 作為後續 VLM 決策的近期行動歷史，避免重複相同失敗策略 \\
+action & 最近一次執行的 agent 或 node，例如 navigation、car\_grasp 或 car\_approach & 讓系統知道上一輪實際執行的是哪個流程 \\
+reasoning & 上一輪 reason node 選擇該 action 的決策理由 & 讓後續 VLM 理解先前為何選擇該動作 \\
+result & 最近一次執行結果摘要，例如導航訊息、grasp failed、approach 失敗訊息等 & 以簡短文字描述該次嘗試的結果 \\
+success & 該次執行是否成功 & 讓後續流程快速判斷該策略是否可重複使用 \\
+key facts & 與失敗或成功有關的關鍵狀態，例如 approach\_success、arm\_success、pose\_ready、arrived、plan\_ready & 提供 VLM 更明確的決策依據，而不是只依賴自然語言摘要 \\
+trace id & 每筆記憶對應的追蹤編號 & 方便後續對照 log、資料庫紀錄或除錯時間線 \\
+session\_summary & 以純文字累積的任務摘要，例如「某 action 的結果與 success 狀態」 & 提供任務層級的簡短歷史摘要，並限制長度避免 state 過大 \\
+retry\_count & 目前重試次數 & 協助 bounded loop 或測試流程控制，避免無限制重試 \\
+current\_status & update\_memory\_node 執行後的目前狀態 & 表示記憶更新已完成，供 workflow 判斷流程進度 \\
+last\_execution & update\_memory\_node 本身的執行紀錄，包含節點名稱、狀態、成功與否、延遲與錯誤訊息 & 保留節點執行狀態，方便追蹤 workflow 是否正常更新記憶 \\
+\bottomrule
+\end{longtable}
+\endgroup
+
+update\_memory\_node 並不會保存原始影像、base64 圖片、完整 depth map、大量 world position data 或完整 agent payload。這些大型資料只在特定節點執行時作為即時輸入，節點完成後只保留後續決策需要的摘要與結構化結果。此設計能避免 workflow state 隨著任務時間增加而變得過大，同時保留後續 reason node 所需的關鍵資訊。
+
+表~\ref{tab:memory_priority} 進一步整理記憶摘要的來源優先順序。update\_memory\_node 會根據目前 state 中可用的結果，選擇最能代表最近一次執行狀態的資訊寫入記憶。
+
+\begingroup
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\begin{longtable}{@{}p{0.08\textwidth}p{0.22\textwidth}p{0.38\textwidth}p{0.26\textwidth}@{}}
+\caption{記憶摘要的來源優先順序。}\label{tab:memory_priority}\\
+\toprule
+優先順序 & state 中可用資訊 & 記憶摘要內容 & key facts \\
+\midrule
+\endfirsthead
+\toprule
+優先順序 & state 中可用資訊 & 記憶摘要內容 & key facts \\
+\midrule
+\endhead
+1 & approach\_result & 車體接近與手臂執行結果；若有 message 則使用 message，否則使用狀態碼 & approach\_success、arm\_success \\
+2 & grasp\_result & 抓取姿態生成結果，例如 grasp result ready 或 grasp failed & grasp\_confidence、pose\_ready \\
+3 & navigation.result & 導航結果訊息，例如是否抵達、是否成功產生 path & arrived、plan\_ready \\
+4 & last\_execution & 最近一次節點執行狀態或訊息 & 依節點狀態保留必要摘要 \\
+\bottomrule
+\end{longtable}
+\endgroup
+
+表~\ref{tab:memory_trigger} 說明 update\_memory\_node 的主要觸發時機。
+
+\begingroup
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\begin{longtable}{@{}p{0.18\textwidth}p{0.18\textwidth}p{0.30\textwidth}p{0.28\textwidth}@{}}
+\caption{update\_memory\_node 的主要觸發時機。}\label{tab:memory_trigger}\\
+\toprule
+觸發來源 & 條件 & update\_memory\_node 的作用 & 後續流程 \\
+\midrule
+\endfirsthead
+\toprule
+觸發來源 & 條件 & update\_memory\_node 的作用 & 後續流程 \\
+\midrule
+\endhead
+nav\_move\_node & 非初始導航完成後 & 記錄此次導航結果，包含是否抵達、path 是否可用等 & 回到 observe node 取得新的第一人稱觀察 \\
+car\_approach\_node & 車體接近或手臂執行失敗 & 記錄 approach/grasp 失敗原因與關鍵狀態 & 回到 observe node 重新取得第一人稱觀察，後續再由 reason node 決定是否切換候選點或採取其他動作 \\
+car\_approach\_node & 車體接近與手臂執行成功 & 不進入 update\_memory\_node & 直接進入任務收尾或返航流程 \\
+\bottomrule
+\end{longtable}
+\endgroup
+
+記憶更新後，reason node 在建立 VLM prompt 時會取最近幾筆 history buffer，放入 Recent Action History。VLM 因此能看到最近執行過哪些 action、結果是否成功，以及 key facts 中的關鍵失敗資訊。例如，若上一輪 car\_approach\_node 的 key facts 顯示 approach\_success=false 或 arm\_success=false，VLM 便能知道目前候選點下的抓取執行並不理想，進而傾向切換至下一個候選 goal pose，而不是重複相同抓取流程。
+
+\section{Experiments}
+
+\subsection{Unity Environment}
+
+本研究使用 Unity 數位孿生環境作為實驗場域，並以 LinYuTang 居家場景模擬日常室內任務。場景中包含移動機器人、車載相機、環境相機、可抓取物件與家具配置，使系統能在可重複控制的條件下測試自然語言任務理解、多視角目標定位、候選導航點選擇、車載觀察與移動抓取流程。相較於只在靜態資料集上驗證單一感知模組，此環境能保留任務執行中的連續性與失敗回復需求，因此適合作為本研究方法的整體實驗平台。
+
+\figsuggestion
+{Unity Environment Overview}
+{呈現 LinYuTang 居家場景、環境相機、移動機器人與代表性目標物。}
+{Unity scene screenshot、room camera view、mobile manipulator view。}
+{此圖用於說明第四章實驗所使用的數位孿生場域與主要感測來源。}
+
+
+\subsection{Available Evidence and Missing Results}
+
+本研究目前可由專案確認實驗環境、任務流程、可抓取物件、相機配置、runtime timeout、導航 tolerance、抓取與靠近模組輸出欄位，以及 trace logger 的存在。然而，專案內尚未找到可直接引用的正式實驗結果檔，例如成功率表格、accuracy、precision、recall、F1-score、navigation rate、pick success rate、training curve 或完整 trace 統計。因此，本章先提出可依現有系統執行的實驗設計與紀錄表格，所有數值結果保留為待填欄位。
+
+\begin{longtable}{p{0.28\linewidth}p{0.36\linewidth}p{0.26\linewidth}}
+\caption{目前缺少且需人工確認的實驗資訊}
+\label{tab:missing-confirmation}\\
+\toprule
+項目 & 需確認內容 & 狀態 \\
+\midrule
+\endfirsthead
+\toprule
+項目 & 需確認內容 & 狀態 \\
+\midrule
+\endhead
+VLM provider & 正式實驗使用 Ollama、本地開源模型、Gemini 或其他 provider & [NEED HUMAN CONFIRMATION] \\
+硬體規格 & Commander 主機、RTX 3090 主機、GPU/CPU/RAM、網路或本地部署方式 & [NEED HUMAN CONFIRMATION] \\
+模型權重 & YOLO、SAM、GraspGen、VLM 版本與實際權重檔 & [NEED HUMAN CONFIRMATION] \\
+實驗次數 & 每個物件、每個場景與每個條件的 trial 數 $N$ & [NEED HUMAN CONFIRMATION] \\
+成功率與時間 & 任務成功率、導航成功率、抓取成功率、平均時間、標準差 & [NEED HUMAN CONFIRMATION] \\
+失敗案例 & 目標移動、遮擋、導航失敗、無 grasp、IK failure、返航失敗之分類紀錄 & [NEED HUMAN CONFIRMATION] \\
+隱私宣稱 & 所有 VLM/感知/決策是否完全本地執行且無外部網路傳送 & [NEED HUMAN CONFIRMATION] \\
 \bottomrule
 \end{longtable}
 
-\subsection{LangGraph 狀態圖}
+\subsection{Experimental Setup}
 
-系統狀態圖包含對話入口、任務分類、目標確認、物體資訊估計、導航、觀察、推理、抓取、接近、記憶更新與結束節點。其路由函數可抽象為
+建議實驗場景使用同一套 Unity/ROS2 數位孿生居家環境。每次 trial 從 home pose 開始，使用者以自然語言指定目標物，系統完成目標確認後自動執行 item-info、導航、觀察、VLM 決策、抓取、靠近與返航。可抓取物件以目前 objects 設定為準，包含 apple、box、coffee、cup、doll、gaobear、hpb 與 xbox。
+
+建議至少設計三種場景難度：
+\begin{enumerate}
+  \item \textbf{Visible target:} 目標可由 room cameras 與車載相機清楚觀察，遮擋低。
+  \item \textbf{Occluded target:} 目標在初始停靠點或車載視角中部分遮擋，需要 VLM 判斷是否切換 major navigation。
+  \item \textbf{Moved target:} 目標在任務中被移動，測試 world-position refresh 與重新估計路由。
+\end{enumerate}
+
+\figsuggestion
+{Experimental Scene Conditions}
+{同一頁呈現 visible target、occluded target、moved target 三種任務場景截圖，並標註目標物、障礙物與機器人初始位置。}
+{Unity scene screenshots、room camera captures、Commander web UI artifacts。}
+{實驗場景應涵蓋不同可視性與目標穩定性條件，以評估代理人閉環在正常、遮擋與目標移動情境下的行為。}
+
+\subsection{Evaluation Metrics}
+
+令第 $i$ 次完整任務的成功指標為 $S_i\in\{0,1\}$，總 trial 數為 $N$，任務成功率定義為
 \begin{equation}
-  v_{t+1} = \rho(v_t, s_t),
-\end{equation}
-其中 $v_t$ 為目前節點，$s_t$ 為 CommanderState。例如，在 \texttt{reason\_node} 後：
-\begin{equation}
-  \rho(\texttt{reason}, s_t)=
-  \begin{cases}
-    \texttt{update\_item\_info\_1}, & a_t=a^{nav},\\
-    \texttt{update\_item\_info\_2}, & a_t=a^{grasp},\\
-    \texttt{nav\_home}, & a_t=a^{done}.
-  \end{cases}
-\end{equation}
-
-\subsection{A2A 服務契約}
-
-每個 A2A 服務皆遵守 request-response 契約。令 A2A request 為
-\begin{equation}
-  q_i = \left(
-    c,\,
-    \texttt{message\_id},\,
-    \texttt{context\_id},\,
-    \texttt{parts}
-  \right),
-\end{equation}
-其中 $c$ 為 agent card 描述，\texttt{context\_id} 用於同一任務生命週期追蹤。回傳結果為
-\begin{equation}
-  y_i =
-  \left(
-    \sigma_i,\,
-    d_i,\,
-    e_i
-  \right),
-\end{equation}
-其中 $\sigma_i$ 為成功狀態，$d_i$ 為資料 payload，$e_i$ 為錯誤訊息。Commander 僅依此結構更新 state，不依賴服務內部實作。
-
-\section{方法}
-
-\subsection{自然語言任務分類}
-
-使用者輸入 $u$ 後，系統先判斷其為一般聊天或抓取任務。令物件清單為
-\begin{equation}
-  \mathcal{O}=\{(id_j, label_j)\}_{j=1}^{N}.
-\end{equation}
-任務分類器輸出
-\begin{equation}
-  C(u,\mathcal{O}) =
-  \left(
-    z,\,
-    k,\,
-    \xi
-  \right),
-\end{equation}
-其中 $z \in \{\texttt{general\_chat},\texttt{specific\_task}\}$，$k \in \{0,1,\ldots,N\}$ 為 1-based 物件索引，$\xi$ 為分類理由。若 $k>0$，初始目標設定為
-\begin{equation}
-  o^\star_0 = (id_k, label_k).
-\end{equation}
-
-\subsection{目標 Instance 選擇}
-
-\texttt{find\_node} 從 \texttt{/world\_position\_data} 讀取場景候選集合
-\begin{equation}
-  \mathcal{D}_t =
-  \{d_1,d_2,\ldots,d_M\},
-\end{equation}
-每個候選包含類別、instance id、世界中心與 bbox：
-\begin{equation}
-  d_j =
-  \left(
-    id_j,\,
-    n_j,\,
-    \bm{p}^{U}_{j},\,
-    \mathcal{B}_j,\,
-    \mathcal{C}_j
-  \right),
-\end{equation}
-其中 $\bm{p}^{U}_{j}$ 為 Unity world 座標，$\mathcal{B}_j$ 為各相機 bbox，$\mathcal{C}_j$ 為可觀察到該物件的 camera 集合。系統先以目標類別過濾：
-\begin{equation}
-  \mathcal{D}^{\star}_t =
-  \{d_j \mid id_j=id(o^\star)\}.
-\end{equation}
-若集合非空，系統顯示候選 instance 給使用者確認，以避免同類物件混淆。
-
-\subsection{多視角物體資訊估計}
-
-選定 instance 後，no-SAM3D item-info 服務接收多視角影像與 world position data。對於第 $i$ 個相機，bbox 可表示為
-\begin{equation}
-  b_i = (u_i^{min}, v_i^{min}, u_i^{max}, v_i^{max}).
-\end{equation}
-其中心點為
-\begin{equation}
-  \bar{\bm{u}}_i =
-  \left[
-  \frac{u_i^{min}+u_i^{max}}{2},
-  \frac{v_i^{min}+v_i^{max}}{2},
-  1
-  \right]^\top .
-\end{equation}
-
-若取得目標中心 $\bm{p}^{U}$，系統將其轉為 Nav2 map 中的參考點。依目前實作，Unity 至 map 的平面轉換可寫為
-\begin{equation}
-  x^{M}=6-z^{U},\qquad
-  y^{M}=x^{U}-3,
-\end{equation}
-其中 $\bm{p}^{U}=(x^{U},y^{U},z^{U})$，$\bm{p}^{M}=(x^{M},y^{M})$。此轉換使 goal pose 能面向目標中心。
-
-\subsection{導航候選點排序}
-
-Item-info 服務輸出 ranked goal pose 集合
-\begin{equation}
-  \mathcal{P}=
-  \{g_1,g_2,\ldots,g_R\},
-\end{equation}
-其中每個 $g_r$ 包含 map frame 中的 goal position、orientation group、grasp confidence 與 map feasibility。可用一般化評分函數表示為
-\begin{equation}
-  S(g_r)
-  =
-  \alpha C_r
-  +
-  \beta F_r
-  -
-  \gamma D_r
-  -
-  \delta O_r,
-\end{equation}
-其中 $C_r$ 為 grasp 或觀察 confidence，$F_r \in \{0,1\}$ 為地圖可行性，$D_r$ 為底盤移動距離成本，$O_r$ 為障礙物或碰撞風險，$\alpha,\beta,\gamma,\delta$ 為權重。系統依 $S(g_r)$ 或服務端排序取得 rank，初始導航使用 $g_1$，major navigation 則嘗試 $g_{r+1}$。
-
-給定 goal position $\bm{g}^{M}=(x_g,y_g)$ 與目標 map position $\bm{p}^{M}=(x_o,y_o)$，底盤朝向角設定為
-\begin{equation}
-  \psi_g =
-  \operatorname{atan2}(y_o-y_g, x_o-x_g).
-\end{equation}
-對應四元數簡化為
-\begin{equation}
-  q_z=\sin\frac{\psi_g}{2},\qquad
-  q_w=\cos\frac{\psi_g}{2}.
-\end{equation}
-
-\subsection{導航執行與到位判定}
-
-Nav2 執行時，系統監聽 AMCL pose $\bm{x}^{M}_t=(x_t,y_t,\psi_t)$。若 goal pose 為 $\bm{g}^{M}=(x_g,y_g,\psi_g)$，到位條件定義為
-\begin{equation}
-  \left\|
-  \begin{bmatrix}
-  x_t-x_g\\
-  y_t-y_g
-  \end{bmatrix}
-  \right\|_2
-  \leq \epsilon_p
-  \quad \land \quad
-  |\operatorname{wrap}(\psi_t-\psi_g)|
-  \leq \epsilon_\psi,
-\end{equation}
-其中 $\epsilon_p$ 為位置容忍，$\epsilon_\psi$ 為朝向容忍。若在 timeout 內無法取得 global plan 或未到位，該次導航記為失敗。
-
-\subsection{目標移動偵測與資訊刷新}
-
-在 major navigation 或 grasp 前，系統重新讀取 \texttt{/world\_position\_data}。若目標中心從 $\bm{p}^{U}_{t-1}$ 移至 $\bm{p}^{U}_{t}$，移動距離為
-\begin{equation}
-  \Delta p_t =
-  \left\|
-  \bm{p}^{U}_{t}
-  -
-  \bm{p}^{U}_{t-1}
-  \right\|_2 .
-\end{equation}
-若
-\begin{equation}
-  \Delta p_t > \tau_{move},
-\end{equation}
-系統判定目標位置已顯著改變，清空舊的 goal pose 與 grasp 結果，重新執行 item-info。若目標 instance 從 world position 中消失，系統轉入 home navigation 或結束流程。
-
-\subsection{VLM 決策}
-
-VLM 的輸入不是原始完整系統，而是經整理後的狀態摘要：
-\begin{equation}
-  \phi(s_t)=
-  \left[
-    o^\star_t,\,
-    \mathcal{I}^{car}_t,\,
-    h_t,\,
-    r_t,\,
-    d_t
-  \right],
-\end{equation}
-其中 $\mathcal{I}^{car}_t$ 為 Camera\_Car 觀察，$d_t$ 為目前任務描述。VLM 根據 system prompt 產生
-\begin{equation}
-  (a_t,\eta_t,m_t)=\pi_{\text{VLM}}(\phi(s_t)).
-\end{equation}
-實作上，輸出必須滿足 JSON schema：
-\begin{equation}
-  a_t \in
-  \{\texttt{major\_nav\_node},\texttt{grasp\_agent},
-  \texttt{car\_approach\_agent},\texttt{DONE}\}.
-\end{equation}
-
-決策優先序可寫為規則化策略：
-\begin{equation}
-  a_t =
-  \begin{cases}
-    \texttt{DONE}, & \sigma^{approach}_{t-1}=1,\\
-    \texttt{major\_nav\_node}, & \Omega_t=1,\\
-    \texttt{grasp\_agent}, & \Omega_t=0 \land G_t=\emptyset,\\
-    \texttt{car\_approach\_agent}, & G_t\neq\emptyset,
-  \end{cases}
-\end{equation}
-其中 $\Omega_t$ 表示目標與夾爪間是否存在阻擋或不可接近狀態，$G_t$ 為最新 grasp result。
-
-\subsection{抓取姿態生成}
-
-Grasp Agent 接收 Camera\_Car RGBD 與目標類別，輸出候選抓取姿態集合
-\begin{equation}
-  \mathcal{T}_g =
-  \{(\mathbf{T}^{C}_{g,k}, c_k)\}_{k=1}^{K},
-\end{equation}
-其中 $\mathbf{T}^{C}_{g,k}\in SE(3)$ 為第 $k$ 個 grasp pose 在 camera frame 下的齊次變換，$c_k$ 為 confidence。最佳抓取可表示為
-\begin{equation}
-  k^\star =
-  \arg\max_{k}
-  \left[
-    c_k
-    -
-    \lambda_d d_k
-    -
-    \lambda_c \chi_k
-  \right],
-\end{equation}
-其中 $d_k$ 可表示抓取點與參考點距離，$\chi_k$ 表示碰撞或不可行懲罰。系統保存 $\mathbf{T}^{C}_{g,k^\star}$ 與候選集合供 car approach 使用。
-
-\subsection{底盤靠近與手臂收尾}
-
-car approach runtime 以最新 grasp result 為輸入，先根據抓取姿態與地圖資訊取樣可行底盤 pose。令候選底盤 pose 集合為
-\begin{equation}
-  \mathcal{B}=
-  \{\bm{b}_1,\bm{b}_2,\ldots,\bm{b}_L\},
-  \quad
-  \bm{b}_l=(x_l,y_l,\psi_l).
-\end{equation}
-系統可用成本函數選擇靠近 pose：
-\begin{equation}
-  J(\bm{b}_l)
-  =
-  w_1\|\bm{b}_l-\bm{b}_{cur}\|_2
-  +
-  w_2 e_{\psi,l}
-  +
-  w_3 \mathbb{I}_{collision,l}
-  +
-  w_4 e_{reach,l},
-\end{equation}
-其中 $e_{\psi,l}$ 為朝向誤差，$e_{reach,l}$ 為手臂可達性誤差。選擇
-\begin{equation}
-  \bm{b}^\star = \arg\min_{\bm{b}_l\in\mathcal{B}} J(\bm{b}_l).
-\end{equation}
-
-手臂收尾可形式化為逆運動學問題。令手臂關節為 $\bm{q}$，正運動學為
-\begin{equation}
-  \mathbf{T}_{ee}=F_{kin}(\bm{q}).
-\end{equation}
-目標為讓末端執行器接近抓取姿態 $\mathbf{T}_{g}$：
-\begin{equation}
-  \bm{q}^\star =
-  \arg\min_{\bm{q}}
-  \left(
-    \left\|
-      \bm{p}_{ee}(\bm{q})-\bm{p}_{g}
-    \right\|_2^2
-    +
-    \lambda_R
-    d_R
-    \left(
-      \mathbf{R}_{ee}(\bm{q}),
-      \mathbf{R}_{g}
-    \right)^2
-  \right),
-\end{equation}
-並需滿足關節限制
-\begin{equation}
-  \bm{q}_{min}\leq \bm{q}\leq \bm{q}_{max}.
-\end{equation}
-實際執行包含預開夾爪、移動至目標姿態、閉合夾爪與必要的完成驗證。
-
-\section{實作與部署}
-
-\subsection{Commander 端}
-
-Commander 由 \texttt{main.py} 啟動，並建立追蹤紀錄器、會話記憶、流程編排器與初始 \texttt{CommanderState}。在 mock mode 下，系統不呼叫真實 VLM、GPU 或 ROS2；在 real mode 下，需設定 VLM provider、A2A server URL 與 ROS2 runtime。
-
-\subsection{A2A 推論服務}
-
-RTX 3090 端包含三個主服務：
-\begin{itemize}
-  \item \texttt{find\_agent}：接收多相機影像，回傳 YOLO detection 與標註結果。
-  \item \texttt{get\_item\_info\_agent\_no\_sam3d}：接收選定 instance、多相機影像、bbox 與 world position，回傳目標資訊與 ranked goal poses。
-  \item \texttt{grasp\_agent}：接收 Camera\_Car RGBD 與目標類別，回傳 6-DoF grasp poses。
-\end{itemize}
-
-\subsection{ROS2 與 Nav2}
-
-導航由 \texttt{nav\_goal\_bridge\_pkg} 接收 Commander 發布的 \texttt{/goal\_pose}，再轉送至 Nav2。車體控制與手臂控制分別由 \texttt{car\_control\_pkg} 與 \texttt{arm\_control\_pkg} 提供 action server。Commander 透過子程序呼叫 ROS2 runner，可避免 Python 版本與 ROS2 overlay 對主環境造成污染。
-
-\subsection{日誌與可追蹤性}
-
-每次節點執行都會產生 trace entry，包含節點名稱、延遲、成功狀態、reasoning、context id 與原始結果。令第 $t$ 次事件延遲為
-\begin{equation}
-  \ell_t = t^{end}_t - t^{start}_t.
-\end{equation}
-整體任務延遲可拆解為
-\begin{equation}
-  L =
-  \sum_{t=1}^{T}
-  \left(
-    \ell^{VLM}_t+
-    \ell^{A2A}_t+
-    \ell^{Nav}_t+
-    \ell^{Ctrl}_t
-  \right).
-\end{equation}
-此拆解可用於分析瓶頸，例如 VLM 推理、GPU 推論或 Nav2 到位時間。
-
-\section{實驗設計}
-
-\subsection{實驗場景}
-
-實驗場景為室內 Unity/ROS2 數位孿生環境，包含 room cameras、車載 Camera\_Car、可導航地圖、目標物與障礙物。目標物清單由 \texttt{config/objects.yaml} 定義，例如玩偶、蘋果與玻璃瓶等可抓取物。
-
-\subsection{評估指標}
-
-\subsubsection{任務成功率}
-
-若第 $i$ 次任務成功為 $S_i=1$，失敗為 $S_i=0$，共執行 $N$ 次任務，任務成功率定義為
-\begin{equation}
-  R_{success}
+  R_{task}
   =
   \frac{1}{N}
-  \sum_{i=1}^{N}
-  S_i.
+  \sum_{i=1}^{N} S_i.
 \end{equation}
+此處成功應定義為目標 instance 正確、導航到可執行觀察點、抓取與手臂收尾成功，且任務結束後依 done policy 進入返航或完成狀態。實際判定規則需與 trace 欄位一致。[NEED HUMAN CONFIRMATION]
 
-\subsubsection{目標確認準確率}
-
-若系統列出的候選集合包含正確目標 instance，記為 $Q_i=1$，否則為 $0$，則候選覆蓋率為
-\begin{equation}
-  R_{target}
-  =
-  \frac{1}{N}
-  \sum_{i=1}^{N}
-  Q_i.
-\end{equation}
-若使用者確認後的 instance 正確，記為 $U_i=1$，則確認準確率為
-\begin{equation}
-  R_{confirm}
-  =
-  \frac{1}{N}
-  \sum_{i=1}^{N}
-  U_i.
-\end{equation}
-
-\subsubsection{導航成功率}
-
-對於每次導航 attempt，若 Nav2 在 timeout 前產生 plan 並到位，記為 $N_i=1$。導航成功率為
+導航成功率以每次 navigation attempt 為單位。若第 $j$ 次導航在 timeout 前取得 plan 並收到完成 result，記為 $N_j=1$，否則為 $0$。導航成功率為
 \begin{equation}
   R_{nav}
   =
   \frac{1}{M}
-  \sum_{i=1}^{M}
-  N_i.
+  \sum_{j=1}^{M} N_j,
 \end{equation}
-平均導航時間為
+其中 $M$ 為導航嘗試總數。平均導航時間可由 trace 或 nav runner event 計算：
 \begin{equation}
   \bar{T}_{nav}
   =
   \frac{1}{M_s}
-  \sum_{i:N_i=1}
-  T^{nav}_i,
+  \sum_{j:N_j=1} T^{nav}_j.
 \end{equation}
-其中 $M_s$ 為成功導航次數。
 
-\subsubsection{抓取姿態品質}
-
-Grasp Agent 對第 $i$ 次任務輸出的最佳 confidence 為 $c_i^\star$，有效 grasp 數量為 $K_i^{valid}$。平均 confidence 與平均有效候選數可表示為
+抓取候選品質可由 Grasp agent 輸出的有效 grasp 數量與最佳 grasp confidence 表示：
 \begin{equation}
-  \bar{c}
-  =
-  \frac{1}{N}
-  \sum_{i=1}^{N}
-  c_i^\star,
-  \qquad
   \bar{K}_{valid}
   =
   \frac{1}{N}
   \sum_{i=1}^{N}
-  K_i^{valid}.
+  K^{valid}_i,
+  \qquad
+  \bar{c}_{grasp}
+  =
+  \frac{1}{N}
+  \sum_{i=1}^{N}
+  c^\star_i.
 \end{equation}
 
-\subsubsection{恢復能力}
-
-恢復能力評估系統遇到目標移動、目標消失、navigation failure 或 rank exhaustion 時是否進入正確路由。令第 $j$ 個異常案例的正確恢復指標為 $H_j$，則
+恢復能力建議以異常事件為單位。若第 $l$ 個異常事件後系統進入預期恢復路由，例如重新估計 item-info、切換下一 rank、回 home 或停止任務，記為 $H_l=1$，否則為 $0$：
 \begin{equation}
   R_{recover}
   =
-  \frac{1}{J}
-  \sum_{j=1}^{J}
-  H_j.
+  \frac{1}{L}
+  \sum_{l=1}^{L}
+  H_l.
 \end{equation}
 
-\subsection{消融實驗}
+\subsection{Main Experiment Protocol}
 
-建議進行以下消融實驗：
+\begin{algorithmblock}{Trace-Based Experiment Procedure}
+  \item Select target object category and scene condition.
+  \item Reset the robot to home pose and initialize the Unity/ROS2 environment.
+  \item Start Commander with trace logging enabled.
+  \item Submit the natural-language request and confirm the target instance.
+  \item Let the system execute the task without manual intervention after confirmation.
+  \item Record final task status, selected goal ranks, navigation attempts, VLM decisions, grasp results, approach results and elapsed time.
+  \item Label the trial as success or failure according to the predefined success criterion.
+  \item Repeat for all target objects, scene conditions and ablation settings.
+\end{algorithmblock}
 
-\begin{itemize}
-  \item \textbf{無歷史記憶：}移除 \texttt{history\_buffer}，觀察 VLM 是否容易重複選擇同一動作。
-  \item \textbf{無 world position refresh：}不在 grasp/navigation 前刷新 \texttt{/world\_position\_data}，觀察目標移動時的失敗率。
-  \item \textbf{只用第一個 goal pose：}關閉 major navigation rank 切換，觀察候選點耗盡前的成功率差異。
-  \item \textbf{無結構化輸出約束：}比較 VLM 自由文字輸出與 schema 約束輸出的可執行率。
-\end{itemize}
+\begingroup
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\begin{longtable}{p{0.10\linewidth}p{0.16\linewidth}p{0.18\linewidth}p{0.18\linewidth}p{0.18\linewidth}p{0.08\linewidth}}
+\caption{主實驗結果表格範本}
+\label{tab:main-results-template}\\
+\toprule
+物件 & 場景條件 & Trial 數 & 任務成功率 & 平均時間 & 備註 \\
+\midrule
+\endfirsthead
+\toprule
+物件 & 場景條件 & Trial 數 & 任務成功率 & 平均時間 & 備註 \\
+\midrule
+\endhead
+apple & Visible & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+apple & Occluded & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+apple & Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+box & Visible, Occluded, Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+coffee & Visible, Occluded, Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+cup & Visible, Occluded, Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+doll & Visible, Occluded, Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+gaobear & Visible, Occluded, Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+hpb & Visible, Occluded, Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+xbox & Visible, Occluded, Moved & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] &  \\
+\bottomrule
+\end{longtable}
+\endgroup
 
-\section{討論}
+\subsection{Ablation Study}
 
-\subsection{系統優點}
+建議進行下列消融實驗，以驗證系統設計中各閉環機制的必要性：
 
-本系統的主要優點在於可維護性與可恢復性。LangGraph 使每個節點的輸入輸出清楚，A2A 服務使 GPU 推論可以獨立部署，ROS2 子程序則隔離了機器人控制環境。VLM 不直接控制硬體，而是在有限動作集合內進行高層判斷，降低不可控輸出的風險。
+\begin{longtable}{p{0.26\linewidth}p{0.38\linewidth}p{0.26\linewidth}}
+\caption{建議消融實驗}
+\label{tab:ablation-plan}\\
+\toprule
+消融條件 & 操作方式 & 觀察指標 \\
+\midrule
+\endfirsthead
+\toprule
+消融條件 & 操作方式 & 觀察指標 \\
+\midrule
+\endhead
+無歷史記憶 & 不將最近 action、reasoning 與 result summary 放入 VLM prompt & 重複錯誤決策率、任務成功率 \\
+無目標刷新 & 導航或抓取前不重新讀取 world-position snapshot & 目標移動情境成功率、錯抓率 \\
+只使用第一個 goal pose & 關閉 ranked goal pose 切換，只嘗試 rank 1 & 導航後觀察不足率、候選耗盡前成功率 \\
+無 safety guard & VLM 輸出 grasp/approach 後即執行，不在失敗後強制切換 rank & 重複失敗次數、恢復成功率 \\
+無結構化輸出 & 讓 VLM 自由文字回答，再人工或 rule parse & 可執行輸出率、解析失敗率 \\
+\bottomrule
+\end{longtable}
 
-\subsection{限制}
+所有消融數值需由實際 trace 或實驗紀錄填入；目前不在本文中推測任何成功率差異。[NEED HUMAN CONFIRMATION]
 
-目前系統仍有幾項限制：
+\subsection{Failure Case Analysis}
 
-\begin{itemize}
-  \item 多視角物體資訊仰賴 camera calibration 與 \texttt{/world\_position\_data} 的品質；若上游資料不穩定，goal pose ranking 也會受影響。
-  \item VLM 對遮擋與可達性的判斷仍依賴輸入影像與 prompt，若觀察不完整，可能需要多次導航或重新觀察。
-  \item GraspGen 產生的 camera frame grasp pose 仍需由後續 approach runtime 正確轉換與執行，座標系一致性是部署關鍵。
-  \item 系統元件多，部署需同時維護 A2A server、ROS2 overlay、Nav2 map、相機 topic 與模型權重。
-\end{itemize}
+建議將失敗案例分為感知、導航、決策、抓取、靠近與返航六類。每次失敗應保留 trace id、目標 instance、場景條件、最後 VLM decision、navigation rank、grasp candidate 數、approach phase、arm result 與 car return result。表 \ref{tab:failure-template} 為建議紀錄格式。
 
-\subsection{未來工作}
+\begingroup
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\begin{longtable}{p{0.12\linewidth}p{0.16\linewidth}p{0.16\linewidth}p{0.20\linewidth}p{0.20\linewidth}}
+\caption{失敗案例分析表格範本}
+\label{tab:failure-template}\\
+\toprule
+Trace ID & 類別 & 發生階段 & 系統反應 & 人工判讀 \\
+\midrule
+\endfirsthead
+\toprule
+Trace ID & 類別 & 發生階段 & 系統反應 & 人工判讀 \\
+\midrule
+\endhead
+[NEED HUMAN CONFIRMATION] & 感知/導航/決策/抓取/靠近/返航 & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] & [NEED HUMAN CONFIRMATION] \\
+\bottomrule
+\end{longtable}
+\endgroup
 
-未來可朝以下方向擴充：
+\subsection{Experiment Summary}
 
+本章提供的實驗設計可直接對應目前系統輸出欄位與 trace logger。由於尚未找到正式實驗結果檔，本文僅定義評估方法、實驗場景、消融條件與結果表格格式，不填入未驗證數值。待補齊實驗後，應優先回填任務成功率、導航成功率、抓取成功率、平均任務時間、候選 rank 使用次數、VLM 決策分佈與失敗案例統計。
+
+\section{Conclusions and Future Works}
+
+\subsection{Conclusions}
+
+本論文根據目前專案實作，整理並形式化一套以 VLM 與代理人架構為核心的居家輔助機器人系統。系統透過 LangGraph 維護長任務狀態，以 A2A 協議呼叫 GPU 推論服務，並結合 ROS2/Nav2 與 Unity 數位孿生環境完成移動抓取流程。VLM 不直接輸出低階控制，而是在結構化動作集合中選擇下一個代理人模組，使高層語意判斷與低層幾何控制分離。
+
+方法上，本研究將可確認的系統流程表示為狀態、觀察、動作與評估目標，並補充 Unity-to-ROS map 座標轉換、導航目標朝向、地圖可行的 goal pose ranking、抓取姿態排序、底盤靠近取樣與任務成功條件。相較於單次感知或單次 VLM 推理流程，本系統的關鍵特徵在於狀態持續性、模組邊界清楚、失敗後可重新估計與候選導航點可切換。
+
+目前論文內容仍保留所有未經結果檔驗證的實驗數值為 [NEED HUMAN CONFIRMATION]。因此，本論文現階段可確認的貢獻主要是系統設計、方法流程、數學形式化與實驗 protocol；正式量化結論應在完成實驗紀錄後再撰寫。
+
+\subsection{Limitations}
+
+目前系統限制可分為四類。第一，多視角物體資訊依賴世界座標資料、camera calibration 與 bounding box 品質；若上游資料錯誤，候選導航點與 grasp generation 會受到影響。第二，VLM 的決策品質受 prompt、車載影像與歷史摘要限制，當觀察不足時仍可能需要多次導航。第三，grasp pose 需經過 camera、PyBullet、ROS map 與 robot base 等座標轉換，任何座標不一致都可能造成靠近或抓取失敗。第四，部署涉及 Unity、ROS2、A2A server、模型權重、Nav2 map、keepout map、相機 topic 與控制節點，維護成本高於單一模組系統。
+
+\subsection{Future Works}
+
+後續工作建議如下：
 \begin{enumerate}
-  \item 將 item-info 的不確定性明確量化，使 goal pose ranking 能納入估計信心區間。
-  \item 加入更完整的碰撞與可達性預檢，減少 car approach 階段才發現不可行的情況。
-  \item 建立自動化實驗腳本，系統性蒐集不同物件、遮擋程度與初始位置的成功率。
-  \item 將 trace log 轉換為可視化分析報告，用於檢查 VLM 決策與各 agent latency。
+  \item 完成 trace-based 實驗，回填第四章所有成功率、時間、失敗案例與消融結果。
+  \item 將 item-info 估計的不確定性量化，讓 goal pose ranking 不只依 feasible count 與 confidence，也能納入位置與尺寸估計可信度。
+  \item 增加自動化場景重置與批次實驗腳本，使不同目標物、遮擋程度與初始位置可重複執行。
+  \item 補足 place 任務或明確界定本文只處理 pick-and-return，避免論文宣稱超出目前 workflow 能力。
+  \item 將 VLM provider、模型版本、權重來源與資料傳輸方式寫入實驗設定，以支撐隱私與本地部署宣稱。
+  \item 擴充 trace visualization，將 VLM 決策、導航 rank、抓取候選與 car-approach phase 轉為可檢查圖表。
+  \item 擴充更多居家任務設定，並於未來進一步進行實體環境驗證，以確認系統在真實感測雜訊與硬體誤差下的穩定性。
 \end{enumerate}
 
-\section{結論}
+\subsection{Chapter Summary}
 
-本文提出一套基於視覺語言模型與多代理人協同架構之主動感知移動操作系統。透過 LangGraph 狀態機、A2A 推論服務、ROS2/Nav2 控制與 GraspGen 抓取姿態生成，系統能將自然語言任務轉換為可執行、可追蹤且可恢復的移動抓取流程。本文也以數學形式定義了任務狀態、動作空間、座標轉換、候選導航點排序、VLM 決策、抓取姿態選擇、靠近控制與實驗指標，為後續正式實驗、消融分析與論文撰寫奠定基礎。
+本章總結目前系統的可確認貢獻與限制。整體而言，本研究已具備從自然語言輸入到移動抓取控制的完整代理人式流程；下一階段論文工作的重點，應是以一致的實驗 protocol 蒐集結果，並將目前標記為 [NEED HUMAN CONFIRMATION] 的內容替換為可追溯的實驗數據與圖表。
+
+\newpage
+
+\section*{參考文獻}
+\addcontentsline{toc}{section}{參考文獻}
+
+\begin{thebibliography}{99}
+
+\bibitem{ahn2022saycan}
+Michael Ahn, Anthony Brohan, Noah Brown, Yevgen Chebotar, Omar Cortes, Byron David, Chelsea Finn, Chuyuan Fu, Keerthana Gopalakrishnan, Karol Hausman, Alex Herzog, Daniel Ho, Jasmine Hsu, Julian Ibarz, Brian Ichter, Alex Irpan, Eric Jang, Rosario Jauregui Ruano, Kyle Jeffrey, Sally Jesmonth, et al.
+Do As I Can, Not As I Say: Grounding Language in Robotic Affordances.
+\url{https://arxiv.org/abs/2204.01691}, 2022.
+
+\bibitem{bhat2024brainbody}
+Vineet Bhat, Ali Umut Kaypak, Prashanth Krishnamurthy, Ramesh Karri, and Farshad Khorrami.
+Grounding LLMs For Robot Task Planning Using Closed-loop State Feedback (BrainBody-LLM).
+arXiv preprint, 2024. [NEED HUMAN CONFIRMATION: exact title, venue, and arXiv ID]
+
+\bibitem{wang2024exception}
+LLM-based Robot Task Planning with Exceptional Handling for General Service Robots.
+arXiv preprint, 2024. [NEED HUMAN CONFIRMATION: authors, exact title, venue, and arXiv ID]
+
+\bibitem{ao2024btplanner}
+Jicong Ao, Fan Wu, Yansong Wu, Abdalla Swikir, and Sami Haddadin.
+LLM as BT-Planner: Leveraging LLMs for Behavior Tree Generation in Robot Task Planning.
+arXiv preprint, 2024. [NEED HUMAN CONFIRMATION: venue and arXiv ID]
+
+\bibitem{singh2024malmm}
+Harsh Singh, Rocktim Jyoti Das, Mingfei Han, Preslav Nakov, and Ivan Laptev.
+MALMM: Multi-Agent Large Language Models for Zero-Shot Robotics Manipulation.
+arXiv preprint, 2024. [NEED HUMAN CONFIRMATION: venue and arXiv ID]
+
+\bibitem{yenamandra2023homerobot}
+Sriram Yenamandra, Arun Ramachandran, Karmesh Yadav, Austin Wang, Mukul Khanna, Theophile Gervet, Tsung-Yen Yang, Vidhi Jain, Alexander William Clegg, John Turner, Zsolt Kira, Manolis Savva, Angel Chang, Devendra Singh Chaplot, Dhruv Batra, Roozbeh Mottaghi, Yonatan Bisk, and Chris Paxton.
+HomeRobot: Open-Vocabulary Mobile Manipulation.
+\url{https://arxiv.org/abs/2306.11565}, 2023.
+
+\bibitem{tan2025lovmm}
+LOVMM: Language-conditioned Open-Vocabulary Mobile Manipulation.
+arXiv preprint, 2025. [NEED HUMAN CONFIRMATION: authors, venue, and arXiv ID]
+
+\bibitem{liu2024dynamem}
+Peiqi Liu, Zhanqiu Guo, Mohit Warke, Soumith Chintala, Chris Paxton, Nur Muhammad Mahi Shafiullah, and Lerrel Pinto.
+DynaMem: Online Dynamic Spatio-Semantic Memory for Open World Mobile Manipulation.
+arXiv preprint, 2024. [NEED HUMAN CONFIRMATION: exact arXiv ID]
+
+\bibitem{qiu2024ovmm3dsemantic}
+Open-vocabulary Mobile Manipulation in Unseen Dynamic Environments with 3D Semantic Maps.
+arXiv preprint, 2024. [NEED HUMAN CONFIRMATION: authors, venue, and arXiv ID]
+
+\bibitem{langgraph_workflows}
+LangChain.
+Workflows and Agents: LangGraph Documentation.
+\url{https://docs.langchain.com/oss/python/langgraph/workflows-agents}, accessed 2026-06-08.
+
+\bibitem{a2a_spec}
+Agent2Agent Project.
+Agent2Agent Protocol Specification.
+\url{https://a2aproject.github.io/A2A/latest/specification/}, accessed 2026-06-08.
+
+\bibitem{n8n_nodes}
+n8n.
+Built-in Integrations: Node Operations, Triggers and Actions.
+\url{https://docs.n8n.io/integrations/builtin/node-types/}, accessed 2026-06-08.
+
+\bibitem{ros2_interfaces}
+Open Robotics.
+ROS 2 Interfaces: Topics, Services, and Actions.
+\url{https://docs.ros.org/en/rolling/Concepts/Basic/Interfaces-Topics-Services-Actions.html}, accessed 2026-06-08.
+
+\bibitem{slam_toolbox}
+Steven Macenski and Ivona Jambrecic.
+SLAM Toolbox: SLAM for the Dynamic World.
+Journal of Open Source Software, 5(50):2783, 2021.
+
+\bibitem{nav2_concepts}
+Open Navigation LLC.
+Navigation Concepts: Nav2 Documentation.
+\url{https://docs.nav2.org/concepts/index.html}, accessed 2026-06-08.
+
+\bibitem{yushiang2025}
+Yu-Shiang Tseng.
+Coordinated Control of Multiple Robots Using ROS2 and a Unity-Based Digital Twin Environment.
+Master's thesis, National Cheng Kung University, 2025.
+
+\bibitem{opencv_calib}
+OpenCV.
+Camera Calibration.
+\url{https://docs.opencv.org/4.x/dc/dbb/tutorial_py_calibration.html}, accessed 2026-06-08.
+
+\bibitem{ultralytics_yolo}
+Ultralytics.
+Ultralytics YOLO Models and Object Detection Documentation.
+\url{https://www.ultralytics.com/yolo}, accessed 2026-06-08.
+
+\bibitem{sam}
+Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao, Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer Whitehead, Alexander C. Berg, Wan-Yen Lo, Piotr Doll\'ar, and Ross Girshick.
+Segment Anything.
+\url{https://arxiv.org/abs/2304.02643}, 2023.
+
+\bibitem{hsu_multicam}
+Fang-Chen Hsu, Yi-Hsien Hsieh, and Wen-Yu Su.
+A Multi-Camera Perception and Observability Simulation Framework for Smart-Home Environments.
+[NEED HUMAN CONFIRMATION: exact title, venue, and year]
+
+\bibitem{pybullet}
+Erwin Coumans and contributors.
+Bullet Physics and PyBullet.
+\url{https://pybullet.org/wordpress/}, accessed 2026-06-08.
+
+\bibitem{graspgen}
+Adithyavairavan Murali, Balakumar Sundaralingam, Yu-Wei Chao, Wentao Yuan, Jun Yamada, Mark Carlson, Fabio Ramos, Stan Birchfield, Dieter Fox, and Clemens Eppner.
+GraspGen: A Diffusion-based Framework for 6-DOF Grasping with On-Generator Training.
+\url{https://arxiv.org/abs/2507.13097}, 2025.
+
+\end{thebibliography}
 
 \end{document}

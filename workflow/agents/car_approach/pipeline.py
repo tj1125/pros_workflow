@@ -446,6 +446,7 @@ def _arm_motion_config(config: dict[str, object], config_path: Path) -> move_arm
         waypoint_steps=int(config.get("arm_waypoint_steps", 3)),
         reset_hold_sec=float(config.get("arm_reset_hold_sec", 3.0)),
         gripper_close_timeout_sec=float(config.get("gripper_close_timeout_sec", 2.0)),
+        gripper_settle_hold_sec=float(config.get("gripper_settle_hold_sec", 1.0)),
         publisher_match_timeout_sec=float(config.get("arm_publisher_match_timeout_sec", 1.0)),
         cube_z_distance_topic=str(config.get("cube_z_distance_topic", move_arm.DEFAULT_CUBE_Z_DISTANCE_TOPIC)),
         cube_z_distance_final_waypoint_stop_threshold_m=float(config.get("cube_z_distance_final_waypoint_stop_threshold_m", 0.025)),

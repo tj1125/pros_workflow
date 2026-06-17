@@ -10,6 +10,10 @@
           args="0.0 0.0 0.15 3.14 0.0 0.0 base_footprint laser"/>
     <!--  x   y   z    yaw pitch roll  -->
     <node name="scan_matcher" pkg="ros2_laser_scan_matcher" exec="laser_scan_matcher" output="screen">
+        <!-- Must use sim time so odom->base_footprint TF is stamped on the same
+             clock as AMCL/controller (use_sim_time:=True). Otherwise the TF tree
+             mixes wall and sim time -> "Transform data too old". -->
+        <param name="use_sim_time" value="true"/>
         <param name="base_frame" value="base_footprint"/>
         <param name="publish_tf" value="true"/>
         <param name="publish_odom" value="odom"/>

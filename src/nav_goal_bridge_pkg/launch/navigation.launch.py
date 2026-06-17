@@ -18,6 +18,11 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {
+                # Must match the Nav2 stack's clock: scan_throttle re-stamps /scan
+                # with get_clock().now(), and AMCL stamps map->odom from /scan. If
+                # this node runs on wall time while AMCL/controller use sim time,
+                # map->odom ends up on the wrong clock -> "Transform data too old".
+                "use_sim_time": True,
                 "input_topic": "/scan_tmp",
                 "output_topic": "/scan",
                 "target_rate_hz": 10.0,
@@ -77,7 +82,10 @@ def generate_launch_description() -> LaunchDescription:
         executable="nav_goal_bridge_node",
         name="nav_goal_bridge_node",
         output="screen",
-        parameters=[params_file],
+        parameters=[
+            params_file,
+            {"use_sim_time": True},
+        ],
     )
 
     return LaunchDescription(
