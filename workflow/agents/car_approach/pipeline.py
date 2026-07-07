@@ -132,45 +132,54 @@ def run_approach_pipeline(run_config: ApproachPipelineRunConfig | None = None) -
         )
 
     nav_config = _navigation_config(config)
-    debug_stage(
-        "pipeline",
-        "階段 2：把 selected base pose 丟給 move_car 開車",
-        fallback=fallback_to_closest,
-        goal_pose=goal_pose,
-    )
-    nav_result = move_car.drive_to_pose_by_rule(goal_pose, config=nav_config)
-    if not bool(nav_result.get("success", False)):
+    execute_in_place = bool(sampling_result.get("execute_in_place", False)) and not fallback_to_closest
+    if execute_in_place:
         debug_stage(
             "pipeline",
-            "階段 2 失敗：車子沒有抵達 selected base pose",
-            phase=nav_result.get("phase"),
+            "階段 2 跳過：當前位置已有可行 grasp，不開車，直接執行手臂",
+            goal_pose=goal_pose,
+        )
+        nav_result = None
+    else:
+        debug_stage(
+            "pipeline",
+            "階段 2：把 selected base pose 丟給 move_car 開車",
+            fallback=fallback_to_closest,
+            goal_pose=goal_pose,
+        )
+        nav_result = move_car.drive_to_pose_by_rule(goal_pose, config=nav_config)
+        if not bool(nav_result.get("success", False)):
+            debug_stage(
+                "pipeline",
+                "階段 2 失敗：車子沒有抵達 selected base pose",
+                phase=nav_result.get("phase"),
+                final_amcl=nav_result.get("final_amcl_pose"),
+            )
+            nav_failure_phase = "closest_navigation_failed" if fallback_to_closest else "navigation_failed"
+            nav_failure_message = (
+                "Collision-free closest_solution selected, but the car did not reach it."
+                if fallback_to_closest
+                else "Base pose selected, but the car did not reach it."
+            )
+            return _failure_pipeline_result(
+                failure_stage="navigation",
+                phase=nav_failure_phase,
+                message=nav_failure_message,
+                started_at=started_at,
+                config=config,
+                config_path=config_path,
+                sampling_result=sampling_result,
+                nav_result=nav_result,
+                nav_config=nav_config,
+            )
+
+        debug_stage(
+            "pipeline",
+            "階段 2 完成：車子已抵達，準備重算 IK 並執行手臂流程",
+            fallback=fallback_to_closest,
             final_amcl=nav_result.get("final_amcl_pose"),
         )
-        nav_failure_phase = "closest_navigation_failed" if fallback_to_closest else "navigation_failed"
-        nav_failure_message = (
-            "Collision-free closest_solution selected, but the car did not reach it."
-            if fallback_to_closest
-            else "Base pose selected, but the car did not reach it."
-        )
-        return _failure_pipeline_result(
-            failure_stage="navigation",
-            phase=nav_failure_phase,
-            message=nav_failure_message,
-            started_at=started_at,
-            config=config,
-            config_path=config_path,
-            sampling_result=sampling_result,
-            nav_result=nav_result,
-            nav_config=nav_config,
-        )
-
-    debug_stage(
-        "pipeline",
-        "階段 2 完成：車子已抵達，準備重算 IK 並執行手臂流程",
-        fallback=fallback_to_closest,
-        final_amcl=nav_result.get("final_amcl_pose"),
-    )
-    debug_stage("pipeline", "階段 3：開始 move_arm arrival grasp sequence")
+    debug_stage("pipeline", "階段 3：開始 move_arm arrival grasp sequence", execute_in_place=execute_in_place)
     arm_result = move_arm.run_arrival_grasp_sequence(
         selected,
         nav_result=nav_result,
@@ -398,7 +407,9 @@ def _not_started(phase: str) -> dict[str, object]:
     return {"success": False, "skipped": True, "phase": phase, "message": "not started"}
 
 
-def _return_pose_from_nav_result(nav_result: dict[str, object]) -> dict[str, object] | None:
+def _return_pose_from_nav_result(nav_result: dict[str, object] | None) -> dict[str, object] | None:
+    if not isinstance(nav_result, dict):
+        return None
     initial_pose = nav_result.get("initial_amcl_pose")
     if not isinstance(initial_pose, dict) or initial_pose.get("x") is None or initial_pose.get("y") is None:
         return None
@@ -447,6 +458,7 @@ def _arm_motion_config(config: dict[str, object], config_path: Path) -> move_arm
         reset_hold_sec=float(config.get("arm_reset_hold_sec", 3.0)),
         gripper_close_timeout_sec=float(config.get("gripper_close_timeout_sec", 2.0)),
         gripper_settle_hold_sec=float(config.get("gripper_settle_hold_sec", 1.0)),
+        gripper_close_settle_hold_sec=float(config.get("gripper_close_settle_hold_sec", config.get("gripper_settle_hold_sec", 1.0))),
         publisher_match_timeout_sec=float(config.get("arm_publisher_match_timeout_sec", 1.0)),
         cube_z_distance_topic=str(config.get("cube_z_distance_topic", move_arm.DEFAULT_CUBE_Z_DISTANCE_TOPIC)),
         cube_z_distance_final_waypoint_stop_threshold_m=float(config.get("cube_z_distance_final_waypoint_stop_threshold_m", 0.025)),

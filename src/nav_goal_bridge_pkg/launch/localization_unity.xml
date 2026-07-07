@@ -11,6 +11,6 @@
         <arg name="slam" value="False"/>
         <arg name="map" value="$(var map_file)"/>
         <arg name="params_file" value="$(var params_file)"/>
-        <arg name="use_sim_time" value="True"/>
+        <arg name="use_sim_time" value="False"/>
     </include>
 </launch>

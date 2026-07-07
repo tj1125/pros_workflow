@@ -59,6 +59,7 @@ class ArmMotionConfig:
     reset_hold_sec: float = 3.0
     gripper_close_timeout_sec: float = 2.0
     gripper_settle_hold_sec: float = 1.0
+    gripper_close_settle_hold_sec: float = 1.0
     publisher_match_timeout_sec: float = 1.0
     cube_z_distance_topic: str = DEFAULT_CUBE_Z_DISTANCE_TOPIC
     cube_z_distance_final_waypoint_stop_threshold_m: float = 0.025
@@ -225,6 +226,7 @@ def execute_grasp_joint_sequence(goal_joint_rad: Sequence[Any], *, config: ArmMo
     close_positions = list(target_positions)
     close_positions[gripper_index] = coord.deg_to_rad(config.gripper_close_deg)
     settle_hold_sec = float(getattr(config, "gripper_settle_hold_sec", 1.0))
+    close_settle_hold_sec = float(getattr(config, "gripper_close_settle_hold_sec", settle_hold_sec))
 
     owns_rclpy = False
     node = None
@@ -439,7 +441,7 @@ def execute_grasp_joint_sequence(goal_joint_rad: Sequence[Any], *, config: ArmMo
             )
             phases.append(close_result)
             _debug_joint_phase_result("joint sequence command 結果：close_gripper", close_result)
-            debug_stage("move_arm", "joint sequence 階段：close_gripper_settle，夾取後維持夾爪等待", hold_sec=settle_hold_sec)
+            debug_stage("move_arm", "joint sequence 階段：close_gripper_settle，夾取後維持夾爪等待", hold_sec=close_settle_hold_sec)
             close_settle_result = _publish_joint_positions_for_duration(
                 rclpy,
                 node,
@@ -447,7 +449,7 @@ def execute_grasp_joint_sequence(goal_joint_rad: Sequence[Any], *, config: ArmMo
                 get_latest_positions,
                 close_positions,
                 phase="close_gripper_settle",
-                duration_sec=settle_hold_sec,
+                duration_sec=close_settle_hold_sec,
                 republish_interval_sec=config.republish_interval_sec,
                 ignored_joint_indices=ignored_joint_state_indices,
             )

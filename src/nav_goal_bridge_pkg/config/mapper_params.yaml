@@ -1,14 +1,14 @@
 car_control_node:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     # Shared final-goal tolerances used by car_control and commander/nav_move_runner.
     slow_approach_distance_m: 1.5
-    approach_stop_xy_tolerance_m: 0.08
+    approach_stop_xy_tolerance_m: 0.05
     align_stop_yaw_tolerance_rad: 0.10
 
 amcl:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     alpha1: 0.2
     alpha2: 0.2
     alpha3: 0.2
@@ -50,7 +50,7 @@ amcl:
 
 bt_navigator:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     global_frame: map
     robot_base_frame: base_footprint
     odom_topic: /odom
@@ -120,16 +120,16 @@ bt_navigator:
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
 
 bt_navigator_navigate_to_pose_rclcpp_node:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
 
 controller_server:
   ros__parameters:
-    use_sim_time: True
-    controller_frequency: 20.0
+    use_sim_time: False
+    controller_frequency: 15.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -149,7 +149,7 @@ controller_server:
       # Keep Nav2's own goal checker aligned with the shared final-goal tolerances.
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.07
       yaw_goal_tolerance: 0.10
 
     # DWB parameters
@@ -189,7 +189,7 @@ controller_server:
       angular_granularity: 0.025
       transform_tolerance: 1.0  # 0.5!
       # Keep the rotate-to-goal handoff window aligned with the shared xy tolerance.
-      xy_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.07
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -212,7 +212,7 @@ local_costmap:
       publish_frequency: 0.5
       global_frame: odom
       robot_base_frame: base_footprint
-      use_sim_time: True
+      use_sim_time: False
       rolling_window: true
       width: 3
       height: 3
@@ -275,7 +275,7 @@ global_costmap:
       publish_frequency: 0.5
       global_frame: map
       robot_base_frame: base_footprint
-      use_sim_time: True
+      use_sim_time: False
       robot_radius: 0.35
       resolution: 0.05
       track_unknown_space: true
@@ -311,14 +311,14 @@ global_costmap:
 
 map_server:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     # Overridden in launch by the "map" launch configuration or provided default value.
     # To use in yaml, remove the default "map" value in the tb3_simulation_launch.py file & provide full path to map below.
     yaml_filename: ""
 
 map_saver:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     save_map_timeout: 20.0
     free_thresh_default: 0.25
     occupied_thresh_default: 0.65
@@ -326,14 +326,14 @@ map_saver:
 
 keepout_filter_mask_server:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     topic_name: "/keepout_filter_mask"
     frame_id: "map"
     yaml_filename: ""
 
 keepout_costmap_filter_info_server:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     type: 0
     filter_info_topic: "/keepout_costmap_filter_info"
     mask_topic: "/keepout_filter_mask"
@@ -343,7 +343,7 @@ keepout_costmap_filter_info_server:
 planner_server:
   ros__parameters:
     planner_plugins: ["GridBased"]
-    use_sim_time: True
+    use_sim_time: False
 
     GridBased:
       plugin: "nav2_smac_planner/SmacPlanner2D" # In Iron and older versions, "/" was used instead of "::"
@@ -364,7 +364,7 @@ planner_server:
 
 smoother_server:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     costmap_topic: global_costmap/costmap_raw
     footprint_topic: global_costmap/published_footprint
     robot_base_frame: base_link
@@ -397,7 +397,7 @@ behavior_server:
     global_frame: map
     robot_base_frame: base_footprint
     transform_tolerance: 1.0  # 0.5! # tf的容忍
-    use_sim_time: True
+    use_sim_time: False
     simulate_ahead_time: 1.0 #2.0
     max_rotational_vel: 1.0
     min_rotational_vel: 0.4
@@ -406,11 +406,11 @@ behavior_server:
 
 robot_state_publisher:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
 
 waypoint_follower:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     loop_rate: 20
     stop_on_failure: false
     waypoint_task_executor_plugin: "wait_at_waypoint"
@@ -421,7 +421,7 @@ waypoint_follower:
 
 velocity_smoother:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
@@ -436,7 +436,7 @@ velocity_smoother:
 
 lifecycle_manager:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     autostart: true
     node_names: ['controller_server', 'planner_server', 'behavior_server', 'bt_navigator', 'waypoint_follower']
     bond_timeout: 4.0

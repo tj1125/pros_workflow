@@ -127,6 +127,61 @@ def run_base_sampling(run_config: BaseSamplerRunConfig | None = None) -> dict[st
     )
     debug_stage("base_sampler", "階段 4 完成：grasp poses 已在 PyBullet frame", grasp_count=len(grasp_candidates))
 
+    debug_stage("base_sampler", "階段 4.5：用當前位置先檢查前 N 名 grasp 是否可行（不做 ROS map 過濾）")
+    reference_amcl_pose = pointcloud_info.get("capture_amcl_pose") or config.get("reference_amcl_pose")
+    in_place_evaluation = _evaluate_samples_in_pybullet(
+        _in_place_samples(grasp_candidates, config),
+        scene_config=scene_config,
+        voxel_centers=voxels,
+        voxel_size_m=scene_config.voxel_size_m,
+    )
+    in_place_selected = _annotate_in_place_ros_poses(in_place_evaluation.get("selected_solution"), config, reference_amcl_pose)
+    in_place_closest = _annotate_in_place_ros_poses(in_place_evaluation.get("closest_solution"), config, reference_amcl_pose)
+    if in_place_selected is not None:
+        in_place_selected = dict(in_place_selected)
+        in_place_selected["selected_solution_source"] = "in_place_current_pose"
+        debug_stage(
+            "base_sampler",
+            "階段 4.5 成功：當前位置已有可行 grasp，直接執行、不需 sample base 或移動車子",
+            grasp_rank=in_place_selected.get("grasp_rank"),
+            grasp_index=in_place_selected.get("grasp_index"),
+            pos_err=in_place_selected.get("ee_position_error_m"),
+            approach_err_deg=in_place_selected.get("ee_approach_error_deg"),
+        )
+        return {
+            "success": True,
+            "status_code": "BASE_SAMPLE_SUCCESS",
+            "phase": "in_place_feasible",
+            "message": "Current base pose already has a feasible grasp; no base sampling or car motion is required.",
+            "next_agent": None,
+            "execute_in_place": True,
+            "in_place_precheck": True,
+            "grasp_source": grasp_source,
+            "grasp_count": len(grasp_candidates),
+            "pointcloud_source": pointcloud_source,
+            "pointcloud_point_count": int(len(pointcloud)),
+            "voxel_count": int(len(voxels)),
+            "voxel_size_m": scene_config.voxel_size_m,
+            "selected_solution": in_place_selected,
+            "selected_solution_source": "in_place_current_pose",
+            "closest_solution": in_place_closest or {},
+            "closest_solution_available": in_place_closest is not None,
+            "initial_closest_solution": in_place_closest or {},
+            "fallback_to_closest_solution": False,
+            "sampling_summary": {
+                "in_place_precheck": True,
+                "in_place_feasible": True,
+                "evaluated_grasp_count": len(in_place_evaluation.get("samples", [])),
+            },
+            "elapsed_sec": time.time() - started_at,
+        }
+    debug_stage(
+        "base_sampler",
+        "階段 4.5：當前位置前 N 名 grasp 都無解，記錄 in-place 最近解後進入 base sampler",
+        in_place_closest_available=in_place_closest is not None,
+        in_place_closest_pos_err=(in_place_closest or {}).get("ee_position_error_m"),
+    )
+
     debug_stage("base_sampler", "階段 5：根據 grasp approach axis sample base pose")
     samples = sample_logic.sample_base_points(
         grasp_candidates,
@@ -180,6 +235,7 @@ def run_base_sampling(run_config: BaseSamplerRunConfig | None = None) -> dict[st
     evaluated_samples = evaluation["samples"]
     selected = evaluation["selected_solution"]
     closest = evaluation.get("closest_solution")
+    merged_closest = _merge_closest_solutions(closest, in_place_closest)
     evaluation_summary = _evaluation_summary(evaluated_samples, scene_config=scene_config)
     debug_stage(
         "base_sampler",
@@ -187,19 +243,22 @@ def run_base_sampling(run_config: BaseSamplerRunConfig | None = None) -> dict[st
         evaluated=len(evaluated_samples),
         selected=selected is not None,
         closest_solution=closest is not None,
+        merged_closest=merged_closest is not None,
         **evaluation_summary,
     )
 
     if selected is None:
         phase = "no_feasible_sample"
-        if closest is None:
+        if merged_closest is None:
             message = _no_collision_free_message(evaluation_summary)
         else:
             message = _no_feasible_with_closest_message(evaluation_summary)
         debug_stage(
             "base_sampler",
-            "階段 7 失敗：沒有 IK feasible，回傳不碰撞的 closest_solution 供 debug",
-            closest_available=closest is not None,
+            "階段 7 失敗：沒有 IK feasible，合併 base sampler 與 in-place 最近解供 fallback",
+            closest_available=merged_closest is not None,
+            base_sampler_closest=closest is not None,
+            in_place_closest=in_place_closest is not None,
             **evaluation_summary,
         )
     else:
@@ -269,8 +328,11 @@ def run_base_sampling(run_config: BaseSamplerRunConfig | None = None) -> dict[st
         "ros_map_stats": ros_map_stats,
         "voxel_size_m": scene_config.voxel_size_m,
         "selected_solution": selected or {},
-        "closest_solution": closest or {},
-        "closest_solution_available": closest is not None,
+        "closest_solution": merged_closest or {},
+        "closest_solution_available": merged_closest is not None,
+        "base_sampler_closest_solution": closest or {},
+        "initial_closest_solution": in_place_closest or {},
+        "in_place_precheck": True,
         "rank_closest_solutions": evaluation.get("rank_closest_solutions", []),
         "selected_solution_source": "rank_order_feasible" if selected is not None else "",
         "fallback_to_closest_solution": False,
@@ -500,6 +562,116 @@ def _closest_solution_sort_key(solution: dict[str, object]) -> tuple[float, floa
     )
 
 
+def _vector_angle_deg(vector_a: np.ndarray, vector_b: np.ndarray) -> float:
+    a = np.asarray(vector_a, dtype=np.float64).reshape(3)
+    b = np.asarray(vector_b, dtype=np.float64).reshape(3)
+    norm_a = float(np.linalg.norm(a))
+    norm_b = float(np.linalg.norm(b))
+    if norm_a <= 1e-9 or norm_b <= 1e-9:
+        return 180.0
+    cosine = float(np.dot(a, b) / (norm_a * norm_b))
+    cosine = max(-1.0, min(1.0, cosine))
+    return float(np.degrees(np.arccos(cosine)))
+
+
+def _in_place_samples(
+    grasp_candidates: list[sample_logic.GraspPoseCandidate],
+    config: dict[str, object],
+) -> list[dict[str, object]]:
+    """One sample per grasp evaluated at the current/initial arm-base pose."""
+    base_xy = _arm_base_link_pb_xyz(config)[:2]
+    base_yaw = _initial_arm_base_yaw_rad(config)
+    samples: list[dict[str, object]] = []
+    for index, grasp in enumerate(grasp_candidates):
+        samples.append(
+            {
+                "sample_source": "in_place_current_pose",
+                "sample_index": index,
+                "grasp_sample_index": 0,
+                "grasp_index": int(grasp.index),
+                "grasp_rank": int(grasp.rank),
+                "grasp_confidence": float(grasp.grasp_confidence),
+                "target_xyz": grasp.position_xyz.astype(float).tolist(),
+                "target_rotation_matrix": grasp.rotation_matrix.astype(float).tolist(),
+                "pb_base_link_xyz": [float(base_xy[0]), float(base_xy[1]), 0.0],
+                "pb_base_link_yaw_rad": float(base_yaw),
+                "pb_base_link_yaw_deg": float(coord.rad_to_deg(base_yaw)),
+                "backoff_distance_m": 0.0,
+                "desired_yaw_rad": float(base_yaw),
+                "desired_yaw_deg": float(coord.rad_to_deg(base_yaw)),
+                "yaw_offset_rad": 0.0,
+                "yaw_offset_deg": 0.0,
+                "goal_pose": {
+                    "x": float(base_xy[0]),
+                    "y": float(base_xy[1]),
+                    "z": 0.0,
+                    "yaw_rad": float(base_yaw),
+                },
+            }
+        )
+    return samples
+
+
+def _annotate_in_place_ros_poses(
+    solution: dict[str, object] | None,
+    config: dict[str, object],
+    reference_amcl_pose: object | None,
+) -> dict[str, object] | None:
+    """Attach ROS-map poses to an in-place solution so it can be navigated/executed.
+
+    The current base pose maps to the reference AMCL pose, so no map filtering is
+    needed here. When no AMCL reference is available the PyBullet-frame goal_pose is
+    kept as-is (the in-place path does not move the car).
+    """
+    if not isinstance(solution, dict) or not solution:
+        return None
+    record = dict(solution)
+    if reference_amcl_pose is None:
+        record["ros_map_amcl_pose"] = None
+        record["ros_map_base_link_pose"] = None
+        record["reference_amcl_pose"] = None
+        record["ros_map_feasible"] = True
+        record["ros_map_check"] = "skipped_in_place_precheck_no_amcl"
+        return record
+    arm_base_link_pb_xyz = _arm_base_link_pb_xyz(config)
+    car_center_from_arm_base_pb_xy = _car_center_from_arm_base_pb_xy(config)
+    reference_pb_yaw_rad = _initial_arm_base_yaw_rad(config)
+    local_xy = (float(record["pb_base_link_xyz"][0]), float(record["pb_base_link_xyz"][1]))
+    local_yaw = float(record["pb_base_link_yaw_rad"])
+    ros_amcl_pose, ros_base_pose = coord.local_pybullet_base_to_ros_map_poses(
+        local_xy,
+        local_yaw,
+        reference_amcl_pose=reference_amcl_pose,
+        arm_base_link_pb_xyz=arm_base_link_pb_xyz,
+        car_center_from_arm_base_pb_xy=car_center_from_arm_base_pb_xy,
+        reference_pb_yaw_rad=reference_pb_yaw_rad,
+    )
+    record["pybullet_goal_pose"] = dict(solution["goal_pose"]) if isinstance(solution.get("goal_pose"), dict) else None
+    record["ros_map_amcl_pose"] = ros_amcl_pose
+    record["ros_map_base_link_pose"] = ros_base_pose
+    record["reference_amcl_pose"] = reference_amcl_pose
+    record["arm_base_link_pb_xyz"] = list(arm_base_link_pb_xyz)
+    record["car_center_from_arm_base_pb_xy"] = list(car_center_from_arm_base_pb_xy)
+    record["reference_pb_yaw_rad"] = float(reference_pb_yaw_rad)
+    record["reference_pb_yaw_deg"] = float(coord.rad_to_deg(reference_pb_yaw_rad))
+    record["ros_map_feasible"] = True
+    record["ros_map_check"] = "skipped_in_place_precheck"
+    record["goal_pose"] = ros_amcl_pose if ros_amcl_pose is not None else record.get("goal_pose")
+    return record
+
+
+def _merge_closest_solutions(*solutions: dict[str, object] | None) -> dict[str, object] | None:
+    """Pick the nearest collision-free solution across the given candidates."""
+    candidates = [
+        solution
+        for solution in solutions
+        if isinstance(solution, dict) and solution and bool(solution.get("collision_free", False))
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=_closest_solution_sort_key)
+
+
 def _evaluate_sample(
     p: Any,
     robot_id: int,
@@ -536,11 +708,18 @@ def _evaluate_sample(
     ee_quat = [float(v) for v in ee_state[5]]
     error_xyz = target_xyz - ee_position
     position_error = float(np.linalg.norm(error_xyz))
-    orientation_error = coord.quat_angle_error_deg(target_quat, ee_quat)
+    # Feasibility only constrains the gripper approach direction (column 0 of the
+    # grasp/EE frame). The roll about that axis is left free: this 4-DOF arm cannot
+    # match a full 6-DOF orientation, and the roll is irrelevant for the grasp.
+    # The IK call still passes targetOrientation to steer the approach direction;
+    # only the acceptance test changed. The full-frame angle is kept for reference.
+    ee_rotation = coord.quat_xyzw_to_matrix(ee_quat)
+    approach_error_deg = _vector_angle_deg(target_rotation[:, 0], ee_rotation[:, 0])
+    full_orientation_error_deg = coord.quat_angle_error_deg(target_quat, ee_quat)
     collision_free = not _robot_collides(p, robot_id, obstacle_ids, scene_config.voxel_collision_threshold_m)
     feasible = (
         position_error <= scene_config.position_tolerance_m
-        and orientation_error <= scene_config.orientation_tolerance_deg
+        and approach_error_deg <= scene_config.orientation_tolerance_deg
         and collision_free
     )
 
@@ -553,7 +732,9 @@ def _evaluate_sample(
             "ik_feasible": bool(feasible),
             "collision_free": bool(collision_free),
             "ee_position_error_m": position_error,
-            "ee_orientation_error_deg": orientation_error,
+            "ee_orientation_error_deg": approach_error_deg,
+            "ee_approach_error_deg": approach_error_deg,
+            "ee_full_orientation_error_deg": full_orientation_error_deg,
             "ik_error_xyz_m": error_xyz.astype(float).tolist(),
             "final_ee_position_xyz": ee_position.astype(float).tolist(),
             "final_ee_orientation_xyzw": ee_quat,

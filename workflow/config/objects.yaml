@@ -9,7 +9,7 @@ graspable_objects:
   - id: coffee
     label: White Takeaway Coffee Cup
   - id: cup
-    label: Brown Mug with Sheep Illustration
+    label: Brown Cup with Sheep Illustration
   - id: doll
     label: Brown Teddy Bear Doll
   - id: gaobear

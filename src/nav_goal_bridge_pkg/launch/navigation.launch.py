@@ -22,10 +22,10 @@ def generate_launch_description() -> LaunchDescription:
                 # with get_clock().now(), and AMCL stamps map->odom from /scan. If
                 # this node runs on wall time while AMCL/controller use sim time,
                 # map->odom ends up on the wrong clock -> "Transform data too old".
-                "use_sim_time": True,
+                "use_sim_time": False,
                 "input_topic": "/scan_tmp",
                 "output_topic": "/scan",
-                "target_rate_hz": 10.0,
+                "target_rate_hz": 20.0,
             }
         ],
     )
@@ -66,7 +66,7 @@ def generate_launch_description() -> LaunchDescription:
         name="lifecycle_manager_keepout_filter",
         output="screen",
         parameters=[
-            {"use_sim_time": True},
+            {"use_sim_time": False},
             {"autostart": True},
             {
                 "node_names": [
@@ -84,7 +84,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             params_file,
-            {"use_sim_time": True},
+            {"use_sim_time": False},
         ],
     )
 

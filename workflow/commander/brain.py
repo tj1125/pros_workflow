@@ -115,6 +115,8 @@ class Brain:
         arm_result = approach.get("arm_result", {}) if isinstance(approach.get("arm_result", {}), dict) else {}
         arm_success = bool(arm_result.get("success", False)) if approach and arm_result else "unknown"
 
+        viewpoint_status = self._current_viewpoint_status(state, current_rank)
+
         text_content = (
             "## Task\n"
             f"Target: {target_text}\n"
@@ -127,9 +129,11 @@ class Brain:
             f"Last grasp: success={grasp_success}, pose_ready={pose_ready}\n"
             f"Last approach: success={approach_success}, phase={approach_phase}, arm_success={arm_success}\n"
             f"Recent failure: {failure_hint or 'none'}\n\n"
+            f"## This Viewpoint (rank {current_rank}) — authoritative for the switch decision\n"
+            f"{viewpoint_status}\n\n"
             "## Current Observation\n"
             f"{observation.get('description', 'Camera image unavailable.')}\n\n"
-            "## Recent Action History\n"
+            "## Recent Action History (all viewpoints; context only — never switch because a DIFFERENT viewpoint failed)\n"
             f"{history_summary}\n\n"
             "Decide the next action. Output exactly one JSON object with this schema:\n"
             '{"reasoning":"short reason","call_module":"major_nav_node|grasp_agent|car_approach_agent|DONE","module_params":{}}\n'
@@ -156,6 +160,39 @@ class Brain:
             ]
         return text_content
 
+
+    @staticmethod
+    def _current_viewpoint_status(state: CommanderState, current_rank: int) -> str:
+        """Summarise grasp/approach attempts already made at the CURRENT viewpoint.
+
+        Read from history_buffer (each attempt records ``at_rank`` in its key_facts).
+        The brain must base its retry-vs-switch decision on THIS, not on failures
+        recorded at earlier viewpoints.
+        """
+        attempts: list[tuple[str, Any, str]] = []
+        for entry in state.get("history_buffer", []) or []:
+            facts = entry.get("key_facts") or {}
+            if "at_rank" not in facts:
+                continue
+            if int(facts.get("at_rank", -1) or -1) != current_rank:
+                continue
+            if "approach_phase" in facts or "approach_success" in facts:
+                attempts.append(("approach", facts.get("approach_success"), str(facts.get("approach_phase", "") or "")))
+            elif "grasp_success" in facts:
+                attempts.append(("grasp", facts.get("grasp_success"), ""))
+        if not attempts:
+            return (
+                f"No grasp has been attempted from this viewpoint (rank {current_rank}) yet. "
+                "Judge ONLY the live image below: is the target graspable and not occluded "
+                "from here? Failures at earlier viewpoints are irrelevant to this fresh view."
+            )
+        kind, ok, phase = attempts[-1]
+        phase_txt = f", phase={phase}" if phase else ""
+        return (
+            f"{len(attempts)} grasp attempt(s) already made from this viewpoint; "
+            f"latest {kind} attempt: success={ok}{phase_txt}. "
+            "Base retry-vs-switch on THIS viewpoint's failure phase (see the agent rules)."
+        )
 
     @staticmethod
     def _failure_hint(state: CommanderState) -> str:

@@ -8,7 +8,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="arm_control_node",
         name="arm_control_node",
         output="screen",
-        parameters=[{"use_sim_time": True}],
+        parameters=[{"use_sim_time": False}],
     )
 
     return LaunchDescription([arm_control_node])

@@ -35,7 +35,7 @@ voxel_collision_threshold_m: 0.0
 # ROS map feasibility. Missing AMCL reference means this stage fails.
 enable_ros_map_check: true
 allow_ros_map_check_without_reference: false
-map_yaml_path: ../../../../src/nav_goal_bridge_pkg/config/keepout_map.yaml
+map_yaml_path: keepout_map.yaml
 vehicle_base_length_x_m: 0.35 # 0.35
 vehicle_base_length_y_m: 0.33 # 0.33
 reference_amcl_pose: null
@@ -98,8 +98,10 @@ arm_command_tolerance_rad: 0.08
 arm_republish_interval_sec: 0.02
 arm_waypoint_steps: 3
 gripper_close_timeout_sec: 2.0
-# Hold the gripper after opening (before moving to target) and after closing (before return_reset).
+# Hold the gripper after opening (before moving to target). Used by open_gripper_settle.
 gripper_settle_hold_sec: 1.0
+# Hold the gripper after closing (before return_reset). Used by close_gripper_settle.
+gripper_close_settle_hold_sec: 3.0
 arm_publisher_match_timeout_sec: 1.0
 # Last waypoint may stop early only when cube_z_distance is below this threshold.
 cube_z_distance_topic: /cube_z_distance
