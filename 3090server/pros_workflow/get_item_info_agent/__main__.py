@@ -2,7 +2,7 @@
 __main__.py — A2A Server Entrypoint for GetItemInfoAgent.
 
 Usage:
-    cd /path/to/VLM_RL/3090server/VLM_RL
+    cd /path/to/pros_workflow/3090server/pros_workflow
     conda activate get_item_info_agent
     python -m get_item_info_agent
 """

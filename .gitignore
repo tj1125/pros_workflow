@@ -26,11 +26,11 @@ thesis/*.toc
 thesis/*.xdv
 
 # Ignore server-level models
-3090server/VLM_RL/models/*
-!3090server/VLM_RL/models/.gitkeep
+3090server/pros_workflow/models/*
+!3090server/pros_workflow/models/.gitkeep
 
 # 忽略 pre-compiled libraries
-3090server/VLM_RL/get_item_info_agent/vendor/pydeps/
+3090server/pros_workflow/get_item_info_agent/vendor/pydeps/
 
 # 忽略大型參考資料夾
 參考用/

@@ -1,1 +1,1 @@
-"""Arm control package for VLM_RL tools."""
+"""Arm control package for pros_workflow tools."""

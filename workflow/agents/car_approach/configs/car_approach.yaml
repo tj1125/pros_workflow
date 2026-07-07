@@ -18,7 +18,7 @@ arm_base_link_pb_xyz: [-0.001193, -0.001505, 0.039689]
 car_center_from_arm_base_pb_xy: [0.0, -0.1285]
 capture_depth_image: true
 camera_name: Camera_Car
-intrinsics_path: ../../../../3090server/VLM_RL/grasp_agent/data/camera_parameter/Intrinsics/Camera_Car.yaml
+intrinsics_path: ../../../../3090server/pros_workflow/grasp_agent/data/camera_parameter/Intrinsics/Camera_Car.yaml
 capture_timeout_sec: 15.0
 pre_capture_amcl_timeout_sec: 2.0
 min_depth_m: 0.19

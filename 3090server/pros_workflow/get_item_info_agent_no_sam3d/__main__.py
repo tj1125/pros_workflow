@@ -2,7 +2,7 @@
 __main__.py — A2A Server Entrypoint for GetItemInfoAgentNoSam3D.
 
 Usage:
-    cd /path/to/VLM_RL/3090server/VLM_RL
+    cd /path/to/pros_workflow/3090server/pros_workflow
     conda activate <your_env>
     python -m get_item_info_agent_no_sam3d
 """

@@ -32,5 +32,5 @@ ros_subprocess:
   python_bin: /usr/bin/python3
   ros_setup_bash: /opt/ros/humble/setup.bash
   overlay_setup_bash: /workspaces/install/setup.bash
-  pythonpath: /workspace/VLM_RL/workflow:/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages
+  pythonpath: /workspace/pros_workflow/workflow:/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages
   ld_library_path: /opt/ros/humble/lib

@@ -9,7 +9,7 @@ open_configurations:
 close_configurations:
   - [0.7]
 width: 0.13603458
-# Longer forward reach for the local VLM_RL setup.
+# Longer forward reach for the local pros_workflow setup.
 depth: 0.2500
 closing_regions:
   - extents: [0.12, 0.02, 0.06]

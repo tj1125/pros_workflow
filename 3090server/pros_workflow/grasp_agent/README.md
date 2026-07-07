@@ -38,7 +38,7 @@ server 會回傳 JSON，重點欄位包含：
 
 ## Tool
 
-會被多個 agents 共用的工具，放在 `3090server/VLM_RL/tool/`：
+會被多個 agents 共用的工具，放在 `3090server/pros_workflow/tool/`：
 
 - `tool/vision/yolo.py`: find / get_item_info / grasp 共用 YOLO helper
 - `tool/vision/sam.py`: get_item_info / grasp 共用 SAM helper
@@ -62,7 +62,7 @@ GraspGen runtime 目前以 `get_item_info_agent/vendor/graspgen_runtime` 為 can
 
 ## 啟動
 
-在 `3090server/VLM_RL` 下：
+在 `3090server/pros_workflow` 下：
 
 ```bash
 python -m grasp_agent

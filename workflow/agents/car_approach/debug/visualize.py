@@ -22,14 +22,14 @@ from typing import Any
 
 DEBUG_DIR = Path(__file__).resolve().parent
 CAR_APPROACH_DIR = DEBUG_DIR.parent
-VLM_RL_WORKFLOW_ROOT = CAR_APPROACH_DIR.parents[1]
-VLM_RL_ROOT = VLM_RL_WORKFLOW_ROOT.parent
+WORKFLOW_ROOT = CAR_APPROACH_DIR.parents[1]
+REPO_ROOT = WORKFLOW_ROOT.parent
 DEFAULT_OUTPUT_DIR = DEBUG_DIR / "outputs"
 DEFAULT_CONFIG_PATH = CAR_APPROACH_DIR / "configs" / "car_approach.yaml"
-DEFAULT_ROS_MAP_YAML = VLM_RL_ROOT / "src" / "nav_goal_bridge_pkg" / "config" / "keepout_map.yaml"
+DEFAULT_ROS_MAP_YAML = REPO_ROOT / "src" / "nav_goal_bridge_pkg" / "config" / "keepout_map.yaml"
 
-if str(VLM_RL_WORKFLOW_ROOT) not in sys.path:
-    sys.path.insert(0, str(VLM_RL_WORKFLOW_ROOT))
+if str(WORKFLOW_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKFLOW_ROOT))
 
 base_sampler: Any = None
 sample_logic: Any = None
@@ -56,7 +56,7 @@ def _install_lightweight_car_approach_package() -> None:
     agents_pkg = sys.modules.get("agents")
     if agents_pkg is None:
         agents_pkg = types.ModuleType("agents")
-        agents_pkg.__path__ = [str(VLM_RL_WORKFLOW_ROOT / "agents")]
+        agents_pkg.__path__ = [str(WORKFLOW_ROOT / "agents")]
         agents_pkg.__package__ = "agents"
         sys.modules["agents"] = agents_pkg
 
@@ -349,7 +349,7 @@ def _load_grasp_result_payload_from_session(
 
 
 def _latest_session_sqlite() -> Path | None:
-    sessions_dir = VLM_RL_WORKFLOW_ROOT / "logs" / "sessions"
+    sessions_dir = WORKFLOW_ROOT / "logs" / "sessions"
     if not sessions_dir.exists():
         return None
     matches = [path for path in sessions_dir.glob("*/session.sqlite") if path.is_file()]

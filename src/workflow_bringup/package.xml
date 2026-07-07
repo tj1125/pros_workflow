@@ -2,7 +2,7 @@
 <package format="3">
   <name>workflow_bringup</name>
   <version>0.0.0</version>
-  <description>Bring up the VLM_RL ROS runtime stack.</description>
+  <description>Bring up the pros_workflow ROS runtime stack.</description>
   <maintainer email="vlm@project.local">VLM Team</maintainer>
   <license>MIT</license>
 

@@ -27,7 +27,7 @@ world_position_data + multi-view RGB + bboxes
 - Port：8006
 - 需要 CUDA 與 SAM/GraspGen 相關模型權重。
 
-在 `3090server/VLM_RL` 下安裝：
+在 `3090server/pros_workflow` 下安裝：
 
 ```bash
 conda create -n get_item_info_no_sam3d python=3.11 -y
@@ -41,7 +41,7 @@ pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/
 ## 啟動
 
 ```bash
-cd /path/to/VLM_RL/3090server/VLM_RL
+cd /path/to/pros_workflow/3090server/pros_workflow
 conda activate get_item_info_no_sam3d
 EXTERNAL_IP=192.168.1.10 python -m get_item_info_agent_no_sam3d
 ```

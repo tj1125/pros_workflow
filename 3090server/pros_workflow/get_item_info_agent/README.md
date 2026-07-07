@@ -7,7 +7,7 @@ RGB images -> YOLO -> SAM -> Triangulation -> DepthAnything -> SAM3D
   -> Pose Alignment -> GraspGen -> Goal Pose
 ```
 
-現行 Commander 主流程改用 `get_item_info_agent_no_sam3d`。本服務保留給需要 SAM3D mesh reconstruction 的實驗。本 legacy 服務預設使用 port `8008`，避免佔用現行 no-SAM3D 服務的 `8006`。
+本服務提供需要 SAM3D mesh reconstruction 的完整 3D pipeline，預設不啟用，使用 port `8008`（Commander 主流程用的是 `get_item_info_agent_no_sam3d` :8006）。
 
 ## 執行環境
 
@@ -27,7 +27,7 @@ pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/
 
 ## 啟動
 
-在 `3090server/VLM_RL` 下：
+在 `3090server/pros_workflow` 下：
 
 ```bash
 conda activate get_item_info_agent

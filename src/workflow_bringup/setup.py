@@ -17,6 +17,6 @@ setup(
     zip_safe=True,
     maintainer="VLM Team",
     maintainer_email="vlm@project.local",
-    description="Bring up the VLM_RL ROS runtime stack.",
+    description="Bring up the pros_workflow ROS runtime stack.",
     license="MIT",
 )

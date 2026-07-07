@@ -20,8 +20,8 @@ from .src.io.depth_pointcloud import DepthPointcloudConfig, DepthPointcloudResul
 
 
 APPROACH_AGENT_DIR = Path(__file__).resolve().parent
-VLM_RL_WORKFLOW_ROOT_DIR = APPROACH_AGENT_DIR.parents[1]
-VLM_RL_ROOT_DIR = VLM_RL_WORKFLOW_ROOT_DIR.parent
+WORKFLOW_ROOT_DIR = APPROACH_AGENT_DIR.parents[1]
+REPO_ROOT_DIR = WORKFLOW_ROOT_DIR.parent
 DEFAULT_CONFIG_PATH = Path("configs/car_approach.yaml")
 
 
@@ -1388,8 +1388,8 @@ def _resolve_input_path(raw_path: str, base_dir: Path) -> Path:
     candidates = (
         base_dir / path,
         APPROACH_AGENT_DIR / path,
-        VLM_RL_WORKFLOW_ROOT_DIR / path,
-        VLM_RL_ROOT_DIR / path,
+        WORKFLOW_ROOT_DIR / path,
+        REPO_ROOT_DIR / path,
         Path.cwd() / path,
     )
     for candidate in candidates:
