@@ -1,6 +1,6 @@
 # Get Item Info Agent No SAM3D
 
-`get_item_info_agent_no_sam3d` 是現行主流程使用的 RTX 3090 A2A item-info server。它不跑 SAM3D mesh reconstruction，而是使用多視角 RGB、bbox、`/world_position_data` 與幾何融合，估計目標資訊並產生 ranked goal poses。
+`get_item_info_agent_no_sam3d` is the RTX 3090 A2A item-info server used by the current main flow. It does not run SAM3D mesh reconstruction; instead it uses multi-view RGB, bounding boxes, `/world_position_data`, and geometry fusion to estimate target info and produce ranked goal poses.
 
 ## Pipeline
 
@@ -13,21 +13,21 @@ world_position_data + multi-view RGB + bboxes
   -> ranked goal_pose output
 ```
 
-核心程式：
+Core modules:
 
-- `agent_executor.py`: A2A request/response wrapper。
-- `pipeline/pipeline.py`: 主 pipeline。
-- `pipeline/steps/topic_input.py`: 解析 `/world_position_data` 與相機觀測。
-- `pipeline/steps/goal_pose.py`: 產生 Nav2/Unity goal pose ranking。
-- `configs/scene.default.yaml`: camera parameters、模型與 keepout map 設定。
+- `agent_executor.py`: A2A request/response wrapper.
+- `pipeline/pipeline.py`: the main pipeline.
+- `pipeline/steps/topic_input.py`: parses `/world_position_data` and camera observations.
+- `pipeline/steps/goal_pose.py`: produces the Nav2/Unity goal-pose ranking.
+- `configs/scene.default.yaml`: camera parameters, model paths, and keepout-map settings.
 
-## 執行環境
+## Environment
 
-- Conda 環境建議：`get_item_info_no_sam3d`
-- Port：8006
-- 需要 CUDA 與 SAM/GraspGen 相關模型權重。
+- Suggested conda env: `get_item_info_no_sam3d`
+- Port: 8006
+- Requires CUDA and the SAM/GraspGen model weights.
 
-在 `3090server/pros_workflow` 下安裝：
+Install under `3090server/pros_workflow`:
 
 ```bash
 conda create -n get_item_info_no_sam3d python=3.11 -y
@@ -36,25 +36,25 @@ pip install -r get_item_info_agent/requirements.txt
 pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
 ```
 
-此服務目前共用 `get_item_info_agent` 的 GraspGen runtime 與部分 requirements；若未來拆出專屬 requirements，請同步更新本文件。
+This service currently shares `get_item_info_agent`'s GraspGen runtime and part of its requirements; if a dedicated requirements file is split out later, update this document accordingly.
 
-## 啟動
+## Running
 
 ```bash
 cd /path/to/pros_workflow/3090server/pros_workflow
 conda activate get_item_info_no_sam3d
-EXTERNAL_IP=192.168.1.10 python -m get_item_info_agent_no_sam3d
+EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d
 ```
 
-Commander `.env`：
+Commander `.env`:
 
 ```env
-INF_GET_ITEM_INFO_NO_SAM3D_URL=http://192.168.1.10:8006
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
 ```
 
 ## A2A Request
 
-`parts[0].text` 是 JSON，`parts[1..N]` 是與 `camera_names` 同順序的 RGB image base64 或 inline data：
+`parts[0].text` is JSON; `parts[1..N]` are RGB images (base64 or inline data) in the same order as `camera_names`:
 
 ```json
 {
@@ -63,7 +63,7 @@ INF_GET_ITEM_INFO_NO_SAM3D_URL=http://192.168.1.10:8006
   "target_instance_id": 1,
   "target_instance_key": "apple_1",
   "target_topic_key": "apple",
-  "target_label": "紅色蘋果",
+  "target_label": "red apple",
   "selected_camera": "Camera_Room1_12",
   "camera_names": ["Camera_Room1_12", "Camera_Room1_13"],
   "center_world": [1.2, 0.4, 2.8],
@@ -85,7 +85,7 @@ INF_GET_ITEM_INFO_NO_SAM3D_URL=http://192.168.1.10:8006
   "primary_camera_id": "Camera_Room1_12",
   "target_instance_key": "apple_1",
   "target_object": {
-    "label": "紅色蘋果",
+    "label": "red apple",
     "id": 1,
     "instance_id": 1,
     "instance_key": "apple_1"
@@ -108,4 +108,4 @@ INF_GET_ITEM_INFO_NO_SAM3D_URL=http://192.168.1.10:8006
 }
 ```
 
-Commander 會將 `group_ranking[*].best_goal_pose_ros_map` 轉成 Nav2 `/goal_pose`，並在 `major_nav_node` 中逐 rank 嘗試下一個候選。
+The Commander converts `group_ranking[*].best_goal_pose_ros_map` into a Nav2 `/goal_pose`, and tries the next candidate rank by rank in `major_nav_node`.

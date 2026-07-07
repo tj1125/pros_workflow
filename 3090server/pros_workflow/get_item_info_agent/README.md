@@ -1,19 +1,19 @@
 # Get Item Info Agent Server (Legacy SAM3D)
 
-`get_item_info_agent` 是保留版 SAM3D/full 3D 感知服務。它接收多視角 RGB 影像與目標類別，執行：
+`get_item_info_agent` is the SAM3D / full-3D perception service. It receives multi-view RGB images and a target class and runs:
 
 ```text
 RGB images -> YOLO -> SAM -> Triangulation -> DepthAnything -> SAM3D
   -> Pose Alignment -> GraspGen -> Goal Pose
 ```
 
-本服務提供需要 SAM3D mesh reconstruction 的完整 3D pipeline，預設不啟用，使用 port `8008`（Commander 主流程用的是 `get_item_info_agent_no_sam3d` :8006）。
+This service provides the full 3D pipeline for cases that need SAM3D mesh reconstruction. It is disabled by default and uses port `8008` (the main flow uses `get_item_info_agent_no_sam3d` on :8006).
 
-## 執行環境
+## Environment
 
-- Conda 環境建議：`get_item_info_agent`
-- 主要依賴：`torch`, `segment_anything`, `ultralytics`, `pytorch3d`, `GraspGen`
-- Port：8008
+- Suggested conda env: `get_item_info_agent`
+- Main deps: `torch`, `segment_anything`, `ultralytics`, `pytorch3d`, `GraspGen`
+- Port: 8008
 
 ```bash
 conda create -n get_item_info_agent python=3.11 -y
@@ -25,24 +25,24 @@ pip install -r get_item_info_agent/requirements.txt
 pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
 ```
 
-## 啟動
+## Running
 
-在 `3090server/pros_workflow` 下：
+Under `3090server/pros_workflow`:
 
 ```bash
 conda activate get_item_info_agent
-EXTERNAL_IP=192.168.1.10 python -m get_item_info_agent
+EXTERNAL_IP=<gpu-host> python -m get_item_info_agent
 ```
 
-只有刻意跑 legacy client 時才設定：
+Set this only when intentionally running the legacy client:
 
 ```env
-INF_GET_ITEM_INFO_URL=http://192.168.1.10:8008
+INF_GET_ITEM_INFO_URL=http://<gpu-host>:8008
 ```
 
 ## A2A Request
 
-`parts[0].text` 是 JSON，`parts[1..N]` 是與 `camera_names` 同順序的 RGB image base64 或 inline data：
+`parts[0].text` is JSON; `parts[1..N]` are RGB images (base64 or inline data) in the same order as `camera_names`:
 
 ```json
 {

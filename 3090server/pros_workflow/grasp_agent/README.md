@@ -1,12 +1,12 @@
 # Grasp Agent Server
 
-`grasp_agent` 是一個 A2A Agent Server，負責接收 `Camera_Car` 的 RGBD 與 `object_id`，在 3090 端執行：
+`grasp_agent` is an A2A Agent Server that receives `Camera_Car` RGBD and an `object_id` and runs, on the 3090:
 
-`RGBD -> YOLOv26(yolov26_best.pt) -> SAM -> 目標點雲 -> GraspGen -> valid grasps -> 回傳所有可行 grasp pose（並保留 best grasp）`
+`RGBD -> YOLOv26 (yolov26_best.pt) -> SAM -> target point cloud -> GraspGen -> valid grasps -> return all feasible grasp poses (keeping the best grasp)`
 
 ## A2A Request
 
-client 送到 server 的 `parts[0].text` 內容是單一 JSON：
+The `parts[0].text` the client sends to the server is a single JSON object:
 
 ```json
 {
@@ -19,7 +19,7 @@ client 送到 server 的 `parts[0].text` 內容是單一 JSON：
 
 ## A2A Response
 
-server 會回傳 JSON，重點欄位包含：
+The server returns JSON; the key fields include:
 
 - `bbox_xyxy`
 - `detection_confidence`
@@ -32,27 +32,27 @@ server 會回傳 JSON，重點欄位包含：
 - `valid_grasp_poses_camera`
 - `object_reference_center_camera`
 
-`best_grasp_pose_camera.frame` 目前是 `camera`，因為這版只需要 Camera_Car 內參，不使用外參。
-`valid_grasp_poses_camera` 會回傳所有可行 grasp，排序規則是先以 `gripper_midpoint_camera_xyz` 為 reference，選 grasp position 最近者，再用 `grasp_confidence` 當次要排序。
-`best_grasp_pose_camera` 會維持相容，等於 `valid_grasp_poses_camera` 的第一個 pose。
+`best_grasp_pose_camera.frame` is currently `camera`, because this version only needs the Camera_Car intrinsics and uses no extrinsics.
+`valid_grasp_poses_camera` returns all feasible grasps, sorted first by nearest grasp position relative to `gripper_midpoint_camera_xyz`, then by `grasp_confidence` as a secondary key.
+`best_grasp_pose_camera` is kept for compatibility and equals the first pose in `valid_grasp_poses_camera`.
 
 ## Tool
 
-會被多個 agents 共用的工具，放在 `3090server/pros_workflow/tool/`：
+Helpers shared across services live in `3090server/pros_workflow/tool/`:
 
-- `tool/vision/yolo.py`: find / get_item_info / grasp 共用 YOLO helper
-- `tool/vision/sam.py`: get_item_info / grasp 共用 SAM helper
-- `tool/grasp/graspgen.py`: get_item_info / grasp 共用 GraspGen helper
+- `tool/vision/yolo.py`: YOLO helper shared by get_item_info / grasp.
+- `tool/vision/sam.py`: SAM helper shared by get_item_info / grasp.
+- `tool/grasp/graspgen.py`: GraspGen helper shared by get_item_info / grasp.
 
-GraspGen runtime 目前以 `get_item_info_agent/vendor/graspgen_runtime` 為 canonical source；多個 agents 共用同一套 helper 與 root resolver，只有顯式設定有效外部路徑時才會覆蓋。
+The GraspGen runtime uses `get_item_info_agent/vendor/graspgen_runtime` as the canonical source; the services share one set of helpers and one root resolver, overridden only when a valid external path is set explicitly.
 
 ## Config
 
-預設 config 在：
+Default config:
 
 - `grasp_agent/configs/runtime.default.yaml`
 
-可用以下 env 覆蓋：
+Overridable via env vars:
 
 - `GRASP_YOLO_WEIGHTS`
 - `GRASP_SAM_CHECKPOINT`
@@ -60,12 +60,12 @@ GraspGen runtime 目前以 `get_item_info_agent/vendor/graspgen_runtime` 為 can
 - `GRASP_GRIPPER_CONFIG`
 - `GRASP_CAMERA_INTRINSICS`
 
-## 啟動
+## Running
 
-在 `3090server/pros_workflow` 下：
+Under `3090server/pros_workflow`:
 
 ```bash
 python -m grasp_agent
 ```
 
-服務 port 是 `8007`。
+The service port is `8007`.

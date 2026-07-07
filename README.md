@@ -1,63 +1,111 @@
 # pros_workflow
 
-部署於 Unity/ROS2 環境的主動感知抓取系統。本機 Commander 用 LangGraph 維護任務狀態、透過 VLM（預設 Gemini）做高層決策，呼叫本機 ROS2 導航/控制流程與 RTX 3090 上的 A2A 推論服務，完成找物 → 導航 → 抓取姿態生成 → 底盤靠近與手臂/夾爪收尾。
+An active-perception grasping system deployed in a Unity/ROS2 environment. A local Commander maintains task state with LangGraph and makes high-level decisions with a VLM (Google Gemini or a local Ollama model, selected by `VLM_PROVIDER`). It drives the local ROS2 navigation/control stack and the A2A inference services on an RTX 3090 to complete: find object → navigate → grasp-pose generation → base approach and arm/gripper finish.
 
 ![System architecture](docs/system_architecture.png)
 
-## 程式碼結構
+## Code layout
 
-| 路徑 | 內容 |
+| Path | Contents |
 |---|---|
-| `src/` | ROS2 packages。`workflow_bringup`（runtime launch 匯總）、`nav_goal_bridge_pkg`（Nav2 + goal bridge）、`car_control_pkg`、`arm_control_pkg`、`action_interface`、`robot_description`。 |
-| `workflow/` | 非 ROS 的 Commander。`web_main.py`/`main.py` 進入點、`commander/`（LangGraph orchestrator、flows、brain、state/contracts、camera/nav/perception/storage/web）、`agents/`（A2A client 與 car approach runtime）、`config/`（cameras/objects/runtime yaml）。 |
-| `3090server/pros_workflow/` | RTX 3090 端 A2A 推論服務（item-info、grasp）。見該目錄 [README](3090server/pros_workflow/README.md)。 |
-| `docker/` | build workflow image 用的 Dockerfile。 |
-| `scripts/` | 容器內 shell helper（`env.sh` 定義 `run`/`web`）與 ROS runtime 啟動（`start.sh`）。 |
-| `docs/` | 架構圖與部署規格。 |
+| `src/` | ROS2 packages: `workflow_bringup` (runtime launch aggregator), `nav_goal_bridge_pkg` (Nav2 + goal bridge), `car_control_pkg`, `arm_control_pkg`, `action_interface`, `robot_description`. |
+| `workflow/` | The non-ROS Commander: `web_main.py`/`main.py` entry points, `commander/` (LangGraph orchestrator, flows, brain, state/contracts, camera/nav/perception/storage/web), `agents/` (A2A clients and the car-approach runtime), `config/` (cameras/objects/runtime YAML). |
+| `3090server/pros_workflow/` | RTX 3090 A2A inference services (item-info, grasp). See its [README](3090server/pros_workflow/README.md). |
+| `docker/` | Dockerfile used to build the workflow image. |
+| `scripts/` | In-container shell helpers (`env.sh` defines `run`/`web`) and the ROS runtime launcher (`start.sh`). |
+| `docs/` | Architecture diagrams and deployment spec. |
 
-## 執行流程
+## Runtime flow
 
-Commander 是一個 LangGraph 狀態機（entry `greeting_node`），主要抓取節點串接：`find_node` → `get_item_info_no_sam3d_node` → `nav_move_node` → `observe_node` → `reason_node`（VLM 決策）→ `major_nav_node` / `car_grasp_node` → `car_approach_node`。VLM 每回合輸出 `BrainDecision`（`call_module` ∈ `major_nav_node` / `grasp_agent` / `car_approach_agent` / `DONE`）。
+The Commander is a LangGraph state machine (entry `greeting_node`). The main grasp path chains: `find_node` → `get_item_info_no_sam3d_node` → `nav_move_node` → `observe_node` → `reason_node` (VLM decision) → `major_nav_node` / `car_grasp_node` → `car_approach_node`. Each turn the VLM emits a `BrainDecision` (`call_module` ∈ `major_nav_node` / `grasp_agent` / `car_approach_agent` / `DONE`).
 
 ![LangGraph flow](docs/langgraph_flow.png)
 
-## Quick Start
+## Environment file (`.env`)
 
-先確認根目錄有 `.env`（VLM provider、`INF_*` 服務 URL 等）。
+The Commander loads `.env` from the project root at startup. Required and common keys:
 
-Build image：
+```env
+# ROS
+ROS_DOMAIN_ID=1
+
+# VLM provider: google | ollama
+VLM_PROVIDER=ollama
+
+# Google Gemini (required when VLM_PROVIDER=google)
+GOOGLE_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.0-flash
+GOOGLE_STRUCTURED_METHOD=json_schema
+
+# Ollama (required when VLM_PROVIDER=ollama)
+OLLAMA_BASE_URL=http://<ollama-host>:11434
+OLLAMA_MODEL=gemma3:12b
+OLLAMA_STRUCTURED_METHOD=json_schema
+OLLAMA_CLASSIFIER_MODEL=qwen2.5-coder:3b
+OLLAMA_CHAT_MODEL=gemma3:12b
+
+# System mode: true = mock (no VLM / GPU calls)
+MOCK_MODE=false
+
+# RTX 3090 A2A inference services (IP:Port of the GPU servers)
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006   # required (item-info)
+INF_GRASP_URL=http://<gpu-host>:8007                     # required (grasp)
+INF_GET_ITEM_INFO_URL=                                   # leave empty; legacy SAM3D :8008 only
+
+# Rosbridge (Unity digital twin)
+ROSBRIDGE_URL=ws://localhost:9090
+
+# Logging
+TRACE_LOG_FILE=logs/trace_logger.jsonl
+```
+
+Only `INF_GET_ITEM_INFO_NO_SAM3D_URL` and `INF_GRASP_URL` are read on the active runtime path; the other `INF_*` keys are legacy/unused. Set `GOOGLE_API_KEY` (google) or `OLLAMA_BASE_URL` (ollama) according to `VLM_PROVIDER`.
+
+## Quick start (local Commander)
+
+Build the image:
 
 ```bash
 cd /home/scream/TJ/pros_workflow
 docker build -t pros_workflow_image:latest -f docker/Dockerfile .
 ```
 
-Terminal 1 — 啟動 ROS runtime：
+Terminal 1 — start the ROS runtime:
 
 ```bash
 cd /home/scream/TJ/pros_workflow
-./run.sh            # 進入 pros_workflow 容器
-r                   # build ROS workspace（PROS image alias）
+./run.sh            # enter the pros_workflow container
+r                   # build the ROS workspace (PROS image alias for rebuild_colcon.rc)
 scripts/start.sh    # launch Nav2 / car / arm / rosbridge
-# then play unity.
+# then play Unity.
 ```
 
-Terminal 2 — 開 web 跑 workflow：
+Terminal 2 — start the web workflow:
 
 ```bash
 cd /home/scream/TJ/pros_workflow
 ./run.sh
-web 8080            # 啟動 workflow/web_main.py
+web 8080            # start workflow/web_main.py
 # then open http://localhost:8080.
 ```
 
-3090 端另外啟動 A2A 服務（見 [3090server/pros_workflow/README.md](3090server/pros_workflow/README.md)）。
+`./run.sh` only enters Docker (it does not build the image); it publishes `8080:8080` (web) and `9090:9090` (rosbridge), mounts the repo at `/workspace/pros_workflow`, and uses the venv at `/opt/pros_workflow_venv`. Rebuild the image after changing the Dockerfile or `workflow/pyproject.toml`; run `r` after changing ROS code.
 
-## Notes
+## RTX 3090 setup
 
-- `./run.sh` 只負責進 Docker，不會自動 build image；容器內工作目錄是 `/workspace/pros_workflow`，venv 在 `/opt/pros_workflow_venv`。
-- `./run.sh` 會 publish `8080:8080`（web）和 `9090:9090`（rosbridge）。
-- `r` 是 PROS image 內建 alias：`source /workspaces/rebuild_colcon.rc`。
-- `scripts/start.sh` 會啟動 Nav2、car control、arm control、rosbridge。
-- `run` 執行 `workflow/main.py --no-mock`（CLI）；`web 8080` 執行 `workflow/web_main.py`。
-- 改 ROS code 後跑 `r`；改 Dockerfile 或 `workflow/pyproject.toml` 後重新 build image。
+The perception/grasp inference runs on a separate RTX 3090 machine as A2A servers. On that machine:
+
+1. Copy the `3090server/pros_workflow/` folder to the GPU host.
+2. Create the conda environments and install requirements (per-service instructions in the [3090server README](3090server/pros_workflow/README.md)).
+3. Drop the model weights (YOLO / SAM / DepthAnything / SAM3D / GraspGen checkpoints) into `3090server/pros_workflow/models/` — only `.gitkeep` is committed.
+4. Launch the required services, setting `EXTERNAL_IP` to the GPU host's address (it is written into the A2A AgentCard `url`):
+
+   ```bash
+   cd /path/to/pros_workflow/3090server/pros_workflow
+   EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d   # :8006 required
+   EXTERNAL_IP=<gpu-host> python -m grasp_agent                    # :8007 required
+   ```
+
+5. Point the Commander `.env` at them: `INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006` and `INF_GRASP_URL=http://<gpu-host>:8007`.
+
+See [3090server/pros_workflow/README.md](3090server/pros_workflow/README.md) for the full service list, ports, configs, and env overrides.
