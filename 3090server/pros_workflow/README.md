@@ -10,6 +10,57 @@ This folder holds the A2A Agent Servers that run on the RTX 3090. The Commander 
 | `grasp_agent` | `8007` (hardcoded) | **required** | `Camera_Car` RGBD + YOLO + SAM + GraspGen; outputs 6-DoF grasp poses. |
 | `get_item_info_agent` | `8008` (env `GET_ITEM_INFO_LEGACY_PORT`) | legacy | Full SAM3D pipeline (YOLO→SAM→Triangulation→DepthAnything→SAM3D→GraspGen). Kept for experiments that need mesh reconstruction. |
 
+## Quick start
+
+Prerequisites: an RTX 3090 (CUDA 12.1) with `conda` installed. The three services share one requirements file, so **a single conda env runs all of them**.
+
+**1. Enter the folder**
+
+```bash
+cd /path/to/pros_workflow/3090server/pros_workflow
+```
+
+**2. Create the conda env and install deps**
+
+```bash
+conda create -n pros_3090 python=3.11 -y
+conda activate pros_3090
+
+# PyTorch (CUDA 12.1) — install first, with the CUDA index
+pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+
+# Shared perception + GraspGen stack (YOLO / SAM / DepthAnything / SAM3D / GraspGen)
+pip install -r get_item_info_agent/requirements.txt
+
+# GraspGen CUDA ops (editable, no build isolation)
+pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
+```
+
+**3. Add model weights**
+
+Drop the checkpoints (YOLO / SAM / DepthAnything / SAM3D / GraspGen) into `models/` — only `.gitkeep` is committed. Exact paths are set in each service's `configs/*.yaml`.
+
+**4. Launch the two required services**
+
+Set `EXTERNAL_IP` to this machine's address (it goes into the A2A AgentCard `url` the Commander connects to):
+
+```bash
+EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d   # :8006 required
+EXTERNAL_IP=<gpu-host> python -m grasp_agent                    # :8007 required
+# optional (legacy SAM3D pipeline):
+EXTERNAL_IP=<gpu-host> python -m get_item_info_agent            # :8008
+```
+
+**5. Point the Commander at this host**
+
+On the Commander machine, set the project-root `.env`:
+
+```env
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
+INF_GRASP_URL=http://<gpu-host>:8007
+```
+
 ## Directory layout
 
 ```text
@@ -28,25 +79,11 @@ This folder holds the A2A Agent Servers that run on the RTX 3090. The Commander 
 
 `tool/` is the runtime shared by the three servers and should not be duplicated. The GraspGen runtime uses `get_item_info_agent/vendor/graspgen_runtime` as the canonical source; the configs of both `grasp_agent` and `no_sam3d` point to it.
 
-## Running the services
+## Service details
 
-On the 3090 machine, enter this folder and launch each server as a module:
-
-```bash
-cd /path/to/pros_workflow/3090server/pros_workflow
-
-python -m get_item_info_agent_no_sam3d   # :8006 required
-python -m grasp_agent                    # :8007 required
-python -m get_item_info_agent            # :8008 legacy (only when needed)
-```
-
-`EXTERNAL_IP` is written into the A2A AgentCard `url`; it defaults to `140.116.82.226` in code. Set it explicitly when deploying to another machine:
-
-```bash
-EXTERNAL_IP=<gpu-host> python -m grasp_agent
-```
-
-Each server binds `0.0.0.0` on the port shown above (`get_item_info_agent` can be overridden with `GET_ITEM_INFO_LEGACY_PORT`).
+- All three servers bind `0.0.0.0` on their fixed ports; `get_item_info_agent`'s port can be overridden with `GET_ITEM_INFO_LEGACY_PORT`.
+- `EXTERNAL_IP` is only written into the A2A AgentCard `url` (defaults to `140.116.82.226` in code); set it to the GPU host so the Commander can reach the service.
+- One conda env serves all three services — they share `get_item_info_agent/requirements.txt` and the same GraspGen runtime under `get_item_info_agent/vendor/graspgen_runtime`.
 
 ## Commander `.env` mapping
 
