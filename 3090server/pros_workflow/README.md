@@ -39,7 +39,7 @@ pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/
 
 **3. Add model weights**
 
-Drop the checkpoints (YOLO / SAM / DepthAnything / SAM3D / GraspGen) into `models/` — only `.gitkeep` is committed. Exact paths are set in each service's `configs/*.yaml`.
+Drop the checkpoints (YOLO / SAM / DepthAnything / SAM3D / GraspGen) into `models/` — only `.gitkeep` is committed. See [Model weights — download sources & paths](#model-weights--download-sources--paths) for every download link and its exact relative path; the same paths are set in each service's `configs/*.yaml`.
 
 **4. Launch the two required services**
 
@@ -95,9 +95,59 @@ INF_GRASP_URL=http://<gpu-host>:8007
 INF_GET_ITEM_INFO_URL=                                   # empty = legacy :8008 disabled
 ```
 
-## Models and environment variables
+## Model weights — download sources & paths
 
-- `models/` keeps only `.gitkeep`; the real weights (YOLO / SAM / DepthAnything / SAM3D / GraspGen checkpoints) are added at deploy time.
+`models/` keeps only `.gitkeep` in git; the real weights are added at deploy time. All paths below are **relative to this folder** (`3090server/pros_workflow/`) and match the values in each service's `configs/*.yaml`.
+
+| Model | Used by | Relative path | Direct download |
+|---|---|---|---|
+| **YOLOv26** (custom) | `grasp_agent`, `get_item_info_agent` | `models/yolov26/yolov26_best.pt` | [Google Drive folder](https://drive.google.com/drive/folders/1pcecS0mu3Sr0DWqiGN2IbM6aMMz1WrnK?usp=share_link) |
+| **SAM ViT-B** | all three services | `models/segmentation/sam_vit_b_01ec64.pth` | [https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth) (public) |
+| **Depth Anything V2 (Base)** | `get_item_info_agent` (legacy) | `models/depth/depth_anything_v2_vitb.pth` | [https://huggingface.co/depth-anything/Depth-Anything-V2-Base/resolve/main/depth_anything_v2_vitb.pth](https://huggingface.co/depth-anything/Depth-Anything-V2-Base/resolve/main/depth_anything_v2_vitb.pth) (public) |
+| **GraspGen — Robotiq 2F-140** (default gripper) | `grasp_agent`, `get_item_info_agent*` | `models/graspgen_checkpoints/graspgen_robotiq_2f_140_dis.pth`, `..._gen.pth`, `..._140.yml` | [nvidia/GraspGen](https://huggingface.co/nvidia/GraspGen) — **gated**, needs `hf download` (see below) |
+| **GraspGen — Franka Panda** | optional (alt gripper) | `models/graspgen_checkpoints/graspgen_franka_panda_dis.pth`, `..._gen.pth`, `..._panda.yml` | [nvidia/GraspGen](https://huggingface.co/nvidia/GraspGen) — **gated** |
+| **GraspGen — Suction 30 mm** | optional (alt gripper) | `models/graspgen_checkpoints/graspgen_single_suction_cup_30mm_dis.pth`, `..._gen.pth`, `..._30mm.yml` | [nvidia/GraspGen](https://huggingface.co/nvidia/GraspGen) — **gated** |
+| **SAM 3D Objects** (7 `.ckpt` + `.yaml`) | `get_item_info_agent` (legacy SAM3D pipeline) | `models/sam3d/hf/` (`ss_generator.ckpt`, `slat_generator.ckpt`, `ss_decoder.ckpt`, `slat_decoder_gs.ckpt`, `slat_decoder_gs_4.ckpt`, `slat_decoder_mesh.ckpt`, `pipeline.yaml`, …) | [facebook/sam-3d-objects](https://huggingface.co/facebook/sam-3d-objects) — **gated**, needs `hf download` (see below) |
+
+### Download commands
+
+```bash
+# run from this folder: 3090server/pros_workflow/
+
+# --- Public direct downloads ---
+# SAM ViT-B
+wget -O models/segmentation/sam_vit_b_01ec64.pth \
+  https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+# Depth Anything V2 (Base)
+wget -O models/depth/depth_anything_v2_vitb.pth \
+  https://huggingface.co/depth-anything/Depth-Anything-V2-Base/resolve/main/depth_anything_v2_vitb.pth
+
+# --- YOLOv26 (custom) ---
+# Download yolov26_best.pt from the Google Drive folder and place it here:
+#   models/yolov26/yolov26_best.pt
+#   https://drive.google.com/drive/folders/1pcecS0mu3Sr0DWqiGN2IbM6aMMz1WrnK?usp=share_link
+
+# --- Gated Hugging Face repos (accept the license, then `hf auth login`) ---
+pip install 'huggingface-hub[cli]<1.0'
+
+# GraspGen checkpoints -> models/graspgen_checkpoints/
+hf download nvidia/GraspGen --repo-type model --local-dir models/graspgen_checkpoints
+
+# SAM 3D Objects checkpoints -> models/sam3d/hf/
+hf download facebook/sam-3d-objects --repo-type model --local-dir models/sam3d/download
+mv models/sam3d/download/checkpoints models/sam3d/hf && rm -rf models/sam3d/download
+```
+
+> The `nvidia/GraspGen` and `facebook/sam-3d-objects` repos are **gated**: anonymous requests return HTTP 401, so there is no plain direct file URL. Request access on each repo page, authenticate with `hf auth login`, then run the `hf download` commands above. After downloading GraspGen, make sure the `.pth`/`.yml` files land directly in `models/graspgen_checkpoints/` (flatten any subfolders if the repo nests them).
+
+Notes:
+- The default gripper is **Robotiq 2F-140** — it is the only GraspGen set referenced by the configs (`gripper_config: models/graspgen_checkpoints/graspgen_robotiq_2f_140.yml`). The Franka Panda and Suction 30 mm sets are only needed if you switch grippers.
+- Each GraspGen gripper needs both the discriminator (`*_dis.pth`) and generator (`*_gen.pth`) checkpoints plus its `.yml`; the `.yml` names the two `.pth` files.
+- **SAM 3D Objects** is gated: request access on the Hugging Face repo, run `hf auth login`, then `hf download facebook/sam-3d-objects` and place the `checkpoints/` contents under `models/sam3d/hf/`. Only the legacy `:8008` SAM3D pipeline needs these; the two required services (`:8006`, `:8007`) do not.
+
+## Environment variables
+
+- `models/` keeps only `.gitkeep`; the real weights (YOLO / SAM / DepthAnything / SAM3D / GraspGen checkpoints) are added at deploy time (see the table above).
 - `grasp_agent` model/camera paths can override the config via env vars: `GRASP_YOLO_WEIGHTS`, `GRASP_SAM_CHECKPOINT`, `GRASP_GRASPGEN_ROOT`, `GRASP_GRIPPER_CONFIG`, `GRASP_CAMERA_INTRINSICS`.
 - `get_item_info_agent_no_sam3d` reads no env vars; all settings come from `configs/scene.default.yaml`.
 - Each service's `configs/*.yaml` points to camera parameters, the SAM checkpoint, and the GraspGen runtime; the item-info services also reference the Nav2 keepout map.
