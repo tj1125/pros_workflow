@@ -24,8 +24,8 @@ from .state import CommanderState
 class Orchestrator(ChatFlowMixin, PickFlowMixin):
     """LangGraph orchestrator with typed state slices and explicit artifacts."""
 
-    def __init__(self, trace_logger: TraceLogger, use_mock: bool = True):
-        self._init_common(trace_logger=trace_logger, use_mock=use_mock)
+    def __init__(self, trace_logger: TraceLogger):
+        self._init_common(trace_logger=trace_logger)
         checkpoint_path = self._checkpoint_path()
         self._checkpoint_conn = sqlite3.connect(str(checkpoint_path), check_same_thread=False)
         self._checkpoint_cm = None
@@ -34,9 +34,9 @@ class Orchestrator(ChatFlowMixin, PickFlowMixin):
         self.graph = self._build_graph()
 
     @classmethod
-    async def create(cls, trace_logger: TraceLogger, use_mock: bool = True) -> "Orchestrator":
+    async def create(cls, trace_logger: TraceLogger) -> "Orchestrator":
         self = cls.__new__(cls)
-        self._init_common(trace_logger=trace_logger, use_mock=use_mock)
+        self._init_common(trace_logger=trace_logger)
         self._checkpoint_conn = None
         self._checkpoint_cm = AsyncSqliteSaver.from_conn_string(str(self._checkpoint_path()))
         self._checkpointer = await self._checkpoint_cm.__aenter__()
@@ -44,18 +44,16 @@ class Orchestrator(ChatFlowMixin, PickFlowMixin):
         self.graph = self._build_graph()
         return self
 
-    def _init_common(self, *, trace_logger: TraceLogger, use_mock: bool) -> None:
+    def _init_common(self, *, trace_logger: TraceLogger) -> None:
         self.logger = trace_logger
-        self.brain = Brain(use_mock=use_mock)
+        self.brain = Brain()
         self.http_client = httpx.AsyncClient(timeout=120.0)
-        self.use_mock = use_mock
         self._classifier_model = None
         self._related_object_model = None
         self._chat_model = None
         self._artifact_stores: dict[str, ArtifactStore] = {}
         self._transient_base64: dict[str, dict[str, str]] = {}
-        if not use_mock:
-            self._init_ollama_chat_models()
+        self._init_ollama_chat_models()
 
     @staticmethod
     def _checkpoint_path() -> Path:

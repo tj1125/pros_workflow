@@ -85,7 +85,7 @@ class PickFlowMixin:
         selected_index: int = 0,
     ) -> list[dict[str, Any]]:
         selected_index = valid_object_index(selected_index, objects)
-        if self.use_mock or getattr(self, "_related_object_model", None) is None:
+        if getattr(self, "_related_object_model", None) is None:
             return lexical_related_object_options(task_text, objects, selected_index=selected_index)
 
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -290,18 +290,14 @@ class PickFlowMixin:
         label_lookup = {normalized_item_id(key): str(value) for key, value in candidate_labels.items()}
         if wanted:
             label_lookup.setdefault(wanted, label)
-        if self.use_mock:
-            raw_payload = {"data": json.dumps({"mock": []})}
-            candidates = [{"item_id": wanted or "target", "instance_id": 1, "instance_key": f"{wanted or 'target'}_1", "topic_key": "mock", "center_world": [1.2, 0.4, 2.8], "camsrc": [], "bboxes_by_camera": {}}]
-        else:
-            from ..perception.room_topics import get_topic_string_message
-            raw = await get_topic_string_message("/world_position_data", timeout_sec=5.0)
-            if not raw:
-                status = "TARGET_NOT_FOUND"
-                return {"selected_instance": {}, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, error="/world_position_data read failed")}
-            raw_payload = {"data": raw}
-            candidates = parse_world_position_payload(raw_payload)
-        room_cameras = {} if self.use_mock else await self._capture_room_camera_images(state, self._item_info_room_camera_names(), timeout_sec=10.0)
+        from ..perception.room_topics import get_topic_string_message
+        raw = await get_topic_string_message("/world_position_data", timeout_sec=5.0)
+        if not raw:
+            status = "TARGET_NOT_FOUND"
+            return {"selected_instance": {}, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, error="/world_position_data read failed")}
+        raw_payload = {"data": raw}
+        candidates = parse_world_position_payload(raw_payload)
+        room_cameras = await self._capture_room_camera_images(state, self._item_info_room_camera_names(), timeout_sec=10.0)
         matches = [candidate for candidate in candidates if candidate.get("item_id") in wanted_ids]
         if not matches:
             status = "TARGET_NOT_FOUND"
@@ -326,25 +322,22 @@ class PickFlowMixin:
             relation = "同種物品" if item_id == wanted else "相近不同物品"
             object_label = label_lookup.get(item_id, item_id)
             print(f"  [{idx}] {candidate.get('instance_key')} {relation}={object_label} center_world={candidate.get('center_world', [])} camsrc={candidate.get('camsrc', [])}{preview_note}")
-        if self.use_mock and len(matches) == 1:
-            selected_idx = 1
-        else:
-            loop = asyncio.get_event_loop()
-            while True:
-                choice = await loop.run_in_executor(None, lambda: input(f"\n請輸入候選照片編號 (1-{len(matches)}) 或 no：\n> "))
-                if choice.strip().lower() == "no":
-                    status = "TARGET_NOT_FOUND"
-                    updated_at = time.time()
-                    snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="user_rejected", updated_at=updated_at, store_raw_payload=False)
-                    world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), updated_at=updated_at, update_source_node="find_node", update_reason="user_rejected")
-                    return {"selected_instance": {}, "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message="User selected no target")}
-                try:
-                    selected_idx = int(choice)
-                    if 1 <= selected_idx <= len(matches):
-                        break
-                except ValueError:
-                    pass
-                print("格式不正確，請重新輸入。")
+        loop = asyncio.get_event_loop()
+        while True:
+            choice = await loop.run_in_executor(None, lambda: input(f"\n請輸入候選照片編號 (1-{len(matches)}) 或 no：\n> "))
+            if choice.strip().lower() == "no":
+                status = "TARGET_NOT_FOUND"
+                updated_at = time.time()
+                snapshot_id = store.save_world_snapshot_raw(raw_payload, candidate_count=len(candidates), created_by_node="find_node", update_reason="user_rejected", updated_at=updated_at, store_raw_payload=False)
+                world = WorldPositionSnapshot(snapshot_id=snapshot_id, candidate_count=len(candidates), updated_at=updated_at, update_source_node="find_node", update_reason="user_rejected")
+                return {"selected_instance": {}, "world_position": dump_model(world), "room_cameras": room_cameras, "current_status": status, "last_execution": self._execution(state, "find_node", status, started, success=False, message="User selected no target")}
+            try:
+                selected_idx = int(choice)
+                if 1 <= selected_idx <= len(matches):
+                    break
+            except ValueError:
+                pass
+            print("格式不正確，請重新輸入。")
         candidate = matches[selected_idx - 1]
         preview = candidate_previews.get(str(candidate.get("instance_key", "")), {})
         primary_camera = str(preview.get("primary_camera", ""))
@@ -394,25 +387,24 @@ class PickFlowMixin:
         if not selected or not world.get("snapshot_id"):
             status = "ITEM_INFO_NO_SAM3D_FAILED"
             return {"current_status": status, "last_execution": self._execution(state, "get_item_info_no_sam3d_node", status, started, success=False, error="missing selected instance or world snapshot")}
-        camera_names = [] if self.use_mock else self._item_info_room_camera_names()
-        if not self.use_mock:
-            latest_room_cameras = await self._capture_room_camera_images(state, camera_names, timeout_sec=10.0)
-            room_cameras = {**room_cameras, **latest_room_cameras}
-            missing_cameras = [name for name in camera_names if name not in room_cameras]
-            if missing_cameras:
-                status = "ITEM_INFO_NO_SAM3D_FAILED"
-                return {
-                    "room_cameras": room_cameras,
-                    "current_status": status,
-                    "last_execution": self._execution(
-                        state,
-                        "get_item_info_no_sam3d_node",
-                        status,
-                        started,
-                        success=False,
-                        error=f"missing required room camera images: {missing_cameras}",
-                    ),
-                }
+        camera_names = self._item_info_room_camera_names()
+        latest_room_cameras = await self._capture_room_camera_images(state, camera_names, timeout_sec=10.0)
+        room_cameras = {**room_cameras, **latest_room_cameras}
+        missing_cameras = [name for name in camera_names if name not in room_cameras]
+        if missing_cameras:
+            status = "ITEM_INFO_NO_SAM3D_FAILED"
+            return {
+                "room_cameras": room_cameras,
+                "current_status": status,
+                "last_execution": self._execution(
+                    state,
+                    "get_item_info_no_sam3d_node",
+                    status,
+                    started,
+                    success=False,
+                    error=f"missing required room camera images: {missing_cameras}",
+                ),
+            }
         try:
             camera_images = {name: self._load_transient_base64(state, str(room_cameras[name].get("image_key", ""))) for name in camera_names}
         except Exception as exc:
@@ -432,7 +424,7 @@ class PickFlowMixin:
             "bboxes_by_camera": selected.get("bboxes_by_camera", {}),
             "world_position_data": raw_world,
         }
-        agent = GetItemInfoNoSam3DAgent(http_client=self.http_client, use_mock=self.use_mock)
+        agent = GetItemInfoNoSam3DAgent(http_client=self.http_client)
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}
@@ -510,12 +502,6 @@ class PickFlowMixin:
             status = "WORLD_POSITION_UPDATE_SKIPPED"
             world = WorldPositionSnapshot(update_source_node=source_node, update_reason="no_selected_instance")
             return {"world_position": dump_model(world), "current_status": status, "last_execution": self._execution(state, source_node, status, started)}
-        if self.use_mock:
-            status = "WORLD_POSITION_UNCHANGED"
-            world = dict(state.get("world_position", {}) or {})
-            world["snapshot_id"] = ""
-            world.update({"target_changed": False, "update_source_node": source_node, "update_reason": "unchanged", "update_distance_m": 0.0})
-            return {"world_position": world, "current_status": status, "last_execution": self._execution(state, source_node, status, started)}
         from ..perception.room_topics import get_topic_string_message
         from ..perception.world_position import parse_world_position_payload
         raw = await get_topic_string_message("/world_position_data", timeout_sec=5.0)
@@ -634,16 +620,15 @@ class PickFlowMixin:
         status = "OBSERVED"
         success = True
         message = "Camera_Car observation captured"
-        if not self.use_mock:
-            from ..camera import get_camera_image_base64
-            image_b64 = await get_camera_image_base64("Camera_Car", timeout_sec=15.0)
-            if image_b64:
-                image_key = self._remember_transient_base64(state, "camera_car_rgb", image_b64)
-            else:
-                status = "OBSERVED_WITHOUT_IMAGE"
-                success = False
-                message = "Camera_Car capture timed out or returned no image"
-                description = f"{description}. Camera_Car image unavailable; reason over typed task/navigation/result state only."
+        from ..camera import get_camera_image_base64
+        image_b64 = await get_camera_image_base64("Camera_Car", timeout_sec=15.0)
+        if image_b64:
+            image_key = self._remember_transient_base64(state, "camera_car_rgb", image_b64)
+        else:
+            status = "OBSERVED_WITHOUT_IMAGE"
+            success = False
+            message = "Camera_Car capture timed out or returned no image"
+            description = f"{description}. Camera_Car image unavailable; reason over typed task/navigation/result state only."
         observation = Observation(description=description, image_key=image_key, image_ref=image_ref)
         return {"observation": dump_model(observation), "current_status": status, "last_execution": self._execution(state, "observe_node", status, started, success=success, message=message)}
 
@@ -781,12 +766,6 @@ class PickFlowMixin:
             return {"navigation": navigation, "current_status": status, "last_execution": self._execution(state, "nav_move_node", status, started, success=False, error="missing nav goal")}
         rank = int(navigation.get("current_goal_rank", goal.get("goal_rank", 1)) or 1)
         goal_pose_index = int(navigation.get("current_goal_pose_index", goal.get("goal_pose_index", 0)) or 0)
-        if self.use_mock:
-            events = [{"event": "goal_publishing", "rank": rank, "goal_pose_index": goal_pose_index}, {"event": "plan_ready", "rank": rank}, {"event": "arrived", "rank": rank}]
-            nav_result = NavResult(goal=self._nav_goal_from_pose(goal), arrived=True, plan_ready=True, attempt=1, events=events, message="mock nav arrived")
-            navigation["result"] = dump_model(nav_result)
-            status = "NAV_COMPLETED"
-            return {"navigation": navigation, "current_status": status, "last_execution": self._execution(state, "nav_move_node", status, started, message=nav_result.message)}
         payload = self._nav_runner_payload(state, goal, rank, goal_pose_index)
         result = await self._run_nav_move_runner(payload)
         success = bool(result.get("success", False))
@@ -815,17 +794,12 @@ class PickFlowMixin:
         started = time.time()
         goal = self._default_initial_pose()
         goal.pop("covariance", None)
-        if self.use_mock:
-            events = [{"event": "goal_publishing", "source": "nav_home"}, {"event": "arrived", "source": "nav_home"}]
-            success = True
-            message = "mock home arrived"
-        else:
-            payload = self._nav_runner_payload({**state, "navigation": {"force_initialpose": False, "nav_move_source": "nav_home"}}, goal, 0, 0)
-            payload["status_topic"] = str(payload.pop("home_status_topic"))
-            result = await self._run_nav_move_runner(payload)
-            events = result.get("events", []) or []
-            success = bool(result.get("success", False))
-            message = str(result.get("message", "home navigation completed" if success else "home navigation failed"))
+        payload = self._nav_runner_payload({**state, "navigation": {"force_initialpose": False, "nav_move_source": "nav_home"}}, goal, 0, 0)
+        payload["status_topic"] = str(payload.pop("home_status_topic"))
+        result = await self._run_nav_move_runner(payload)
+        events = result.get("events", []) or []
+        success = bool(result.get("success", False))
+        message = str(result.get("message", "home navigation completed" if success else "home navigation failed"))
         nav_goal = self._nav_goal_from_pose(goal)
         nav_result = NavResult(goal=nav_goal, arrived=success, plan_ready=success, attempt=1, events=events, message=message)
         navigation = {**(state.get("navigation", {}) or {}), "nav_move_source": "nav_home", "nav_goal": dump_model(nav_goal), "result": dump_model(nav_result)}
@@ -848,19 +822,16 @@ class PickFlowMixin:
         target_instance_key = str(selected.get("instance_key") or item_info.get("target_instance_key") or "")
         rgbd: dict[str, str] = {}
         amcl_pose: dict[str, Any] | None = None
-        if self.use_mock:
-            rgbd = {"camera_name": "Camera_Car", "rgb_base64": "", "depth_base64": ""}
-        else:
-            from ..perception.room_topics import get_amcl_pose
+        from ..perception.room_topics import get_amcl_pose
 
-            rgbd, amcl_pose = await asyncio.gather(
-                get_camera_rgbd_base64("Camera_Car", timeout_sec=15.0),
-                get_amcl_pose(timeout_sec=5.0),
-            )
-            rgbd = rgbd or {}
-            if not rgbd:
-                status = "GRASP_FAILED"
-                return {"grasp_result": dump_model(GraspResult(object_id=object_id, target_instance_key=target_instance_key, success=False)), "current_status": status, "last_execution": self._execution(state, "car_grasp_node", status, started, success=False, error="missing RGBD")}
+        rgbd, amcl_pose = await asyncio.gather(
+            get_camera_rgbd_base64("Camera_Car", timeout_sec=15.0),
+            get_amcl_pose(timeout_sec=5.0),
+        )
+        rgbd = rgbd or {}
+        if not rgbd:
+            status = "GRASP_FAILED"
+            return {"grasp_result": dump_model(GraspResult(object_id=object_id, target_instance_key=target_instance_key, success=False)), "current_status": status, "last_execution": self._execution(state, "car_grasp_node", status, started, success=False, error="missing RGBD")}
         origin_x, origin_z = ros_map_origin_unity()
         params = {
             **(state.get("module_params", {}) or {}),
@@ -873,7 +844,7 @@ class PickFlowMixin:
             "amcl_pose": amcl_pose or {},
             "ros_map_origin_unity": {"x": origin_x, "z": origin_z},
         }
-        agent = GraspAgent(http_client=self.http_client, use_mock=self.use_mock)
+        agent = GraspAgent(http_client=self.http_client)
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}
@@ -902,7 +873,7 @@ class PickFlowMixin:
 
         params = dict(state.get("module_params", {}) or {})
         params.setdefault("grasp_result", state.get("grasp_result", {}) or {})
-        agent = CarApproachAgent(use_mock=self.use_mock)
+        agent = CarApproachAgent()
         result = await agent.execute(params, state.get("context_id", ""))
         success = bool(result.get("success", False))
         payload = result.get("result", {}) if isinstance(result.get("result", {}), dict) else {}

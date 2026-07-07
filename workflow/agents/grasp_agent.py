@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import uuid
@@ -22,47 +21,12 @@ class GraspAgent:
 
     AGENT_NAME = "GraspGen Agent"
 
-    def __init__(self, http_client: httpx.AsyncClient = None, use_mock: bool | None = None):
+    def __init__(self, http_client: httpx.AsyncClient = None):
         self._http_client = http_client or httpx.AsyncClient(timeout=30.0)
         self._inf_url = os.getenv("INF_GRASP_URL", "").strip()
-        self._use_mock = bool(use_mock) if use_mock is not None else (os.getenv("MOCK_MODE", "true").lower() == "true" or not self._inf_url)
 
     async def execute(self, params: Dict[str, Any], context_id: str = "") -> Dict[str, Any]:
-        if self._use_mock:
-            return await self._mock_execute(params)
         return await self._a2a_execute(params, context_id)
-
-    async def _mock_execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        await asyncio.sleep(0.8)
-        obj_id = params.get("object_id", "unknown")
-        mock_result = {
-            "object_id": obj_id,
-            "camera_name": params.get("camera_name", "Camera_Car"),
-            "target_instance_key": params.get("target_instance_key", ""),
-            "bbox_xyxy": [10.0, 10.0, 100.0, 100.0],
-            "target_selection": {"selection_mode": "mock"},
-            "detection_confidence": 0.95,
-            "grasp_confidence": 0.91,
-            "num_candidate_grasps": 1,
-            "num_valid_grasps": 1,
-            "best_grasp_pose_camera": {
-                "frame": "camera",
-                "position": [0.30, 0.10, 0.50],
-                "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
-            },
-            "valid_grasp_poses_camera": [
-                {
-                    "rank": 1,
-                    "frame": "camera",
-                    "position": [0.30, 0.10, 0.50],
-                    "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
-                    "grasp_confidence": 0.91,
-                    "grasp_distance_to_gripper_midpoint_m": 0.08,
-                    "grasp_distance_to_camera_m": 0.59,
-                }
-            ],
-        }
-        return {"result": mock_result, "success": True, "a2a_task_id": ""}
 
     async def _a2a_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
         object_id = str(params.get("object_id", "") or "").strip()

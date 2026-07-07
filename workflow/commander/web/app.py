@@ -8,6 +8,7 @@ import copy
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -43,7 +44,6 @@ _ALLOWED_PREVIEW_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
 class CreateSessionRequest(BaseModel):
-    mock: bool | None = Field(default=None)
     max_steps: int = Field(default=60, ge=1, le=500)
     log_file: str | None = Field(default=None)
 
@@ -63,7 +63,6 @@ class WebSession:
     orchestrator: Orchestrator
     store: SessionMemoryStore
     max_steps: int
-    use_mock: bool
     step: int = 0
     pending_interrupt: Dict[str, Any] | None = None
     lock: asyncio.Lock | None = None
@@ -83,14 +82,8 @@ _SHUTDOWN_SESSION_TIMEOUT_SEC = float(os.getenv("WEB_SESSION_SHUTDOWN_TIMEOUT", 
 _SHUTDOWN_STREAM_CANCEL_TIMEOUT_SEC = float(os.getenv("WEB_STREAM_CANCEL_TIMEOUT", "0.5"))
 
 
-def _resolve_mock_mode(requested: bool | None) -> bool:
-    if requested is not None:
-        return requested
-    return os.getenv("MOCK_MODE", "true").lower() == "true"
-
-
 def _trace_log_file(log_file: str | None = None) -> str:
-    return log_file or os.getenv("TRACE_LOG_FILE", "")
+    return log_file or os.getenv("TRACE_LOG_FILE", "logs/trace_logger.jsonl")
 
 
 def _thread_config(session: WebSession) -> Dict[str, Any]:
@@ -806,6 +799,16 @@ async def _stream_graph(
             session.active_stream_tasks.discard(current_task)
 
 
+def _cleanup_logs_dir() -> None:
+    """Delete the logs/ folder on web shutdown (normal exit or interrupt)."""
+    logs_dir = (_REPO_ROOT / "logs").resolve()
+    try:
+        shutil.rmtree(logs_dir, ignore_errors=True)
+        logger.info("[web_server] Removed logs directory on shutdown: %s", logs_dir)
+    except Exception as exc:
+        logger.warning("[web_server] Failed to remove logs directory %s: %s", logs_dir, exc)
+
+
 def create_app() -> Any:
     if FastAPI is None:
         raise RuntimeError(
@@ -837,9 +840,8 @@ def create_app() -> Any:
     @app.post("/api/sessions")
     async def create_session(request: CreateSessionRequest) -> Dict[str, Any]:
         session_id = uuid.uuid4().hex
-        use_mock = _resolve_mock_mode(request.mock)
         trace_logger = TraceLogger(log_file=_trace_log_file(request.log_file))
-        orchestrator = await Orchestrator.create(trace_logger=trace_logger, use_mock=use_mock)
+        orchestrator = await Orchestrator.create(trace_logger=trace_logger)
         initial_state = create_initial_state(session_id)
         initial_state.update(
             {
@@ -854,14 +856,12 @@ def create_app() -> Any:
             orchestrator=orchestrator,
             store=store,
             max_steps=request.max_steps,
-            use_mock=use_mock,
         )
         greeting = _record_session_greeting(session, initial_state)
         ACTIVE_SESSIONS[session_id] = session
         return {
             "session_id": session_id,
             "greeting": greeting,
-            "mock": use_mock,
             "logs_path": _node_logs_path(session),
             "objects": load_graspable_objects(),
         }
@@ -985,6 +985,8 @@ def create_app() -> Any:
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)
         ACTIVE_SESSIONS.clear()
+        if os.getenv("WEB_KEEP_LOGS", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+            _cleanup_logs_dir()
 
     return app
 

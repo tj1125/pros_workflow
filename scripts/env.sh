@@ -5,7 +5,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 run() {
     cd "$PROS_WORKFLOW_DIR" || return 1
-    "$PROS_WORKFLOW_PYTHON" main.py --no-mock "$@"
+    "$PROS_WORKFLOW_PYTHON" main.py "$@"
 }
 
 web() {

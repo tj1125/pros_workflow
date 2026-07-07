@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import uuid
@@ -20,39 +19,12 @@ logger = logging.getLogger(__name__)
 class GetItemInfoNoSam3DAgent:
     AGENT_NAME = "GetItemInfoNoSam3D Agent"
 
-    def __init__(self, http_client: httpx.AsyncClient = None, use_mock: bool | None = None):
+    def __init__(self, http_client: httpx.AsyncClient = None):
         self._http_client = http_client or httpx.AsyncClient(timeout=120.0)
         self._inf_url = os.getenv("INF_GET_ITEM_INFO_NO_SAM3D_URL", "").strip()
-        self._use_mock = bool(use_mock) if use_mock is not None else (os.getenv("MOCK_MODE", "true").lower() == "true" or not self._inf_url)
 
     async def execute(self, params: Dict[str, Any], context_id: str = "") -> Dict[str, Any]:
-        if self._use_mock:
-            return await self._mock_execute(params)
         return await self._a2a_execute(params, context_id)
-
-    async def _mock_execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        await asyncio.sleep(0.2)
-        result = {
-            "center_world": params.get("center_world", [1.0, 0.0, 0.5]),
-            "center_world_coordinate_frame": "unity_world",
-            "group_ranking": [
-                {
-                    "rank": 1,
-                    "orientation_group": "mock_front",
-                    "best_goal_pose_ros_map": [1.0, 0.0],
-                    "best_confidence": 0.8,
-                    "map_feasible": True,
-                    "selection_mode": "mock",
-                }
-            ],
-            "goal_pose_path": "/tmp/mock_goal_pose.json",
-            "primary_camera_id": params.get("selected_camera", ""),
-            "target_instance_key": params.get("target_instance_key", ""),
-            "target_topic_key": params.get("target_topic_key", ""),
-            "objects": [],
-            "num_matched_objects": 1,
-        }
-        return {"result": result, "success": True, "a2a_task_id": ""}
 
     async def _a2a_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
         camera_images = params.get("camera_images", {}) or {}

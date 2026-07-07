@@ -33,42 +33,25 @@ class BrainDecision(BaseModel):
 class Brain:
     """VLM reasoning hub over the narrow LangGraph state schema."""
 
-    def __init__(self, use_mock: bool = False):
-        self.use_mock = use_mock
+    def __init__(self):
         self._raw_model = None
         self._model = None
-        if not use_mock:
-            self._init_model()
+        self._init_model()
 
     def _init_model(self) -> None:
-        provider = os.getenv("VLM_PROVIDER", "google").lower()
-        if provider == "google":
-            from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_openai import ChatOpenAI
 
-            model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-            self._raw_model = ChatGoogleGenerativeAI(
-                model=model_name,
-                google_api_key=os.getenv("GOOGLE_API_KEY"),
-            )
-            method = os.getenv("GOOGLE_STRUCTURED_METHOD", "json_schema")
-            self._model = self._with_structured_output(method)
-            logger.info("[Brain] Using Google Gemini: %s structured_method=%s", model_name, method)
-        elif provider == "ollama":
-            from langchain_openai import ChatOpenAI
-
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            model_name = os.getenv("OLLAMA_MODEL", "gemma3:12b")
-            self._raw_model = ChatOpenAI(
-                model=model_name,
-                openai_api_key="ollama",
-                openai_api_base=f"{base_url}/v1",
-                temperature=0,
-            )
-            method = os.getenv("OLLAMA_STRUCTURED_METHOD", "json_schema")
-            self._model = self._with_structured_output(method)
-            logger.info("[Brain] Using Ollama: %s @ %s structured_method=%s", model_name, base_url, method)
-        else:
-            raise ValueError(f"[Brain] Unknown VLM_PROVIDER: {provider}")
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        model_name = os.getenv("OLLAMA_MODEL", "gemma3:12b")
+        self._raw_model = ChatOpenAI(
+            model=model_name,
+            openai_api_key="ollama",
+            openai_api_base=f"{base_url}/v1",
+            temperature=0,
+        )
+        method = os.getenv("OLLAMA_STRUCTURED_METHOD", "json_schema")
+        self._model = self._with_structured_output(method)
+        logger.info("[Brain] Using Ollama: %s @ %s structured_method=%s", model_name, base_url, method)
 
     def _with_structured_output(self, method: str) -> Any:
         if self._raw_model is None:
@@ -219,23 +202,13 @@ class Brain:
 
     async def reason(self, state: CommanderState, artifact_store: Any | None = None, image_loader: Any | None = None) -> Dict[str, Any]:
         start = time.time()
-        if self.use_mock:
-            decision = await self._mock_reason(state)
-        else:
-            decision = await self._llm_reason(state, artifact_store=artifact_store, image_loader=image_loader)
+        decision = await self._llm_reason(state, artifact_store=artifact_store, image_loader=image_loader)
         latency = time.time() - start
         logger.info("[Brain] Decision: call_module=%s, latency=%.2fs", decision.call_module, latency)
         return {"prediction": decision, "latency": latency, "model": self._model_name()}
 
     def _model_name(self) -> str:
-        if self.use_mock:
-            return "mock"
-        provider = os.getenv("VLM_PROVIDER", "google").lower()
-        if provider == "ollama":
-            return os.getenv("OLLAMA_MODEL", "gemma3:12b")
-        if provider == "google":
-            return os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        return "configured-vlm"
+        return os.getenv("OLLAMA_MODEL", "gemma3:12b")
 
     async def _llm_reason(self, state: CommanderState, artifact_store: Any | None = None, image_loader: Any | None = None) -> BrainDecision:
         messages = [
@@ -315,7 +288,7 @@ class Brain:
 
         raise ValueError(
             "VLM provider returned free-form message content instead of BrainDecision JSON. "
-            "Check OLLAMA_STRUCTURED_METHOD/GOOGLE_STRUCTURED_METHOD and model support."
+            "Check OLLAMA_STRUCTURED_METHOD and model support."
         )
 
     @staticmethod
@@ -341,20 +314,3 @@ class Brain:
             or "Failed to parse" in message
             or "structured output" in message.lower()
         )
-
-
-    async def _mock_reason(self, state: CommanderState) -> BrainDecision:
-        await asyncio.sleep(0.5)
-        approach = state.get("approach_result", {}) or {}
-        arm_result = approach.get("arm_result", {}) if isinstance(approach.get("arm_result", {}), dict) else {}
-        if approach.get("success") and arm_result.get("success", True):
-            return BrainDecision(reasoning="Approach and arm execution succeeded; task success criteria are satisfied.", call_module="DONE", module_params={})
-
-        count = int(state.get("retry_count", 0) or 0)
-        requested = state.get("requested_object", {}) or {}
-        object_id = requested.get("id") or requested.get("label") or "target_object"
-        if count == 0:
-            return BrainDecision(reasoning="Bootstrap navigation is complete. Generate a grasp pose for the requested object.", call_module="grasp_agent", module_params={"object_id": object_id})
-        if count == 1:
-            return BrainDecision(reasoning="The previous action did not mark the task done. Try one alternate navigation viewpoint.", call_module="nav_agent", module_params={})
-        return BrainDecision(reasoning="No further action is useful after the bounded retry loop.", call_module="DONE", module_params={})

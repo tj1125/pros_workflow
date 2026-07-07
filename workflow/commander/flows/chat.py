@@ -35,7 +35,7 @@ class ChatReply(BaseModel):
 class RelatedObjectSelection(BaseModel):
     related_object_indices: list[int] = Field(
         default_factory=list,
-        description="1-based object indices from the provided config that should be considered for the request.",
+        description="1-based indices of the objects whose label matches the request, closest match first; empty if none match.",
     )
     reasoning: str = ""
 
@@ -69,10 +69,10 @@ class ChatFlowMixin:
         human_reply = str(state.get("human_reply", "") or "").strip()
         objects = load_graspable_objects()
         try:
-            classification = self._mock_task_classification(human_reply, objects) if self.use_mock else await self._llm_task_classification(human_reply)
+            classification = await self._llm_task_classification(human_reply)
         except Exception as exc:
             logger.error("[task_classification_node] classifier failed: %s", exc, exc_info=True)
-            classification = self._mock_task_classification(human_reply, objects)
+            classification = self._heuristic_task_classification(human_reply, objects)
         status = "TASK_CLASSIFIED"
         return {
             "task_intent": classification.intent,
@@ -87,7 +87,7 @@ class ChatFlowMixin:
         human_reply = str(state.get("human_reply", "") or "").strip()
         try:
             history = self._chat_history_from_history_buffer(state.get("history_buffer", []))
-            reply = self._mock_ai_reply(human_reply) if self.use_mock else await self._llm_ai_reply(human_reply, history)
+            reply = await self._llm_ai_reply(human_reply, history)
         except Exception as exc:
             logger.error("[ai_reply_node] chat failed: %s", exc, exc_info=True)
             reply = f"我有收到：「{human_reply}」。如果需要抓取物件，也可以直接告訴我要抓什麼。"
@@ -175,7 +175,7 @@ class ChatFlowMixin:
             return []
         return [entry for entry in history_buffer if isinstance(entry, dict) and entry.get("type") == "chat_turn"]
 
-    def _mock_task_classification(self, text: str, objects: list[dict[str, Any]]) -> TaskClassification:
+    def _heuristic_task_classification(self, text: str, objects: list[dict[str, Any]]) -> TaskClassification:
         idx = self._infer_object_index(text, objects)
         has_task_intent = self._has_pick_task_intent(text)
         if not str(text or "").strip():
@@ -187,8 +187,6 @@ class ChatFlowMixin:
         return TaskClassification(intent="general_chat", reasoning="No robot picking intent or task-like object phrase.")
 
     async def _llm_task_classification(self, text: str) -> TaskClassification:
-        if self._classifier_model is None:
-            return self._mock_task_classification(text, load_graspable_objects())
         system = (
             "Route a robot commander conversation. Return intent=specific_task only when the human asks the robot "
             "to pick/grab/get/fetch/take/hold something, or gives a direct object phrase as a task reply. "
@@ -199,13 +197,7 @@ class ChatFlowMixin:
         result = await asyncio.get_event_loop().run_in_executor(None, self._classifier_model.invoke, messages)
         return result if isinstance(result, TaskClassification) else TaskClassification.model_validate(result)
 
-    @staticmethod
-    def _mock_ai_reply(text: str) -> str:
-        return "可以，我在。你可以直接說要抓哪個物件。" if text else "我在，請告訴我要抓什麼。"
-
     async def _llm_ai_reply(self, text: str, history: list[dict[str, Any]]) -> str:
-        if self._chat_model is None:
-            return self._mock_ai_reply(text)
         messages: list[Any] = [SystemMessage(content="Reply briefly in Traditional Chinese. Use recent chat history only as context.")]
         for turn in history[-12:]:
             human = str(turn.get("human", "") or "").strip()

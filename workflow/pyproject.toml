@@ -10,7 +10,6 @@ dependencies = [
     # LangGraph + LangChain
     "langgraph>=0.3.18",
     "langchain-core>=0.3.0",
-    "langchain-google-genai>=2.0.10",
     "langchain-openai>=0.1.0",
     # HTTP client (for A2A Client calls to RTX 3090)
     "httpx>=0.28.1",

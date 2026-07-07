@@ -58,14 +58,16 @@ Do not wrap the JSON in markdown fences. Do not use "decision".
 # ---------------------------------------------------------------------------
 
 RELATED_OBJECT_SELECTION_SYSTEM_PROMPT = (
-    "Select all related graspable objects from the provided labels only. "
-    "Return 1-based indices ordered by label relevance. Do not invent categories."
+    "Match the user's request to the numbered object list. "
+    "Return the 1-based index of every object whose label names what the user asked for; "
+    "a keyword matches any label containing that word. "
+    "List the closest match first. Use only the listed objects; return an empty list if none match."
 )
 
-RELATED_OBJECT_SELECTION_HUMAN_TEMPLATE = """Objects from config:
+RELATED_OBJECT_SELECTION_HUMAN_TEMPLATE = """Objects:
 {listing}
 
-Human request: {task_text}
+Request: {task_text}
 
-Return related_object_indices ordered by relevance."""
+Return related_object_indices (1-based, closest match first)."""
 

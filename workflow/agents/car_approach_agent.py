@@ -24,67 +24,13 @@ class CarApproachAgent:
 
     AGENT_NAME = "Car Approach Agent"
 
-    def __init__(self, use_mock: bool | None = None):
-        self._use_mock = bool(use_mock) if use_mock is not None else os.getenv("MOCK_MODE", "true").lower() == "true"
-
     async def execute(
         self,
         params: Dict[str, Any],
         context_id: str = "",
     ) -> Dict[str, Any]:
         params = dict(params or {})
-        use_mock = _bool_param(params, "mock", self._use_mock)
-        if use_mock:
-            return await self._mock_execute(params)
-
         return await self._subprocess_execute(params, context_id)
-
-    async def _mock_execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        await asyncio.sleep(0.2)
-        logger.info("[%s] Mock: base approach and arm finish completed.", self.AGENT_NAME)
-        return {
-            "result": {
-                "success": True,
-                "status_code": "APPROACH_SUCCESS",
-                "phase": "mock",
-                "message": "Mock base approach completed; arm/gripper finish sequence completed.",
-                "next_agent": None,
-                "nav_result": {
-                    "success": True,
-                    "skipped": True,
-                    "phase": "mock",
-                },
-                "arm_result": {
-                    "success": True,
-                    "skipped": False,
-                    "phase": "mock",
-                    "preopened_gripper_target_deg": 70.0,
-                    "gripper_close_deg": 10.0,
-                    "target_grasp_wrist_yaw_applied": True,
-                    "pre_close_ee_offset_enabled": True,
-                    "pre_close_ee_offset_sequence": ["down", "forward"],
-                    "pre_close_ee_forward_distance_m": 0.10,
-                    "pre_close_ee_down_distance_m": 0.10,
-                },
-                "arm_base_alignment_result": {
-                    "success": True,
-                    "skipped": False,
-                    "phase": "planned",
-                    "joint_index": 0,
-                    "command_joint_position_rad": 1.5707963267948966,
-                    "command_joint_position_deg": 90.0,
-                    "source": "mock_car_approach_arm_base_alignment",
-                },
-                "arm_approach_start_base_joint_index": 0,
-                "arm_approach_start_base_joint_rad": 1.5707963267948966,
-                "arm_approach_start_base_joint_deg": 90.0,
-                "arm_approach_start_base_joint_source": "mock_car_approach_arm_base_alignment",
-                "arm_finish_requested": True,
-                "arm_finish_required": True,
-                "arm_motion_skipped": False,
-            },
-            "success": True,
-        }
 
     async def _subprocess_execute(self, params: Dict[str, Any], context_id: str) -> Dict[str, Any]:
         timeout_sec = float(os.getenv("APPROACH_AGENT_TIMEOUT_SEC", "420"))
@@ -127,15 +73,6 @@ class CarApproachAgent:
         if stderr_text:
             logger.info("[%s] subprocess log:\n%s", self.AGENT_NAME, stderr_text[-4000:])
         return payload
-
-
-def _bool_param(params: Dict[str, Any], name: str, default: bool) -> bool:
-    raw_value = params.get(name)
-    if raw_value is None:
-        return bool(default)
-    if isinstance(raw_value, bool):
-        return raw_value
-    return str(raw_value).strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def _repo_root() -> Path:

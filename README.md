@@ -1,6 +1,6 @@
 # pros_workflow
 
-An active-perception grasping system deployed in a Unity/ROS2 environment. A local Commander maintains task state with LangGraph and makes high-level decisions with a VLM (Google Gemini or a local Ollama model, selected by `VLM_PROVIDER`). It drives the local ROS2 navigation/control stack and the A2A inference services on an RTX 3090 to complete: find object → navigate → grasp-pose generation → base approach and arm/gripper finish.
+An active-perception grasping system deployed in a Unity/ROS2 environment. A local Commander maintains task state with LangGraph and makes high-level decisions with a local Ollama VLM. It drives the local ROS2 navigation/control stack and the A2A inference services on an RTX 3090 to complete: find object → navigate → grasp-pose generation → base approach and arm/gripper finish.
 
 ![System architecture](docs/system_architecture.png)
 
@@ -29,51 +29,32 @@ The Commander loads `.env` from the project root at startup. Required and common
 # ROS
 ROS_DOMAIN_ID=1
 
-# VLM provider: google | ollama
-VLM_PROVIDER=ollama
-
-# Google Gemini (required when VLM_PROVIDER=google)
-GOOGLE_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.0-flash
-GOOGLE_STRUCTURED_METHOD=json_schema
-
-# Ollama (required when VLM_PROVIDER=ollama)
+# Ollama (VLM brain)
 OLLAMA_BASE_URL=http://<ollama-host>:11434
 OLLAMA_MODEL=gemma3:12b
-OLLAMA_STRUCTURED_METHOD=json_schema
-OLLAMA_CLASSIFIER_MODEL=qwen2.5-coder:3b
+OLLAMA_CLASSIFIER_MODEL=gemma3:1b
 OLLAMA_CHAT_MODEL=gemma3:12b
 
-# System mode: true = mock (no VLM / GPU calls)
-MOCK_MODE=false
-
 # RTX 3090 A2A inference services (IP:Port of the GPU servers)
-INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006   # required (item-info)
-INF_GRASP_URL=http://<gpu-host>:8007                     # required (grasp)
-INF_GET_ITEM_INFO_URL=                                   # leave empty; legacy SAM3D :8008 only
-
-# Rosbridge (Unity digital twin)
-ROSBRIDGE_URL=ws://localhost:9090
-
-# Logging
-TRACE_LOG_FILE=logs/trace_logger.jsonl
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
+INF_GRASP_URL=http://<gpu-host>:8007
 ```
 
-Only `INF_GET_ITEM_INFO_NO_SAM3D_URL` and `INF_GRASP_URL` are read on the active runtime path; the other `INF_*` keys are legacy/unused. Set `GOOGLE_API_KEY` (google) or `OLLAMA_BASE_URL` (ollama) according to `VLM_PROVIDER`.
+Set `OLLAMA_BASE_URL` to point at your Ollama server and the two `INF_*` URLs at your RTX 3090 services.
 
 ## Quick start (local Commander)
 
 Build the image:
 
 ```bash
-cd /home/scream/TJ/pros_workflow
+cd pros_workflow
 docker build -t pros_workflow_image:latest -f docker/Dockerfile .
 ```
 
 Terminal 1 — start the ROS runtime:
 
 ```bash
-cd /home/scream/TJ/pros_workflow
+cd pros_workflow
 ./run.sh            # enter the pros_workflow container
 r                   # build the ROS workspace (PROS image alias for rebuild_colcon.rc)
 scripts/start.sh    # launch Nav2 / car / arm / rosbridge
@@ -83,11 +64,13 @@ scripts/start.sh    # launch Nav2 / car / arm / rosbridge
 Terminal 2 — start the web workflow:
 
 ```bash
-cd /home/scream/TJ/pros_workflow
+cd pros_workflow
 ./run.sh
 web 8080            # start workflow/web_main.py
 # then open http://localhost:8080.
 ```
+
+By default the `logs/` folder (trace log + session data) is deleted when the web server stops or is interrupted. Add `--keep-logs` (`web 8080 --keep-logs`) to keep it.
 
 `./run.sh` only enters Docker (it does not build the image); it publishes `8080:8080` (web) and `9090:9090` (rosbridge), mounts the repo at `/workspace/pros_workflow`, and uses the venv at `/opt/pros_workflow_venv`. Rebuild the image after changing the Dockerfile or `workflow/pyproject.toml`; run `r` after changing ROS code.
 

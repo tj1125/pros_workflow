@@ -9,7 +9,7 @@ graph TD
   subgraph Commander["本機 Commander / Docker"]
     Main[main.py / web_main.py]
     Graph[LangGraph Orchestrator]
-    Brain[Brain: Gemini or Ollama]
+    Brain[Brain: Ollama]
     State[CommanderState]
     Trace[TraceLogger + SessionMemoryStore]
     NavRunner[nav/move_runner.py]
@@ -80,7 +80,7 @@ graph TD
 }
 ```
 
-`call_module` 允許值為 `nav_agent`、`major_nav_node`、`grasp_agent`、`car_approach_agent`、`DONE`。`nav_agent` 是 backward-compatible alias（mock 路徑會輸出），但 prompt 要求優先輸出 `major_nav_node`。`_route_decision` 會把決策對應到 `major_nav_node` / `car_grasp_node` / `end`。
+`call_module` 允許值為 `nav_agent`、`major_nav_node`、`grasp_agent`、`car_approach_agent`、`DONE`。`nav_agent` 是 backward-compatible alias，但 prompt 要求優先輸出 `major_nav_node`。`_route_decision` 會把決策對應到 `major_nav_node` / `car_grasp_node` / `end`。
 
 ## 4. 主序列
 
