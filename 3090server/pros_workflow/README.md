@@ -41,9 +41,9 @@ pip install --no-build-isolation -e tool/graspgen_runtime/pointnet2_ops
 
 Drop the checkpoints (YOLO / SAM / DepthAnything / SAM3D / GraspGen) into `models/` — only `.gitkeep` is committed. See [Model weights — download sources & paths](#model-weights--download-sources--paths) for every download link and its exact relative path; the same paths are set in each service's `configs/*.yaml`.
 
-**4. Set the GPU host in `.env`**
+**4. Set the GPU host in the project-root `.env`**
 
-Create `3090server/pros_workflow/.env` (auto-loaded at startup — see [Server `.env`](#server-env)) and set this machine's address, which goes into the A2A AgentCard `url` the Commander connects to:
+The servers auto-load the unified `pros_workflow/.env` (the same project-root file the Commander uses — see [Server `.env`](#server-env)). On the GPU host, set `EXTERNAL_IP` to this machine's address; it goes into the A2A AgentCard `url` the Commander connects to:
 
 ```env
 EXTERNAL_IP=<gpu-host>
@@ -77,7 +77,6 @@ INF_GRASP_URL=http://<gpu-host>:8007
 
 ```text
 3090server/pros_workflow/
-├── .env                              # GPU host + derived service URLs (auto-loaded)
 ├── requirements.txt                  # shared deps for all three services
 ├── a2a_utils/                        # A2A success/error response helpers
 ├── models/                           # shared model-weights dir (only .gitkeep; add weights at deploy time)
@@ -163,7 +162,7 @@ Notes:
 
 ## Server `.env`
 
-Each service auto-loads `3090server/pros_workflow/.env` at startup via `tool/runtime/env.py`, so the GPU host is defined once instead of prefixing every launch command. Values already set in the real environment win, so a `EXTERNAL_IP=... python -m ...` prefix still overrides the file (useful for a one-off host). `${VAR}` references inside the file are expanded.
+Each service auto-loads the unified **project-root `pros_workflow/.env`** at startup via `tool/runtime/env.py` — the same file the Commander uses, so the GPU host is defined once instead of prefixing every launch command. The loader walks up from this folder to the repo root to find it (a standalone copy of `3090server/pros_workflow/` can instead drop its own `.env` here). Values already set in the real environment win, so a `EXTERNAL_IP=... python -m ...` prefix still overrides the file (useful for a one-off host). `${VAR}` references inside the file are expanded.
 
 ```env
 EXTERNAL_IP=140.116.82.226
@@ -171,7 +170,7 @@ INF_GET_ITEM_INFO_NO_SAM3D_URL=http://${EXTERNAL_IP}:8006
 INF_GRASP_URL=http://${EXTERNAL_IP}:8007
 ```
 
-Only `EXTERNAL_IP` is consumed by the servers (for the AgentCard `url`); the two `INF_*` URLs are kept here so the host is written once and mirror what the Commander's project-root `.env` needs.
+Only `EXTERNAL_IP` is consumed by the servers (for the AgentCard `url`); the two `INF_*` URLs are consumed by the Commander. Keeping all three in one `.env` means the GPU host is written once.
 
 ## Environment variables
 

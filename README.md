@@ -36,11 +36,12 @@ OLLAMA_CLASSIFIER_MODEL=gemma3:1b
 OLLAMA_CHAT_MODEL=gemma3:12b
 
 # RTX 3090 A2A inference services (IP:Port of the GPU servers)
-INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
-INF_GRASP_URL=http://<gpu-host>:8007
+EXTERNAL_IP=<gpu-host>
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://${EXTERNAL_IP}:8006
+INF_GRASP_URL=http://${EXTERNAL_IP}:8007
 ```
 
-Set `OLLAMA_BASE_URL` to point at your Ollama server and the two `INF_*` URLs at your RTX 3090 services.
+Set `OLLAMA_BASE_URL` to point at your Ollama server and `EXTERNAL_IP` to your RTX 3090 host; the two `INF_*` URLs derive from it. This same `.env` is auto-loaded by the 3090 servers (they read `EXTERNAL_IP` for their AgentCard `url`), so the GPU host is defined in one place.
 
 ## Quick start (local Commander)
 
@@ -81,7 +82,7 @@ The perception/grasp inference runs on a separate RTX 3090 machine as A2A server
 1. Copy the `3090server/pros_workflow/` folder to the GPU host.
 2. Create one conda env and install the shared `requirements.txt` (per-service instructions in the [3090server README](3090server/pros_workflow/README.md)).
 3. Drop the model weights (YOLO / SAM / DepthAnything / SAM3D / GraspGen checkpoints) into `3090server/pros_workflow/models/` — only `.gitkeep` is committed.
-4. Set the GPU host in `3090server/pros_workflow/.env` (auto-loaded by the servers; written into the A2A AgentCard `url`):
+4. Set the GPU host in the project-root `pros_workflow/.env` (auto-loaded by the servers; written into the A2A AgentCard `url`):
 
    ```env
    EXTERNAL_IP=<gpu-host>
