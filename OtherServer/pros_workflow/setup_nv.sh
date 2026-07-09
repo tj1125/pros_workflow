@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup_nv.sh — one command to build the NVIDIA CUDA conda env for the perception +
-# grasp services (RTX 3090 / CUDA 12.1). The CUDA counterpart of setup_rocm.sh.
+# grasp services (NVIDIA CUDA 12.1). The CUDA counterpart of setup_rocm.sh.
 #
 # Usage (from this folder):
 #   bash setup_nv.sh

@@ -1,1 +1,1 @@
-"""Common tools shared by multiple 3090 A2A agents."""
+"""Common tools shared by multiple GPU A2A agents."""

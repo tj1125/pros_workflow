@@ -27,7 +27,7 @@ pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/
 
 ## Running
 
-Under `3090server/pros_workflow`:
+Under `OtherServer/pros_workflow`:
 
 ```bash
 conda activate get_item_info_agent

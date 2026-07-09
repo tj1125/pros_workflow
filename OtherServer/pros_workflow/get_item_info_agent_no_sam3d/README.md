@@ -1,6 +1,6 @@
 # Get Item Info Agent No SAM3D
 
-`get_item_info_agent_no_sam3d` is the RTX 3090 A2A item-info server used by the current main flow. It does not run SAM3D mesh reconstruction; instead it uses multi-view RGB, bounding boxes, `/world_position_data`, and geometry fusion to estimate target info and produce ranked goal poses.
+`get_item_info_agent_no_sam3d` is a GPU A2A item-info server used by the current main flow. It does not run SAM3D mesh reconstruction; instead it uses multi-view RGB, bounding boxes, `/world_position_data`, and geometry fusion to estimate target info and produce ranked goal poses.
 
 ## Pipeline
 
@@ -27,7 +27,7 @@ Core modules:
 - Port: 8006
 - Requires CUDA and the SAM/GraspGen model weights.
 
-Install under `3090server/pros_workflow`:
+Install under `OtherServer/pros_workflow`:
 
 ```bash
 conda create -n get_item_info_no_sam3d python=3.11 -y
@@ -41,7 +41,7 @@ This service currently shares `get_item_info_agent`'s GraspGen runtime and part 
 ## Running
 
 ```bash
-cd /path/to/pros_workflow/3090server/pros_workflow
+cd /path/to/pros_workflow/OtherServer/pros_workflow
 conda activate get_item_info_no_sam3d
 EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d
 ```

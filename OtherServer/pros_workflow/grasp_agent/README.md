@@ -1,6 +1,6 @@
 # Grasp Agent Server
 
-`grasp_agent` is an A2A Agent Server that receives `Camera_Car` RGBD and an `object_id` and runs, on the 3090:
+`grasp_agent` is an A2A Agent Server that receives `Camera_Car` RGBD and an `object_id` and runs, on the GPU server:
 
 `RGBD -> YOLOv26 (yolov26_best.pt) -> SAM -> target point cloud -> GraspGen -> valid grasps -> return all feasible grasp poses (keeping the best grasp)`
 
@@ -38,7 +38,7 @@ The server returns JSON; the key fields include:
 
 ## Tool
 
-Helpers shared across services live in `3090server/pros_workflow/tool/`:
+Helpers shared across services live in `OtherServer/pros_workflow/tool/`:
 
 - `tool/vision/yolo.py`: YOLO helper shared by get_item_info / grasp.
 - `tool/vision/sam.py`: SAM helper shared by get_item_info / grasp.
@@ -62,7 +62,7 @@ Overridable via env vars:
 
 ## Running
 
-Under `3090server/pros_workflow`:
+Under `OtherServer/pros_workflow`:
 
 ```bash
 python -m grasp_agent

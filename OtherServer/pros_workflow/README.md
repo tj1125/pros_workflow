@@ -1,6 +1,6 @@
-# 3090 Server — pros_workflow A2A Services
+# GPU Inference Server — pros_workflow A2A Services
 
-This folder holds the A2A Agent Servers that run on the RTX 3090. The Commander runs LangGraph, VLM decisions, and ROS2 control on the local machine; the 3090 only handles GPU/deep-learning perception and grasp inference. This document explains how to bring those services up on the 3090.
+This folder holds the A2A Agent Servers that run on a GPU machine (NVIDIA CUDA or AMD ROCm). The Commander runs LangGraph, VLM decisions, and ROS2 control on the local machine; the GPU server only handles GPU/deep-learning perception and grasp inference. This document explains how to bring those services up.
 
 ## Services
 
@@ -17,7 +17,7 @@ installs PyTorch + all deps, builds the GraspGen kernel, and verifies the GPU:
 
 | GPU | Setup (one command) | Env | Deps file |
 |---|---|---|---|
-| **NVIDIA** — RTX 3090, CUDA 12.1 | `bash setup_nv.sh` | `pros_workflow` | [`requirements-nv.txt`](./requirements-nv.txt) |
+| **NVIDIA** — CUDA 12.1 | `bash setup_nv.sh` | `pros_workflow` | [`requirements-nv.txt`](./requirements-nv.txt) |
 | **AMD** — Radeon iGPU, ROCm (gfx1151 / gfx1150) | `bash setup_rocm.sh` | `pros_workflow` | [`requirements-rocm.txt`](./requirements-rocm.txt) |
 
 After setup, the launch step and the Commander `.env` are the same for both — see
@@ -126,7 +126,7 @@ python -m get_item_info_agent            # :8008
 ## Directory layout
 
 ```text
-3090server/pros_workflow/
+OtherServer/pros_workflow/
 ├── a2a_utils/                        # A2A success/error response helpers
 ├── models/                           # shared model-weights dir (only .gitkeep; add weights at deploy time)
 ├── tool/                             # shared inference code (see below)
@@ -153,17 +153,21 @@ legacy `get_item_info_agent/` directory. Shared model weights all live under `mo
 
 ## Commander `.env` mapping
 
-The local Commander calls the 3090 services through these URLs (actual values live in the project-root `.env`):
+The local Commander calls the GPU services through these URLs (actual values live in the
+project-root `.env`). `EXTERNAL_IP` (what the servers advertise) and the `INF_*` hosts
+(where the Commander connects) are the same GPU-server address, so set the IP once in
+`EXTERNAL_IP` and let the `INF_*` URLs derive from it:
 
 ```env
-INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
-INF_GRASP_URL=http://<gpu-host>:8007
+EXTERNAL_IP=<gpu-host>
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://${EXTERNAL_IP}:8006
+INF_GRASP_URL=http://${EXTERNAL_IP}:8007
 INF_GET_ITEM_INFO_URL=                                   # empty = legacy :8008 disabled
 ```
 
 ## Model weights — download sources & paths
 
-`models/` keeps only `.gitkeep` in git; the real weights are added at deploy time. All paths below are **relative to this folder** (`3090server/pros_workflow/`) and match the values in each service's `configs/*.yaml`.
+`models/` keeps only `.gitkeep` in git; the real weights are added at deploy time. All paths below are **relative to this folder** (`OtherServer/pros_workflow/`) and match the values in each service's `configs/*.yaml`.
 
 | Model | Used by | Relative path | Direct download |
 |---|---|---|---|
@@ -178,7 +182,7 @@ INF_GET_ITEM_INFO_URL=                                   # empty = legacy :8008 
 ### Download commands
 
 ```bash
-# run from this folder: 3090server/pros_workflow/
+# run from this folder: OtherServer/pros_workflow/
 
 # --- Public direct downloads ---
 # SAM ViT-B

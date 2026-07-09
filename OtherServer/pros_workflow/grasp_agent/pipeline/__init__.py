@@ -1,1 +1,1 @@
-"""Pipeline helpers for the 3090 grasp agent."""
+"""Pipeline helpers for the GPU grasp agent."""
