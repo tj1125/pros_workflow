@@ -23,15 +23,15 @@ Core modules:
 
 ## Environment
 
-- Suggested conda env: `get_item_info_no_sam3d`
+- Suggested conda env: `pros_workflow`
 - Port: 8006
 - Requires CUDA and the SAM/GraspGen model weights.
 
 Install under `OtherServer/pros_workflow`:
 
 ```bash
-conda create -n get_item_info_no_sam3d python=3.11 -y
-conda activate get_item_info_no_sam3d
+conda create -n pros_workflow python=3.11 -y
+conda activate pros_workflow
 pip install -r get_item_info_agent/requirements.txt
 pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
 ```
@@ -42,7 +42,7 @@ This service currently shares `get_item_info_agent`'s GraspGen runtime and part 
 
 ```bash
 cd /path/to/pros_workflow/OtherServer/pros_workflow
-conda activate get_item_info_no_sam3d
+conda activate pros_workflow
 EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d
 ```
 

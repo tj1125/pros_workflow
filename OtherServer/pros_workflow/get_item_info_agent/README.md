@@ -11,13 +11,13 @@ This service provides the full 3D pipeline for cases that need SAM3D mesh recons
 
 ## Environment
 
-- Suggested conda env: `get_item_info_agent`
+- Suggested conda env: `pros_workflow`
 - Main deps: `torch`, `segment_anything`, `ultralytics`, `pytorch3d`, `GraspGen`
 - Port: 8008
 
 ```bash
-conda create -n get_item_info_agent python=3.11 -y
-conda activate get_item_info_agent
+conda create -n pros_workflow python=3.11 -y
+conda activate pros_workflow
 
 pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
@@ -30,7 +30,7 @@ pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/
 Under `OtherServer/pros_workflow`:
 
 ```bash
-conda activate get_item_info_agent
+conda activate pros_workflow
 EXTERNAL_IP=<gpu-host> python -m get_item_info_agent
 ```
 
