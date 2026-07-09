@@ -23,7 +23,10 @@ The Commander is a LangGraph state machine (entry `greeting_node`). The main gra
 
 ## Environment file (`.env`)
 
-The Commander loads `.env` from the project root at startup. Required and common keys:
+Copy the template and fill in your hosts — `cp .env.example .env`. See
+[`.env.example`](.env.example) for every variable with inline notes. The Commander loads
+`.env` from the project root at startup (and the GPU services read the same file). Key
+entries:
 
 ```env
 # ROS
