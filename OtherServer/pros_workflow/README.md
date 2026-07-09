@@ -23,9 +23,9 @@ installs PyTorch + all deps, builds the GraspGen kernel, and verifies the GPU:
 After setup, the launch step and the Commander `.env` are the same for both — see
 [Launch](#launch) and [Commander `.env` mapping](#commander-env-mapping) below.
 
-## Quick start (NVIDIA CUDA — RTX 3090)
+## Quick start (NVIDIA CUDA)
 
-Prerequisites: an RTX 3090 with the CUDA 12.1 toolkit (`nvcc` on PATH, needed to build
+Prerequisites: an NVIDIA GPU with the CUDA 12.1 toolkit (`nvcc` on PATH, needed to build
 the kernel) and `conda`/Miniconda.
 
 **1. One command to build the env**
@@ -129,8 +129,9 @@ python -m get_item_info_agent            # :8008
 3090server/pros_workflow/
 ├── a2a_utils/                        # A2A success/error response helpers
 ├── models/                           # shared model-weights dir (only .gitkeep; add weights at deploy time)
-├── tool/                             # shared inference helpers (see below)
-│   ├── grasp/graspgen.py             # GraspGen runtime + point-cloud/collision filtering
+├── tool/                             # shared inference code (see below)
+│   ├── grasp/graspgen.py             # GraspGen bridge (point-cloud/collision filtering)
+│   ├── graspgen_runtime/             # vendored GraspGen runtime + pointnet2_ops kernel (shared)
 │   ├── vision/yolo.py                # YOLO detection helper
 │   ├── vision/sam.py                 # SAM segmentation helper
 │   └── runtime/memory.py             # CUDA memory release
@@ -139,13 +140,16 @@ python -m get_item_info_agent            # :8008
 └── grasp_agent/                      # GraspGen grasp server (:8007)
 ```
 
-`tool/` is the runtime shared by the three servers and should not be duplicated. The GraspGen runtime uses `get_item_info_agent/vendor/graspgen_runtime` as the canonical source; the configs of both `grasp_agent` and `no_sam3d` point to it.
+`tool/` holds all shared inference code and must not be duplicated. The GraspGen runtime
+lives at `tool/graspgen_runtime` (the canonical source both `grasp_agent` and `no_sam3d`
+point to); the two required services depend only on `tool/` and `models/`, **not** on the
+legacy `get_item_info_agent/` directory. Shared model weights all live under `models/`.
 
 ## Service details
 
 - All three servers bind `0.0.0.0` on their fixed ports; `get_item_info_agent`'s port can be overridden with `GET_ITEM_INFO_LEGACY_PORT`.
-- `EXTERNAL_IP` is only written into the A2A AgentCard `url` (defaults to `192.168.75.34` in code); set it to the GPU host so the Commander can reach the service.
-- One conda env (`pros_workflow`) serves the services — built via `requirements-nv.txt` on CUDA or `requirements-rocm.txt` on ROCm — and they share the same GraspGen runtime under `get_item_info_agent/vendor/graspgen_runtime`. On ROCm only the two required services (`:8006`, `:8007`) are supported; the legacy `:8008` SAM3D service is CUDA-only.
+- `EXTERNAL_IP` is only written into the A2A AgentCard `url`; it is read from the project `.env` (default `127.0.0.1` if unset), and a shell `EXTERNAL_IP=...` overrides it. Set it to an address the Commander can reach.
+- One conda env (`pros_workflow`) serves the services — built via `requirements-nv.txt` on CUDA or `requirements-rocm.txt` on ROCm — and they share the same GraspGen runtime under `tool/graspgen_runtime`. On ROCm only the two required services (`:8006`, `:8007`) are supported; the legacy `:8008` SAM3D service is CUDA-only.
 
 ## Commander `.env` mapping
 

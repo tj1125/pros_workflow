@@ -118,7 +118,7 @@ echo "   installed hipcc wrapper -> $BIN/hipcc"
 # build the kernel (torch's hipify still needs ROCM_HOME set; the wrapper clears it
 # again before calling hipcc.real)
 $R env ROCM_HOME="$DEVEL" ROCM_PATH="$DEVEL" HIP_PATH="$DEVEL" PYTORCH_ROCM_ARCH="$GFX" \
-    pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
+    pip install --no-build-isolation -e tool/graspgen_runtime/pointnet2_ops
 
 echo ">> [5/5] verifying GPU + kernel"
 $R python -c "import torch; from pointnet2_ops import pointnet2_utils as u; \

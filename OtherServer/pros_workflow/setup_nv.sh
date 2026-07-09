@@ -51,7 +51,7 @@ $R pip install "torch==${TORCH}+${CUDA_TAG}" "torchvision==${TVISION}+${CUDA_TAG
 
 echo ">> [3/4] installing perception + GraspGen deps, then building the pointnet2 kernel"
 $R pip install -r requirements-nv.txt
-$R pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
+$R pip install --no-build-isolation -e tool/graspgen_runtime/pointnet2_ops
 
 echo ">> [4/4] verifying GPU + kernel"
 $R python -c "import torch; from pointnet2_ops import pointnet2_utils as u; \

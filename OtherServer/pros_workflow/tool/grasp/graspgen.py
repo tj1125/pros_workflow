@@ -33,10 +33,13 @@ class CollisionFilterResult:
 
 
 def bundled_graspgen_root_candidates() -> tuple[Path, ...]:
-    """Return bundled runtime candidates ordered by preference."""
+    """Return bundled runtime candidates ordered by preference.
+
+    The GraspGen runtime lives under ``tool/`` so the perception/grasp services do not
+    depend on any sibling service directory.
+    """
     return (
-        SERVER_ROOT / "shared_vendor" / "graspgen_runtime",
-        SERVER_ROOT / "get_item_info_agent" / "vendor" / "graspgen_runtime",
+        SERVER_ROOT / "tool" / "graspgen_runtime",
     )
 
 
