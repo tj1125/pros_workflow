@@ -47,3 +47,26 @@ RL_train/**/*.pth
 RL_train/**/*.safetensors
 RL_train/**/*.ckpt
 RL_train/**/dinov3/
+
+# --- Model weights & large binaries (never commit — huge; use external storage) ---
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# --- Compiled extensions / build artifacts (repo-wide) ---
+*.so
+*.o
+build/
+
+# --- Caches ---
+.cache/
+**/.cache/
+
+# --- Debug / visualization dumps ---
+**/debug_outputs/
+*.npz
+
+# --- OtherServer scratch copy: model weights + caches ---
+OtherServer/pros_workflow/models/
+OtherServer/pros_workflow/.cache/
