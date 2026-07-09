@@ -18,10 +18,18 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 ENV_NAME="${ENV_NAME:-pros_workflow}"
 PYVER="${PYVER:-3.12}"
 
-# --- locate conda ---
-CONDA_BASE="$(conda info --base 2>/dev/null || true)"
-[ -n "$CONDA_BASE" ] && source "$CONDA_BASE/etc/profile.d/conda.sh" || {
-  echo "ERROR: conda not found on PATH. Install Miniconda first." >&2; exit 1; }
+# --- locate conda (works even when conda isn't on PATH — e.g. `bash setup_rocm.sh` in a
+#     non-interactive shell that never sourced conda init; supports Anaconda/Miniforge) ---
+if ! command -v conda >/dev/null 2>&1; then
+  for _c in "${CONDA_EXE%/bin/conda}" "$HOME/miniconda3" "$HOME/anaconda3" \
+            "$HOME/miniforge3" "$HOME/mambaforge" "/opt/conda" "$HOME/miniconda" "$HOME/anaconda"; do
+    [ -n "$_c" ] && [ -f "$_c/etc/profile.d/conda.sh" ] && { source "$_c/etc/profile.d/conda.sh"; break; }
+  done
+fi
+command -v conda >/dev/null 2>&1 || {
+  echo "ERROR: conda not found. Activate it first ('conda activate base') or set CONDA_EXE," >&2
+  echo "       then re-run. Miniconda or Anaconda both work." >&2; exit 1; }
+source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # --- detect the GPU arch (gfx1151 = Radeon 8060S, gfx1150 = 860M/890M, ...) ---
 if [ -z "${GFX:-}" ]; then
