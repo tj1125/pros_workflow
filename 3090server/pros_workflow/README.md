@@ -23,8 +23,8 @@ cd /path/to/pros_workflow/3090server/pros_workflow
 **2. Create the conda env and install deps**
 
 ```bash
-conda create -n pros_3090 python=3.11 -y
-conda activate pros_3090
+conda create -n pros_workflow python=3.11 -y
+conda activate pros_workflow
 
 # PyTorch (CUDA 12.1) — install first, with the CUDA index
 pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
