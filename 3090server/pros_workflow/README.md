@@ -30,6 +30,9 @@ conda activate pros_workflow
 pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
+pip install torch_scatter==2.1.2+pt25cu121 \
+  -f https://data.pyg.org/whl/torch-2.5.1+cu121.html
+
 # Shared perception + GraspGen stack (YOLO / SAM / DepthAnything / SAM3D / GraspGen)
 pip install -r requirements.txt
 

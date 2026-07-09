@@ -13,14 +13,13 @@ segment_anything @ git+https://github.com/facebookresearch/segment-anything.git@
 spconv-cu121==2.3.8
 moge @ git+https://github.com/microsoft/MoGe.git@a8c37341bc0325ca99b9d57981cc3bb2bd3e255b
 utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3913c65d81e05e47b9f367250cf8c0f7462a0900
-pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47
+# pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47
 
 # ── GraspGen inference ────────────────────────────────────────────────────────
 diffusers==0.11.1
 huggingface-hub==0.25.2
 addict==2.4.0
 timm==0.9.16
-torch_scatter==2.1.2+pt25cu121
 
 # ── Config / training utilities ───────────────────────────────────────────────
 omegaconf==2.3.0
