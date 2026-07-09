@@ -53,6 +53,26 @@ connects. On a single-machine setup they are identical, so the `INF_*` URLs refe
 `${EXTERNAL_IP}`: **set the IP once in `EXTERNAL_IP`.** Set `OLLAMA_BASE_URL` to your
 Ollama server.
 
+> **⚠️ Ollama must accept remote connections.** The Commander runs in a container, so
+> `OLLAMA_BASE_URL` must point at an address it can reach (the host LAN IP or the
+> docker-bridge gateway — **not** `127.0.0.1`, that is the container itself). Ollama by
+> default only listens on `127.0.0.1`, which a container **cannot** reach; start Ollama
+> bound to all interfaces so it accepts external/container connections:
+>
+> ```bash
+> # ad-hoc:
+> OLLAMA_HOST=0.0.0.0:11434 ollama serve
+> # or persistently, for the systemd service:
+> sudo mkdir -p /etc/systemd/system/ollama.service.d
+> printf '[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0:11434"\n' | \
+>   sudo tee /etc/systemd/system/ollama.service.d/override.conf
+> sudo systemctl daemon-reload && sudo systemctl restart ollama
+> ```
+>
+> Verify: `ss -ltn | grep 11434` should show `*:11434` (not `127.0.0.1:11434`). Also make
+> sure the models named above (`OLLAMA_MODEL` / `OLLAMA_CLASSIFIER_MODEL` /
+> `OLLAMA_CHAT_MODEL`) are pulled on that server (`ollama pull <model>`), or requests 404.
+
 ## Quick start (local Commander)
 
 Build the image:
