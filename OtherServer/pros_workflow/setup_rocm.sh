@@ -18,23 +18,20 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 ENV_NAME="${ENV_NAME:-pros_workflow}"
 PYVER="${PYVER:-3.12}"
 
-# --- locate a WORKING conda. `bash setup_rocm.sh` runs a non-interactive shell that never
-#     sourced conda init, and a broken `conda` shim may sit on PATH (e.g. a stray
-#     ~/.local/bin/conda that can't import conda). So verify `conda info --base` actually
-#     succeeds, else source conda.sh from common install dirs (Anaconda/Miniforge too). ---
-_conda_ok() { command -v conda >/dev/null 2>&1 && conda info --base >/dev/null 2>&1; }
-if ! _conda_ok; then
-  for _c in "${CONDA_EXE%/bin/conda}" "$CONDA_PREFIX" "$CONDA_ROOT" "$HOME/miniconda3" \
-            "$HOME/anaconda3" "$HOME/miniforge3" "$HOME/mambaforge" "/opt/conda" \
-            "$HOME/miniconda" "$HOME/anaconda"; do
-    [ -n "$_c" ] && [ -f "$_c/etc/profile.d/conda.sh" ] && { source "$_c/etc/profile.d/conda.sh"; _conda_ok && break; }
+# --- make conda usable. `bash setup_rocm.sh` is a non-interactive shell that often lacks
+#     conda on PATH, and a broken ~/.local/bin/conda shim can shadow a real one, so test
+#     that `conda info --base` actually works and otherwise source conda.sh from a common
+#     install dir (all vars guarded with :- for `set -u`). ---
+if ! conda info --base >/dev/null 2>&1; then
+  for _s in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/miniforge3" "$HOME/mambaforge" \
+            "/opt/conda" "${CONDA_EXE:-/nonexistent}/../.."; do
+    [ -f "$_s/etc/profile.d/conda.sh" ] && { . "$_s/etc/profile.d/conda.sh"; break; }
   done
 fi
-_conda_ok || {
-  echo "ERROR: no working conda found. In a shell where conda works run 'conda info --base'," >&2
-  echo "       then re-run from that shell, or set CONDA_EXE to its bin/conda. (A broken" >&2
-  echo "       ~/.local/bin/conda shim on PATH can cause this.)" >&2; exit 1; }
-source "$(conda info --base)/etc/profile.d/conda.sh"
+conda info --base >/dev/null 2>&1 || {
+  echo "ERROR: no working conda found. Run 'conda activate base' in a shell where conda" >&2
+  echo "       works and re-run, or create the env manually (see README)." >&2; exit 1; }
+. "$(conda info --base)/etc/profile.d/conda.sh"
 
 # --- detect the GPU arch (gfx1151 = Radeon 8060S, gfx1150 = 860M/890M, ...) ---
 if [ -z "${GFX:-}" ]; then
