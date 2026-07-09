@@ -18,17 +18,22 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 ENV_NAME="${ENV_NAME:-pros_workflow}"
 PYVER="${PYVER:-3.12}"
 
-# --- locate conda (works even when conda isn't on PATH — e.g. `bash setup_rocm.sh` in a
-#     non-interactive shell that never sourced conda init; supports Anaconda/Miniforge) ---
-if ! command -v conda >/dev/null 2>&1; then
-  for _c in "${CONDA_EXE%/bin/conda}" "$HOME/miniconda3" "$HOME/anaconda3" \
-            "$HOME/miniforge3" "$HOME/mambaforge" "/opt/conda" "$HOME/miniconda" "$HOME/anaconda"; do
-    [ -n "$_c" ] && [ -f "$_c/etc/profile.d/conda.sh" ] && { source "$_c/etc/profile.d/conda.sh"; break; }
+# --- locate a WORKING conda. `bash setup_rocm.sh` runs a non-interactive shell that never
+#     sourced conda init, and a broken `conda` shim may sit on PATH (e.g. a stray
+#     ~/.local/bin/conda that can't import conda). So verify `conda info --base` actually
+#     succeeds, else source conda.sh from common install dirs (Anaconda/Miniforge too). ---
+_conda_ok() { command -v conda >/dev/null 2>&1 && conda info --base >/dev/null 2>&1; }
+if ! _conda_ok; then
+  for _c in "${CONDA_EXE%/bin/conda}" "$CONDA_PREFIX" "$CONDA_ROOT" "$HOME/miniconda3" \
+            "$HOME/anaconda3" "$HOME/miniforge3" "$HOME/mambaforge" "/opt/conda" \
+            "$HOME/miniconda" "$HOME/anaconda"; do
+    [ -n "$_c" ] && [ -f "$_c/etc/profile.d/conda.sh" ] && { source "$_c/etc/profile.d/conda.sh"; _conda_ok && break; }
   done
 fi
-command -v conda >/dev/null 2>&1 || {
-  echo "ERROR: conda not found. Activate it first ('conda activate base') or set CONDA_EXE," >&2
-  echo "       then re-run. Miniconda or Anaconda both work." >&2; exit 1; }
+_conda_ok || {
+  echo "ERROR: no working conda found. In a shell where conda works run 'conda info --base'," >&2
+  echo "       then re-run from that shell, or set CONDA_EXE to its bin/conda. (A broken" >&2
+  echo "       ~/.local/bin/conda shim on PATH can cause this.)" >&2; exit 1; }
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # --- detect the GPU arch (gfx1151 = Radeon 8060S, gfx1150 = 860M/890M, ...) ---
