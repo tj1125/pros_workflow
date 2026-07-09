@@ -38,9 +38,15 @@ OLLAMA_CHAT_MODEL=gemma3:12b
 # RTX 3090 A2A inference services (IP:Port of the GPU servers)
 INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
 INF_GRASP_URL=http://<gpu-host>:8007
+
+# IP the GPU A2A servers advertise in their AgentCard url (read from this .env by the
+# services — no need to pass EXTERNAL_IP on every launch). Must be an address the
+# Commander can reach; if the Commander runs in a container use the host LAN IP or the
+# docker-bridge gateway, NOT 127.0.0.1.
+EXTERNAL_IP=<gpu-host>
 ```
 
-Set `OLLAMA_BASE_URL` to point at your Ollama server and the two `INF_*` URLs at your RTX 3090 services.
+Set `OLLAMA_BASE_URL` to point at your Ollama server, the two `INF_*` URLs at your RTX 3090 services, and `EXTERNAL_IP` to the GPU host's own address. When the Commander and the GPU services share one machine, `INF_*` and `EXTERNAL_IP` use that machine's LAN IP.
 
 ## Quick start (local Commander)
 
@@ -79,14 +85,15 @@ By default the `logs/` folder (trace log + session data) is deleted when the web
 The perception/grasp inference runs on a separate RTX 3090 machine as A2A servers. On that machine:
 
 1. Copy the `3090server/pros_workflow/` folder to the GPU host.
-2. Create the conda environments and install requirements (per-service instructions in the [3090server README](3090server/pros_workflow/README.md)).
+2. Build the conda env in one command — `bash setup_nv.sh` (NVIDIA/CUDA) or `bash setup_rocm.sh` (AMD/ROCm). See the [3090server README](3090server/pros_workflow/README.md) for details and the platform table.
 3. Drop the model weights (YOLO / SAM / DepthAnything / SAM3D / GraspGen checkpoints) into `3090server/pros_workflow/models/` — only `.gitkeep` is committed.
-4. Launch the required services, setting `EXTERNAL_IP` to the GPU host's address (it is written into the A2A AgentCard `url`):
+4. Set `EXTERNAL_IP` in the `.env` (see above) to the GPU host's address — it is written into the A2A AgentCard `url`. Then launch the required services (they read `EXTERNAL_IP` from `.env`; a shell `EXTERNAL_IP=...` still overrides it):
 
    ```bash
    cd /path/to/pros_workflow/3090server/pros_workflow
-   EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d   # :8006 required
-   EXTERNAL_IP=<gpu-host> python -m grasp_agent                    # :8007 required
+   conda activate pros_workflow
+   python -m get_item_info_agent_no_sam3d   # :8006 required
+   python -m grasp_agent                    # :8007 required
    ```
 
 5. Point the Commander `.env` at them: `INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006` and `INF_GRASP_URL=http://<gpu-host>:8007`.

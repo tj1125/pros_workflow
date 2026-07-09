@@ -29,8 +29,17 @@ from get_item_info_agent_no_sam3d.agent_executor import GetItemInfoNoSam3dExecut
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load the project .env (if present) so EXTERNAL_IP can be configured there instead of
+# being hardcoded or passed on every launch. An explicit shell env var still wins.
+try:
+    from dotenv import find_dotenv, load_dotenv
+
+    load_dotenv(find_dotenv(usecwd=True))
+except ImportError:
+    pass
+
 PORT = 8006
-EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
+EXTERNAL_IP = os.getenv("EXTERNAL_IP", "127.0.0.1")
 
 agent_card = AgentCard(
     name="Get Item Info Agent No SAM3D",

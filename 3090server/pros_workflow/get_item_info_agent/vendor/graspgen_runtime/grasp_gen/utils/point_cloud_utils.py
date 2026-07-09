@@ -265,12 +265,18 @@ def filter_colliding_grasps(
     )
     gripper_surface_points = np.array(gripper_surface_points)
 
+    # Run the distance math on the GPU when available. The ROCm PyTorch build has no
+    # MKL, so the CPU cdist path is ~50x slower here than on a CUDA box; the collision
+    # check is otherwise pure tensor ops and moving it to the GPU cuts this step from
+    # ~90s to <1s for a few hundred grasps.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # Convert inputs to torch tensors
-    scene_pc_torch = torch.from_numpy(scene_pc).float()
+    scene_pc_torch = torch.from_numpy(scene_pc).float().to(device)
     collision_free_mask = []
 
     logger.info(
-        f"Checking collision for {len(grasp_poses)} grasps against {len(scene_pc)} scene points..."
+        f"Checking collision for {len(grasp_poses)} grasps against {len(scene_pc)} scene points on {device}..."
     )
 
     for i, grasp_pose in tqdm(
@@ -280,25 +286,14 @@ def filter_colliding_grasps(
         gripper_points_transformed = tra.transform_points(
             gripper_surface_points, grasp_pose
         )
-        gripper_points_torch = torch.from_numpy(gripper_points_transformed).float()
+        gripper_points_torch = (
+            torch.from_numpy(gripper_points_transformed).float().to(device)
+        )
 
-        # For each gripper point, find distance to closest scene point
-        min_distances = []
-
-        # Process in batches to avoid memory issues
-        batch_size = 100
-        for j in range(0, len(gripper_points_torch), batch_size):
-            batch_gripper_points = gripper_points_torch[j : j + batch_size]
-
-            # Compute distances from batch of gripper points to all scene points
-            distances = torch.cdist(
-                batch_gripper_points, scene_pc_torch, p=2
-            )  # Euclidean distance
-            batch_min_distances = torch.min(distances, dim=1)[0]
-            min_distances.append(batch_min_distances)
-
-        # Concatenate all minimum distances
-        all_min_distances = torch.cat(min_distances)
+        # For each gripper point, distance to the closest scene point (2000x8192 fits
+        # comfortably on the GPU, so no inner batching is needed).
+        distances = torch.cdist(gripper_points_torch, scene_pc_torch, p=2)
+        all_min_distances = torch.min(distances, dim=1)[0]
 
         # Check if any gripper point is within collision threshold of scene points
         collision_detected = torch.any(all_min_distances < collision_threshold)
@@ -433,12 +428,18 @@ def filter_colliding_grasps(
     )
     gripper_surface_points = np.array(gripper_surface_points)
 
+    # Run the distance math on the GPU when available. The ROCm PyTorch build has no
+    # MKL, so the CPU cdist path is ~50x slower here than on a CUDA box; the collision
+    # check is otherwise pure tensor ops and moving it to the GPU cuts this step from
+    # ~90s to <1s for a few hundred grasps.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # Convert inputs to torch tensors
-    scene_pc_torch = torch.from_numpy(scene_pc).float()
+    scene_pc_torch = torch.from_numpy(scene_pc).float().to(device)
     collision_free_mask = []
 
     logger.info(
-        f"Checking collision for {len(grasp_poses)} grasps against {len(scene_pc)} scene points..."
+        f"Checking collision for {len(grasp_poses)} grasps against {len(scene_pc)} scene points on {device}..."
     )
 
     for i, grasp_pose in tqdm(
@@ -448,25 +449,14 @@ def filter_colliding_grasps(
         gripper_points_transformed = tra.transform_points(
             gripper_surface_points, grasp_pose
         )
-        gripper_points_torch = torch.from_numpy(gripper_points_transformed).float()
+        gripper_points_torch = (
+            torch.from_numpy(gripper_points_transformed).float().to(device)
+        )
 
-        # For each gripper point, find distance to closest scene point
-        min_distances = []
-
-        # Process in batches to avoid memory issues
-        batch_size = 100
-        for j in range(0, len(gripper_points_torch), batch_size):
-            batch_gripper_points = gripper_points_torch[j : j + batch_size]
-
-            # Compute distances from batch of gripper points to all scene points
-            distances = torch.cdist(
-                batch_gripper_points, scene_pc_torch, p=2
-            )  # Euclidean distance
-            batch_min_distances = torch.min(distances, dim=1)[0]
-            min_distances.append(batch_min_distances)
-
-        # Concatenate all minimum distances
-        all_min_distances = torch.cat(min_distances)
+        # For each gripper point, distance to the closest scene point (2000x8192 fits
+        # comfortably on the GPU, so no inner batching is needed).
+        distances = torch.cdist(gripper_points_torch, scene_pc_torch, p=2)
+        all_min_distances = torch.min(distances, dim=1)[0]
 
         # Check if any gripper point is within collision threshold of scene points
         collision_detected = torch.any(all_min_distances < collision_threshold)

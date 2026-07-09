@@ -10,56 +10,118 @@ This folder holds the A2A Agent Servers that run on the RTX 3090. The Commander 
 | `grasp_agent` | `8007` (hardcoded) | **required** | `Camera_Car` RGBD + YOLO + SAM + GraspGen; outputs 6-DoF grasp poses. |
 | `get_item_info_agent` | `8008` (env `GET_ITEM_INFO_LEGACY_PORT`) | legacy | Full SAM3D pipeline (YOLO→SAM→Triangulation→DepthAnything→SAM3D→GraspGen). Kept for experiments that need mesh reconstruction. |
 
-## Quick start
+## Choose your platform
 
-Prerequisites: an RTX 3090 (CUDA 12.1) with `conda` installed. The three services share one requirements file, so **a single conda env runs all of them**.
+Pick the one matching your GPU — each is a single command that creates a conda env,
+installs PyTorch + all deps, builds the GraspGen kernel, and verifies the GPU:
 
-**1. Enter the folder**
+| GPU | Setup (one command) | Env | Deps file |
+|---|---|---|---|
+| **NVIDIA** — RTX 3090, CUDA 12.1 | `bash setup_nv.sh` | `pros_workflow` | [`requirements-nv.txt`](./requirements-nv.txt) |
+| **AMD** — Radeon iGPU, ROCm (gfx1151 / gfx1150) | `bash setup_rocm.sh` | `pros_workflow` | [`requirements-rocm.txt`](./requirements-rocm.txt) |
 
-```bash
-cd /path/to/pros_workflow/3090server/pros_workflow
-```
+After setup, the launch step and the Commander `.env` are the same for both — see
+[Launch](#launch) and [Commander `.env` mapping](#commander-env-mapping) below.
 
-**2. Create the conda env and install deps**
+## Quick start (NVIDIA CUDA — RTX 3090)
 
-```bash
-conda create -n pros_3090 python=3.11 -y
-conda activate pros_3090
+Prerequisites: an RTX 3090 with the CUDA 12.1 toolkit (`nvcc` on PATH, needed to build
+the kernel) and `conda`/Miniconda.
 
-# PyTorch (CUDA 12.1) — install first, with the CUDA index
-pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
-    --extra-index-url https://download.pytorch.org/whl/cu121
-
-# Shared perception + GraspGen stack (YOLO / SAM / DepthAnything / SAM3D / GraspGen)
-pip install -r get_item_info_agent/requirements.txt
-
-# GraspGen CUDA ops (editable, no build isolation)
-pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
-```
-
-**3. Add model weights**
-
-Drop the checkpoints (YOLO / SAM / DepthAnything / SAM3D / GraspGen) into `models/` — only `.gitkeep` is committed. See [Model weights — download sources & paths](#model-weights--download-sources--paths) for every download link and its exact relative path; the same paths are set in each service's `configs/*.yaml`.
-
-**4. Launch the two required services**
-
-Set `EXTERNAL_IP` to this machine's address (it goes into the A2A AgentCard `url` the Commander connects to):
+**1. One command to build the env**
 
 ```bash
-EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d   # :8006 required
-EXTERNAL_IP=<gpu-host> python -m grasp_agent                    # :8007 required
-# optional (legacy SAM3D pipeline):
-EXTERNAL_IP=<gpu-host> python -m get_item_info_agent            # :8008
+bash setup_nv.sh
 ```
 
-**5. Point the Commander at this host**
+Creates the `pros_workflow` conda env (override with `ENV_NAME=...`/`PYVER=...`) and, in order:
 
-On the Commander machine, set the project-root `.env`:
+1. `conda create -n pros_workflow python=3.11`
+2. Installs `torch==2.5.1+cu121` (+ matching torchvision/torchaudio) from the CUDA index.
+3. Installs the full perception + GraspGen stack from [`requirements-nv.txt`](./requirements-nv.txt).
+   Unlike the ROCm build this **includes** the SAM3D packages (`xformers`/`spconv`/
+   `torch_scatter`/`pytorch3d`/`moge`), so the legacy `:8008` service also works on CUDA.
+4. Builds GraspGen's `pointnet2_ops` kernel with `nvcc`.
+5. Verifies the GPU and that `furthest_point_sample` runs on it.
 
-```env
-INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
-INF_GRASP_URL=http://<gpu-host>:8007
+**2. Add model weights** — drop the checkpoints (YOLO / SAM / DepthAnything / SAM3D /
+GraspGen) into `models/` (only `.gitkeep` is committed). See
+[Model weights](#model-weights--download-sources--paths) for every link and its exact
+relative path; the same paths are set in each service's `configs/*.yaml`.
+
+Then jump to [Launch](#launch).
+
+## Quick start (AMD ROCm — Radeon iGPU: gfx1151 Ryzen AI MAX+ / gfx1150 Ryzen AI 300)
+
+The two required services (`:8006`, `:8007`) run on the AMD Radeon integrated GPU via
+ROCm instead of CUDA. PyTorch's ROCm build exposes the AMD GPU through the same
+`torch.cuda` API, so the application code and every `configs/*.yaml` `device: "cuda"`
+work **unchanged** — the only work is swapping the CUDA-pinned packages for ROCm ones
+and compiling GraspGen's custom kernel for the AMD GPU. The legacy SAM3D service
+(`:8008`) is **not ported** (it needs `spconv`/`pytorch3d`/`xformers`, which have no
+ROCm build here) and the robot does not use it.
+
+Prerequisites: a ROCm-supported AMD iGPU (verified on gfx1151 = Radeon 8060S; gfx1150 =
+Radeon 860M/890M uses the same recipe) and `conda`/Miniconda.
+
+**1. One command to build the env**
+
+```bash
+bash setup_rocm.sh
 ```
+
+This creates the `pros_workflow` conda env and does everything below. It **auto-detects the
+GPU arch** (`rocminfo`), so the same command works on a gfx1151 or gfx1150 box; override
+with `GFX=gfx1150 bash setup_rocm.sh` (or `ENV_NAME=...`, `PYVER=...`) if needed. What it
+does, in order:
+
+1. `conda create -n pros_workflow python=3.12`
+2. Installs `torch`/`torchvision`/`torchaudio` + the pip-packaged ROCm SDK
+   (`rocm[devel]`, which bundles the HIP headers/compiler) from AMD's per-GPU wheel
+   index `https://repo.amd.com/rocm/whl/<gfx>/`, then `rocm-sdk init`.
+3. Installs the perception + GraspGen deps from [`requirements-rocm.txt`](./requirements-rocm.txt)
+   (no CUDA-only packages: `xformers`/`spconv`/`torch_scatter`/`pytorch3d`/`moge`/`sam3d`
+   are skipped — only the unported `:8008` needs them).
+4. Installs the `hipcc` wrapper (embedded in `setup_rocm.sh`) and builds GraspGen's
+   `pointnet2_ops` kernel for the detected arch.
+5. Verifies the GPU is visible and `furthest_point_sample` runs on it.
+
+> **Why the hipcc wrapper?** GraspGen's kernel is HIPified and compiled by `hipcc`.
+> On these boxes PyTorch's default invocation makes `hipcc` fall back to a stale system
+> HIP header set under `/usr/include/hip`, which clashes with the SDK headers (duplicate
+> `abort`/`__assert_fail`, unresolved `hipsolver`/fp8 types). The wrapper normalizes the
+> invocation (single `-x hip` before the source, SDK include first, ROCm env vars
+> cleared) so one consistent header set is used. `pointnet2_ops/setup.py` also drops the
+> NVCC-only `-Xfatbin/-compress-all` flags on HIP builds.
+>
+> **Why no `torch_scatter`?** It is only imported by the PTv3 backbone, and the default
+> **Robotiq 2F-140** gripper uses the `pointnet` backbone. Its ROCm build also fails on
+> these iGPUs (wave64 vs 32-bit warp masks), so it is omitted unless you switch to a
+> PTv3 checkpoint.
+
+**2. Add model weights** — same as the CUDA path (see
+[Model weights](#model-weights--download-sources--paths)). Then jump to [Launch](#launch).
+
+## Launch
+
+Same for both platforms — activate the `pros_workflow` env you built and start the two
+required services. Each server advertises `http://$EXTERNAL_IP:<port>/` in its A2A
+AgentCard, which is the address the Commander POSTs tasks back to. `EXTERNAL_IP` is read
+from the project `.env` (see [Commander `.env` mapping](#commander-env-mapping)); a shell
+`EXTERNAL_IP=...` still overrides it.
+
+```bash
+conda activate pros_workflow
+python -m get_item_info_agent_no_sam3d   # :8006 required
+python -m grasp_agent                    # :8007 required
+# CUDA only, optional (legacy SAM3D pipeline):
+python -m get_item_info_agent            # :8008
+```
+
+> **`EXTERNAL_IP` must be an address the Commander can actually reach.** If the Commander
+> runs in a container, set it (in `.env`) to the host's LAN IP or the docker-bridge
+> gateway, **not** `127.0.0.1` — that would resolve to the container itself and tasks
+> would never arrive. Default when unset is `127.0.0.1` (fine only for same-host tests).
 
 ## Directory layout
 
@@ -82,8 +144,8 @@ INF_GRASP_URL=http://<gpu-host>:8007
 ## Service details
 
 - All three servers bind `0.0.0.0` on their fixed ports; `get_item_info_agent`'s port can be overridden with `GET_ITEM_INFO_LEGACY_PORT`.
-- `EXTERNAL_IP` is only written into the A2A AgentCard `url` (defaults to `140.116.82.226` in code); set it to the GPU host so the Commander can reach the service.
-- One conda env serves all three services — they share `get_item_info_agent/requirements.txt` and the same GraspGen runtime under `get_item_info_agent/vendor/graspgen_runtime`.
+- `EXTERNAL_IP` is only written into the A2A AgentCard `url` (defaults to `192.168.75.34` in code); set it to the GPU host so the Commander can reach the service.
+- One conda env (`pros_workflow`) serves the services — built via `requirements-nv.txt` on CUDA or `requirements-rocm.txt` on ROCm — and they share the same GraspGen runtime under `get_item_info_agent/vendor/graspgen_runtime`. On ROCm only the two required services (`:8006`, `:8007`) are supported; the legacy `:8008` SAM3D service is CUDA-only.
 
 ## Commander `.env` mapping
 
