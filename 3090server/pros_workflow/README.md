@@ -12,7 +12,7 @@ This folder holds the A2A Agent Servers that run on the RTX 3090. The Commander 
 
 ## Quick start
 
-Prerequisites: an RTX 3090 (CUDA 12.1) with `conda` installed. The three services share one requirements file, so **a single conda env runs all of them**.
+Prerequisites: an RTX 3090 (CUDA 12.1) with `conda` installed. The three services share one root `requirements.txt` and one GraspGen runtime under `tool/`, so **a single conda env runs all of them** and none of them depends on another service's folder.
 
 **1. Enter the folder**
 
@@ -31,30 +31,42 @@ pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121
     --extra-index-url https://download.pytorch.org/whl/cu121
 
 # Shared perception + GraspGen stack (YOLO / SAM / DepthAnything / SAM3D / GraspGen)
-pip install -r get_item_info_agent/requirements.txt
+pip install -r requirements.txt
 
 # GraspGen CUDA ops (editable, no build isolation)
-pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
+pip install --no-build-isolation -e tool/graspgen_runtime/pointnet2_ops
 ```
 
 **3. Add model weights**
 
 Drop the checkpoints (YOLO / SAM / DepthAnything / SAM3D / GraspGen) into `models/` — only `.gitkeep` is committed. See [Model weights — download sources & paths](#model-weights--download-sources--paths) for every download link and its exact relative path; the same paths are set in each service's `configs/*.yaml`.
 
-**4. Launch the two required services**
+**4. Set the GPU host in `.env`**
 
-Set `EXTERNAL_IP` to this machine's address (it goes into the A2A AgentCard `url` the Commander connects to):
+Create `3090server/pros_workflow/.env` (auto-loaded at startup — see [Server `.env`](#server-env)) and set this machine's address, which goes into the A2A AgentCard `url` the Commander connects to:
 
-```bash
-EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d   # :8006 required
-EXTERNAL_IP=<gpu-host> python -m grasp_agent                    # :8007 required
-# optional (legacy SAM3D pipeline):
-EXTERNAL_IP=<gpu-host> python -m get_item_info_agent            # :8008
+```env
+EXTERNAL_IP=<gpu-host>
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://${EXTERNAL_IP}:8006
+INF_GRASP_URL=http://${EXTERNAL_IP}:8007
 ```
 
-**5. Point the Commander at this host**
+**5. Launch the two required services**
 
-On the Commander machine, set the project-root `.env`:
+Each service auto-loads the `.env` above, so no inline env prefix is needed:
+
+```bash
+python -m get_item_info_agent_no_sam3d   # :8006 required
+python -m grasp_agent                    # :8007 required
+# optional (legacy SAM3D pipeline):
+python -m get_item_info_agent            # :8008
+```
+
+A command-line prefix still overrides the file for a one-off host, e.g. `EXTERNAL_IP=1.2.3.4 python -m grasp_agent`.
+
+**6. Point the Commander at this host**
+
+On the Commander machine, set the project-root `.env` (the same `INF_*` URLs as above):
 
 ```env
 INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006
@@ -65,25 +77,29 @@ INF_GRASP_URL=http://<gpu-host>:8007
 
 ```text
 3090server/pros_workflow/
+├── .env                              # GPU host + derived service URLs (auto-loaded)
+├── requirements.txt                  # shared deps for all three services
 ├── a2a_utils/                        # A2A success/error response helpers
 ├── models/                           # shared model-weights dir (only .gitkeep; add weights at deploy time)
-├── tool/                             # shared inference helpers (see below)
-│   ├── grasp/graspgen.py             # GraspGen runtime + point-cloud/collision filtering
+├── tool/                             # shared inference helpers + vendored runtime (see below)
+│   ├── grasp/graspgen.py             # GraspGen wrapper + point-cloud/collision filtering
+│   ├── graspgen_runtime/             # vendored GraspGen runtime (grasp_gen + pointnet2 CUDA ops), shared by all services
 │   ├── vision/yolo.py                # YOLO detection helper
 │   ├── vision/sam.py                 # SAM segmentation helper
+│   ├── runtime/env.py                # zero-dependency .env loader
 │   └── runtime/memory.py             # CUDA memory release
 ├── get_item_info_agent_no_sam3d/     # current item-info server (:8006)
 ├── get_item_info_agent/              # legacy SAM3D item-info server (:8008)
 └── grasp_agent/                      # GraspGen grasp server (:8007)
 ```
 
-`tool/` is the runtime shared by the three servers and should not be duplicated. The GraspGen runtime uses `get_item_info_agent/vendor/graspgen_runtime` as the canonical source; the configs of both `grasp_agent` and `no_sam3d` point to it.
+`tool/` is the runtime shared by the three servers and should not be duplicated. The GraspGen runtime lives at `tool/graspgen_runtime` (canonical source); the configs of `grasp_agent`, `no_sam3d`, and the legacy server all point there, so no service depends on another's folder.
 
 ## Service details
 
 - All three servers bind `0.0.0.0` on their fixed ports; `get_item_info_agent`'s port can be overridden with `GET_ITEM_INFO_LEGACY_PORT`.
-- `EXTERNAL_IP` is only written into the A2A AgentCard `url` (defaults to `140.116.82.226` in code); set it to the GPU host so the Commander can reach the service.
-- One conda env serves all three services — they share `get_item_info_agent/requirements.txt` and the same GraspGen runtime under `get_item_info_agent/vendor/graspgen_runtime`.
+- `EXTERNAL_IP` is only written into the A2A AgentCard `url` (defaults to `140.116.82.226` in code); set it in `.env` (or as a command-line prefix) so the Commander can reach the service.
+- One conda env serves all three services — they share the root `requirements.txt` and the same GraspGen runtime under `tool/graspgen_runtime`.
 
 ## Commander `.env` mapping
 
@@ -145,12 +161,25 @@ Notes:
 - Each GraspGen gripper needs both the discriminator (`*_dis.pth`) and generator (`*_gen.pth`) checkpoints plus its `.yml`; the `.yml` names the two `.pth` files.
 - **SAM 3D Objects** is gated: request access on the Hugging Face repo, run `hf auth login`, then `hf download facebook/sam-3d-objects` and place the `checkpoints/` contents under `models/sam3d/hf/`. Only the legacy `:8008` SAM3D pipeline needs these; the two required services (`:8006`, `:8007`) do not.
 
+## Server `.env`
+
+Each service auto-loads `3090server/pros_workflow/.env` at startup via `tool/runtime/env.py`, so the GPU host is defined once instead of prefixing every launch command. Values already set in the real environment win, so a `EXTERNAL_IP=... python -m ...` prefix still overrides the file (useful for a one-off host). `${VAR}` references inside the file are expanded.
+
+```env
+EXTERNAL_IP=140.116.82.226
+INF_GET_ITEM_INFO_NO_SAM3D_URL=http://${EXTERNAL_IP}:8006
+INF_GRASP_URL=http://${EXTERNAL_IP}:8007
+```
+
+Only `EXTERNAL_IP` is consumed by the servers (for the AgentCard `url`); the two `INF_*` URLs are kept here so the host is written once and mirror what the Commander's project-root `.env` needs.
+
 ## Environment variables
 
 - `models/` keeps only `.gitkeep`; the real weights (YOLO / SAM / DepthAnything / SAM3D / GraspGen checkpoints) are added at deploy time (see the table above).
+- `EXTERNAL_IP` (from `.env` or a command-line prefix) sets the AgentCard `url` for all three servers.
 - `grasp_agent` model/camera paths can override the config via env vars: `GRASP_YOLO_WEIGHTS`, `GRASP_SAM_CHECKPOINT`, `GRASP_GRASPGEN_ROOT`, `GRASP_GRIPPER_CONFIG`, `GRASP_CAMERA_INTRINSICS`.
-- `get_item_info_agent_no_sam3d` reads no env vars; all settings come from `configs/scene.default.yaml`.
-- Each service's `configs/*.yaml` points to camera parameters, the SAM checkpoint, and the GraspGen runtime; the item-info services also reference the Nav2 keepout map.
+- `get_item_info_agent_no_sam3d` reads only `EXTERNAL_IP`; all other settings come from `configs/scene.default.yaml`.
+- Each service's `configs/*.yaml` points to camera parameters, the SAM checkpoint, and the GraspGen runtime (`tool/graspgen_runtime`); the item-info services also reference the Nav2 keepout map.
 
 ## Per-service docs
 

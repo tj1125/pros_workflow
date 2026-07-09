@@ -32,11 +32,11 @@ Install under `3090server/pros_workflow`:
 ```bash
 conda create -n get_item_info_no_sam3d python=3.11 -y
 conda activate get_item_info_no_sam3d
-pip install -r get_item_info_agent/requirements.txt
-pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
+pip install -r requirements.txt
+pip install --no-build-isolation -e tool/graspgen_runtime/pointnet2_ops
 ```
 
-This service currently shares `get_item_info_agent`'s GraspGen runtime and part of its requirements; if a dedicated requirements file is split out later, update this document accordingly.
+This service uses the shared root `requirements.txt` and the shared GraspGen runtime at `tool/graspgen_runtime`; it does not depend on the `get_item_info_agent` folder.
 
 ## Running
 

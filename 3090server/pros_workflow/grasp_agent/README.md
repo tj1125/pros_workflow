@@ -44,7 +44,7 @@ Helpers shared across services live in `3090server/pros_workflow/tool/`:
 - `tool/vision/sam.py`: SAM helper shared by get_item_info / grasp.
 - `tool/grasp/graspgen.py`: GraspGen helper shared by get_item_info / grasp.
 
-The GraspGen runtime uses `get_item_info_agent/vendor/graspgen_runtime` as the canonical source; the services share one set of helpers and one root resolver, overridden only when a valid external path is set explicitly.
+The GraspGen runtime lives at `tool/graspgen_runtime` (canonical source); the services share one set of helpers and one root resolver, overridden only when a valid external path is set explicitly. `grasp_agent` no longer depends on the `get_item_info_agent` folder.
 
 ## Config
 

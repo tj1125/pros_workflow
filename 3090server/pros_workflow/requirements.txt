@@ -1,4 +1,4 @@
-# Get Item Info Agent — Python dependencies
+# 3090 A2A services — shared Python dependencies (get_item_info_agent[_no_sam3d], grasp_agent)
 # Environment: a2a_vlm_find (conda, Python 3.11 + CUDA 12.1)
 # Generated from: conda run -n a2a_vlm_find pip list
 
@@ -57,5 +57,5 @@ tqdm==4.67.1
 requests==2.32.5
 
 # ── Local CUDA extension (GraspGen pointnet2) ─────────────────────────────────
-# Install inside the agent vendor directory:
-# pip install --no-build-isolation -e vendor/graspgen_runtime/pointnet2_ops
+# Run from 3090server/pros_workflow/ (the shared GraspGen runtime lives in tool/):
+# pip install --no-build-isolation -e tool/graspgen_runtime/pointnet2_ops

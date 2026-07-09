@@ -24,6 +24,10 @@ _AGENT_SERVICES_ROOT = Path(__file__).parent.parent
 if str(_AGENT_SERVICES_ROOT) not in sys.path:
     sys.path.insert(0, str(_AGENT_SERVICES_ROOT))
 
+from tool.runtime.env import load_env
+
+load_env()  # populate EXTERNAL_IP (and INF_* URLs) from 3090server/pros_workflow/.env
+
 from get_item_info_agent_no_sam3d.agent_executor import GetItemInfoNoSam3dExecutor
 
 logging.basicConfig(level=logging.INFO)

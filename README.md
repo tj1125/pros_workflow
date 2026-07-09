@@ -79,16 +79,24 @@ By default the `logs/` folder (trace log + session data) is deleted when the web
 The perception/grasp inference runs on a separate RTX 3090 machine as A2A servers. On that machine:
 
 1. Copy the `3090server/pros_workflow/` folder to the GPU host.
-2. Create the conda environments and install requirements (per-service instructions in the [3090server README](3090server/pros_workflow/README.md)).
+2. Create one conda env and install the shared `requirements.txt` (per-service instructions in the [3090server README](3090server/pros_workflow/README.md)).
 3. Drop the model weights (YOLO / SAM / DepthAnything / SAM3D / GraspGen checkpoints) into `3090server/pros_workflow/models/` — only `.gitkeep` is committed.
-4. Launch the required services, setting `EXTERNAL_IP` to the GPU host's address (it is written into the A2A AgentCard `url`):
+4. Set the GPU host in `3090server/pros_workflow/.env` (auto-loaded by the servers; written into the A2A AgentCard `url`):
+
+   ```env
+   EXTERNAL_IP=<gpu-host>
+   INF_GET_ITEM_INFO_NO_SAM3D_URL=http://${EXTERNAL_IP}:8006
+   INF_GRASP_URL=http://${EXTERNAL_IP}:8007
+   ```
+
+5. Launch the required services (no inline env prefix needed — the `.env` is loaded automatically):
 
    ```bash
    cd /path/to/pros_workflow/3090server/pros_workflow
-   EXTERNAL_IP=<gpu-host> python -m get_item_info_agent_no_sam3d   # :8006 required
-   EXTERNAL_IP=<gpu-host> python -m grasp_agent                    # :8007 required
+   python -m get_item_info_agent_no_sam3d   # :8006 required
+   python -m grasp_agent                    # :8007 required
    ```
 
-5. Point the Commander `.env` at them: `INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006` and `INF_GRASP_URL=http://<gpu-host>:8007`.
+6. Point the Commander `.env` at them: `INF_GET_ITEM_INFO_NO_SAM3D_URL=http://<gpu-host>:8006` and `INF_GRASP_URL=http://<gpu-host>:8007`.
 
 See [3090server/pros_workflow/README.md](3090server/pros_workflow/README.md) for the full service list, ports, configs, and env overrides.

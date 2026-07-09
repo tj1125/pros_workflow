@@ -15,7 +15,7 @@ TOPK_GRASPS = 20
 SCENE_POINT_SIZE = 0.003
 OBJECT_POINT_SIZE = 0.006
 
-# Matches get_item_info_agent/vendor/graspgen_runtime/config/grippers/robotiq_2f_140.yaml.
+# Matches tool/graspgen_runtime/config/grippers/robotiq_2f_140.yaml.
 GRIPPER_WIDTH_M = 0.13603458
 GRIPPER_DEPTH_M = 0.2500
 

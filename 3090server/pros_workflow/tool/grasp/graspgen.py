@@ -35,6 +35,7 @@ class CollisionFilterResult:
 def bundled_graspgen_root_candidates() -> tuple[Path, ...]:
     """Return bundled runtime candidates ordered by preference."""
     return (
+        SERVER_ROOT / "tool" / "graspgen_runtime",
         SERVER_ROOT / "shared_vendor" / "graspgen_runtime",
         SERVER_ROOT / "get_item_info_agent" / "vendor" / "graspgen_runtime",
     )

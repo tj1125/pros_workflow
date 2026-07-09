@@ -16,6 +16,10 @@ SERVER_ROOT = Path(__file__).parent.parent
 if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
+from tool.runtime.env import load_env
+
+load_env()  # populate EXTERNAL_IP (and INF_* URLs) from 3090server/pros_workflow/.env
+
 from grasp_agent.agent_executor import GraspAgentExecutor
 
 logging.basicConfig(level=logging.INFO)

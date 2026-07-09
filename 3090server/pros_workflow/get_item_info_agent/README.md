@@ -21,8 +21,8 @@ conda activate get_item_info_agent
 
 pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
-pip install -r get_item_info_agent/requirements.txt
-pip install --no-build-isolation -e get_item_info_agent/vendor/graspgen_runtime/pointnet2_ops
+pip install -r requirements.txt
+pip install --no-build-isolation -e tool/graspgen_runtime/pointnet2_ops
 ```
 
 ## Running
