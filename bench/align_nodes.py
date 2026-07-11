@@ -142,8 +142,7 @@ def main() -> int:
     out = args.out or f"{base}.per_node.png"
 
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": MUTED, "text.color": INK,
-                         "xtick.color": MUTED, "ytick.color": MUTED, "axes.grid": True,
-                         "grid.color": GRID, "grid.linewidth": 0.8,
+                         "xtick.color": MUTED, "ytick.color": MUTED, "axes.grid": False,
                          "figure.facecolor": "white", "axes.facecolor": "white"})
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 8.5), sharex=True,
                                         gridspec_kw={"hspace": 0.16})
@@ -162,9 +161,11 @@ def main() -> int:
     def band(ax, numbers=False):
         for i, (name, s, e, d) in enumerate(windows, 1):
             rs, re = s - epoch0, e - epoch0
-            ax.axvspan(rs, re, color=(GRID if i % 2 else "#f1f5f9"), alpha=0.7, lw=0)
+            ax.axvspan(rs, re, color=(GRID if i % 2 else "#f1f5f9"), alpha=0.6, lw=0)
+            # node-boundary lines only — drawn on every panel so a node can be traced down
+            ax.axvline(rs, color="#cbd5e1", lw=0.7)
+            ax.axvline(re, color="#cbd5e1", lw=0.7)
             if numbers:
-                ax.axvline(rs, color="#cbd5e1", lw=0.5)
                 ax.text((rs + re) / 2, 102, str(i), ha="center", va="bottom",
                         fontsize=8.5, fontweight="bold", color=MUTED)
 
