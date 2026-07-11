@@ -146,27 +146,29 @@ def main() -> int:
                          "figure.facecolor": "white", "axes.facecolor": "white"})
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 8.5), sharex=True,
                                         gridspec_kw={"hspace": 0.16})
-    fig.subplots_adjust(top=0.85)
-    fig.suptitle(args.title, x=0.5, y=0.995, fontsize=14, fontweight="bold")
-    fig.text(0.5, 0.945, subtitle, ha="center", fontsize=9, color=MUTED)
+    fig.subplots_adjust(top=0.87)
+    fig.suptitle(args.title, x=0.5, y=0.99, fontsize=14, fontweight="bold")
 
     def _disp(n):
         return n.replace("get_item_info_no_sam3d", "get_item_info").replace("update_item_info_2", "update_item")
 
-    # numbered legend under the subtitle — the chart carries only the numbers, so labels
+    # numbered legend under the title — the chart carries only the numbers, so labels
     # never collide however many/short the nodes are.
     legend = "    ".join(f"{i}·{_disp(n)}" for i, (n, *_) in enumerate(windows, 1))
-    fig.text(0.5, 0.925, legend, ha="center", fontsize=8, color=MUTED, wrap=True)
+    fig.text(0.5, 0.945, legend, ha="center", fontsize=8, color=MUTED, wrap=True)
+
+    starts = [w[1] - epoch0 for w in windows]
+    x_lo, x_hi = starts[0], windows[-1][2] - epoch0
 
     def band(ax, numbers=False):
-        # one clean start line per node (aligned with its number), on every panel — no
-        # background grid, no shading, no doubled edges.
-        for i, (name, s, e, d) in enumerate(windows, 1):
-            rs = s - epoch0
-            ax.axvline(rs, color="#cbd5e1", lw=0.8)
+        # one clean start line per node; the number sits small and centred in the node's
+        # cell (between its line and the next node's line).
+        for i in range(len(windows)):
+            ax.axvline(starts[i], color="#cbd5e1", lw=0.8)
             if numbers:
-                ax.text(rs, 102, str(i), ha="left", va="bottom",
-                        fontsize=8.5, fontweight="bold", color=MUTED)
+                cell_r = starts[i + 1] if i + 1 < len(starts) else x_hi
+                ax.text((starts[i] + cell_r) / 2, 101.5, str(i + 1), ha="center",
+                        va="bottom", fontsize=7, color=MUTED)
 
     band(ax1, numbers=True)
     for name, c, lab in (("gpu_util_pct", C_GPU, "GPU"), ("cpu_util_pct", C_CPU, "CPU")):
@@ -194,7 +196,6 @@ def main() -> int:
     ax3.legend(loc="upper right", frameon=False, ncol=3)
 
     # clip the x range to node 1 start … last node end (drop the idle head/tail)
-    x_lo, x_hi = windows[0][1] - epoch0, windows[-1][2] - epoch0
     for ax in (ax1, ax2, ax3):
         ax.set_xlim(x_lo, x_hi)
         for spn in ("top", "right"):
