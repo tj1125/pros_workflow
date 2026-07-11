@@ -159,14 +159,13 @@ def main() -> int:
     fig.text(0.5, 0.925, legend, ha="center", fontsize=8, color=MUTED, wrap=True)
 
     def band(ax, numbers=False):
+        # one clean start line per node (aligned with its number), on every panel — no
+        # background grid, no shading, no doubled edges.
         for i, (name, s, e, d) in enumerate(windows, 1):
-            rs, re = s - epoch0, e - epoch0
-            ax.axvspan(rs, re, color=(GRID if i % 2 else "#f1f5f9"), alpha=0.6, lw=0)
-            # node-boundary lines only — drawn on every panel so a node can be traced down
-            ax.axvline(rs, color="#cbd5e1", lw=0.7)
-            ax.axvline(re, color="#cbd5e1", lw=0.7)
+            rs = s - epoch0
+            ax.axvline(rs, color="#cbd5e1", lw=0.8)
             if numbers:
-                ax.text((rs + re) / 2, 102, str(i), ha="center", va="bottom",
+                ax.text(rs, 102, str(i), ha="left", va="bottom",
                         fontsize=8.5, fontweight="bold", color=MUTED)
 
     band(ax1, numbers=True)
