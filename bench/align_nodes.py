@@ -113,6 +113,8 @@ def main() -> int:
     ap.add_argument("--title", default="Per-node resource usage — AMD APU")
     ap.add_argument("--min-node-sec", type=float, default=1.0,
                     help="hide nodes shorter than this from the chart + table (default 1.0)")
+    ap.add_argument("--mem-max", type=float, default=40.0,
+                    help="memory panel y-axis max in GB (default 40)")
     args = ap.parse_args()
     if not args.trace and not args.result:
         raise SystemExit("give --trace (preferred) or --result")
@@ -141,15 +143,8 @@ def main() -> int:
     base = os.path.splitext(args.csv)[0]
     out = args.out or f"{base}.per_node.png"
 
-    # memory axis spans the full dedicated VRAM pool (from the run summary), so usage
-    # reads as its true fraction of capacity (headroom is visible), not near-full.
-    mem_top_gb = 64.0
-    sp = f"{base}.summary.json"
-    if os.path.exists(sp):
-        try:
-            mem_top_gb = json.load(open(sp)).get("vram_total_mb", 65536) / 1024
-        except Exception:
-            pass
+    # fixed memory-axis max (GB) so usage reads with a bit of headroom, not near-full
+    mem_top_gb = args.mem_max
 
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": MUTED, "text.color": INK,
                          "xtick.color": MUTED, "ytick.color": MUTED, "axes.grid": False,
