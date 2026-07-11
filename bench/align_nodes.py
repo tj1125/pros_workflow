@@ -141,6 +141,16 @@ def main() -> int:
     base = os.path.splitext(args.csv)[0]
     out = args.out or f"{base}.per_node.png"
 
+    # memory axis spans the full dedicated VRAM pool (from the run summary), so usage
+    # reads as its true fraction of capacity (headroom is visible), not near-full.
+    mem_top_gb = 64.0
+    sp = f"{base}.summary.json"
+    if os.path.exists(sp):
+        try:
+            mem_top_gb = json.load(open(sp)).get("vram_total_mb", 65536) / 1024
+        except Exception:
+            pass
+
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": MUTED, "text.color": INK,
                          "xtick.color": MUTED, "ytick.color": MUTED, "axes.grid": False,
                          "figure.facecolor": "white", "axes.facecolor": "white"})
@@ -193,6 +203,7 @@ def main() -> int:
         if y:
             ax3.plot(t, [v / 1024 for v in y], color=c, linewidth=1.8, label=lab)
     ax3.set_ylabel("Memory (GB)"); ax3.set_xlabel("Time (s)")
+    ax3.set_ylim(0, mem_top_gb)
     ax3.legend(loc="upper right", frameon=False, ncol=3)
 
     # clip the x range to node 1 start … last node end (drop the idle head/tail)
