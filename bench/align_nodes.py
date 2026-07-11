@@ -193,8 +193,10 @@ def main() -> int:
     ax3.set_ylabel("Memory (GB)"); ax3.set_xlabel("Time (s)")
     ax3.legend(loc="upper right", frameon=False, ncol=3)
 
+    # clip the x range to node 1 start … last node end (drop the idle head/tail)
+    x_lo, x_hi = windows[0][1] - epoch0, windows[-1][2] - epoch0
     for ax in (ax1, ax2, ax3):
-        ax.margins(x=0)
+        ax.set_xlim(x_lo, x_hi)
         for spn in ("top", "right"):
             ax.spines[spn].set_visible(False)
     fig.savefig(out, dpi=150, bbox_inches="tight")
