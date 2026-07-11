@@ -47,15 +47,20 @@ python bench/plot_resources.py results/grasp_run1.csv \
 ## Per-node breakdown (align to the workflow nodes)
 
 To see the CPU/GPU/power/memory state **during each workflow node**, align the capture
-with the Commander's `result.json`. Each node's window is reconstructed from `started_at`
-+ cumulative `node_latency_sec`, matched to the samples by their `epoch` column (both use
-the machine clock). Capture with the current `monitor_resources.py` (it records `epoch`)
-and the workflow run must overlap the capture in time.
+with the workflow's per-node timeline. Preferred source is the **trace log**
+(`workflow/logs/trace_logger.jsonl`): each entry carries an *absolute* `unix_timestamp`
+(node end) + latency, so every node window is `[ts - dur, ts]` — no drift, and gaps
+between nodes are represented exactly. Entries are filtered to the capture's `epoch`
+range, which auto-selects the run that overlaps the monitoring (both stamp the same
+machine clock, so no sync is needed).
 
 ```bash
 python bench/align_nodes.py results/grasp_run1.csv \
-    --result workflow/result/result.json          # default: last run in the file
+    --trace workflow/logs/trace_logger.jsonl \
     --title "Per-node resources — AMD Strix Halo"
+
+# fallback (no trace log): reconstruct windows from result.json durations — can drift
+python bench/align_nodes.py results/grasp_run1.csv --result workflow/result/result.json
 ```
 
 Outputs an annotated figure (node bands over the panels) and a per-node table

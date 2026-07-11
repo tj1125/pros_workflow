@@ -2,17 +2,24 @@
 """Align a resource capture with the workflow's per-node timeline and report, for each
 node, the CPU / GPU / power / memory state during its execution.
 
-It reconstructs each node's wall-clock window from the workflow result
-(`started_at` + cumulative `node_latency_sec` in `node_sequence` order) and matches it
-to the monitor samples via their `epoch` column, so the monitor and the Commander only
-need to share the machine clock (they do).
+Preferred source is the trace log (`workflow/logs/trace_logger.jsonl`): every entry has
+an **absolute** `unix_timestamp` (node end) + `decision/execution_latency_sec`, so each
+node's window is [ts - dur, ts] with no drift. Entries are filtered to the capture's
+epoch range, which auto-selects the run that overlaps the monitoring. Both the monitor
+and the Commander stamp the same machine clock, so no clock sync is needed.
 
+Fallback source is `result.json` (`started_at` + cumulative `node_latency_sec`), which
+reconstructs windows from durations and can drift if nodes don't run back-to-back.
+
+  # preferred — absolute timestamps:
   python bench/align_nodes.py bench/results/grasp_full.csv \
-      --result workflow/result/result.json          # default: last run in the file
-      [--run <index|experiment_id>] [-o out.png] [--title "..."]
+      --trace workflow/logs/trace_logger.jsonl --title "Per-node resources — AMD Strix Halo"
 
-Outputs an annotated figure (node bands over the utilisation/power/memory panels) and a
-per-node table (printed + <out>.per_node.csv).
+  # fallback:
+  python bench/align_nodes.py bench/results/grasp_full.csv --result workflow/result/result.json
+
+Outputs an annotated figure (node bands over the panels) and a per-node table
+(printed + <out>.per_node.csv).
 """
 from __future__ import annotations
 
@@ -32,6 +39,36 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plot_resources import C_CPU, C_GPU, C_GTT, C_PWR, C_RAM, C_VRAM, GRID, INK, MUTED, _load, _series  # noqa: E402
 
 
+def _short(node: str) -> str:
+    return node[:-5] if node.endswith("_node") else node
+
+
+def _windows_from_trace(path, lo, hi):
+    """[(short, start_epoch, end_epoch, dur), …] from trace_logger.jsonl, using absolute
+    unix_timestamp (node end) and latency (node duration). Kept only if it overlaps
+    [lo, hi] — the capture window — which selects the right run automatically."""
+    out = []
+    for line in open(path):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        ts = r.get("unix_timestamp")
+        node = r.get("agent_called")
+        if ts is None or not node:
+            continue
+        dur = float(r.get("decision_latency_sec") or 0) + float(r.get("execution_latency_sec") or 0)
+        start, end = ts - dur, ts
+        if end < lo or start > hi:  # outside the capture — different run
+            continue
+        out.append((_short(node), start, end, dur))
+    out.sort(key=lambda w: w[1])
+    return out
+
+
 def _pick_run(runs, sel):
     if sel is None:
         return runs[-1]
@@ -44,8 +81,7 @@ def _pick_run(runs, sel):
     raise SystemExit(f"run '{sel}' not found (have {len(runs)} runs)")
 
 
-def _node_windows(run):
-    """[(short_name, start_epoch, end_epoch, dur), …] from started_at + cumulative latency."""
+def _windows_from_result(run):
     t0 = dt.datetime.fromisoformat(run["started_at"]).timestamp()
     lat = run.get("node_latency_sec") or {}
     seq = run.get("node_sequence") or list(lat.keys())
@@ -54,14 +90,12 @@ def _node_windows(run):
         d = float(lat.get(node, 0.0) or 0.0)
         if d <= 0:
             continue
-        short = node[:-5] if node.endswith("_node") else node
-        out.append((short, t0 + cum, t0 + cum + d, d))
+        out.append((_short(node), t0 + cum, t0 + cum + d, d))
         cum += d
     return out
 
 
-def _agg(cols, epoch0, name, s, e):
-    """mean & peak of `name` for samples whose epoch is within [s, e]."""
+def _agg(cols, name, s, e):
     ep = cols["epoch"]
     vals = [v for v, x in zip(cols[name], ep) if v is not None and x is not None and s <= x <= e]
     if not vals:
@@ -72,26 +106,39 @@ def _agg(cols, epoch0, name, s, e):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", help="monitor CSV (must have an epoch column)")
-    ap.add_argument("--result", required=True, help="workflow result.json")
-    ap.add_argument("--run", default=None, help="run index or experiment_id (default: last)")
+    ap.add_argument("--trace", default=None, help="workflow trace_logger.jsonl (absolute timestamps — preferred)")
+    ap.add_argument("--result", default=None, help="workflow result.json (fallback)")
+    ap.add_argument("--run", default=None, help="result.json run index or experiment_id (default: last)")
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("--title", default="Per-node resource usage — AMD APU")
     args = ap.parse_args()
+    if not args.trace and not args.result:
+        raise SystemExit("give --trace (preferred) or --result")
 
     cols = _load(args.csv)
-    if "epoch" not in cols or not any(v is not None for v in cols["epoch"]):
+    epochs = [v for v in cols["epoch"] if v is not None] if "epoch" in cols else []
+    if not epochs:
         raise SystemExit("this CSV has no epoch column — recapture with the current monitor_resources.py")
-    runs = json.loads(open(args.result).read())
-    run = _pick_run(runs if isinstance(runs, list) else [runs], args.run)
-    windows = _node_windows(run)
-    if not windows:
-        raise SystemExit("no node windows (missing node_latency_sec/started_at in the run)")
+    epoch0, epochN = epochs[0], epochs[-1]
 
-    epoch0 = next(v for v in cols["epoch"] if v is not None)
+    subtitle = ""
+    if args.trace:
+        windows = _windows_from_trace(args.trace, epoch0, epochN)
+        if not windows:
+            raise SystemExit("no trace entries overlap this capture — was the workflow running during it?")
+        subtitle = f"aligned by absolute trace timestamps · {len(windows)} nodes"
+    else:
+        runs = json.loads(open(args.result).read())
+        run = _pick_run(runs if isinstance(runs, list) else [runs], args.run)
+        windows = _windows_from_result(run)
+        if not windows:
+            raise SystemExit("no node windows in that run")
+        subtitle = (f"run {run.get('experiment_id','?')} · \"{run.get('task_instruction','')}\" · "
+                    f"reconstructed from durations")
+
     base = os.path.splitext(args.csv)[0]
     out = args.out or f"{base}.per_node.png"
 
-    # --- figure: 3 shared-x panels + node bands ---
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": MUTED, "text.color": INK,
                          "xtick.color": MUTED, "ytick.color": MUTED, "axes.grid": True,
                          "grid.color": GRID, "grid.linewidth": 0.8,
@@ -99,20 +146,18 @@ def main() -> int:
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 8.5), sharex=True,
                                         gridspec_kw={"hspace": 0.16})
     fig.suptitle(args.title, x=0.5, y=0.99, fontsize=14, fontweight="bold")
-    fig.text(0.5, 0.955, f"run {run.get('experiment_id','?')} · \"{run.get('task_instruction','')}\" · "
-             f"{run.get('wall_time_sec','?')}s · success={run.get('task_success')}",
-             ha="center", fontsize=9, color=MUTED)
+    fig.text(0.5, 0.955, subtitle, ha="center", fontsize=9, color=MUTED)
 
-    def band(ax, top_labels=False):
+    def band(ax, labels=False):
         for i, (name, s, e, d) in enumerate(windows):
             rs, re = s - epoch0, e - epoch0
             ax.axvspan(rs, re, color=(GRID if i % 2 == 0 else "#f1f5f9"), alpha=0.7, lw=0)
-            if top_labels:
+            if labels:
                 ax.axvline(rs, color="#cbd5e1", lw=0.6)
                 ax.text((rs + re) / 2, 104, name, rotation=45, ha="left", va="bottom",
                         fontsize=7.5, color=MUTED)
 
-    band(ax1, top_labels=True)
+    band(ax1, labels=True)
     for name, c, lab in (("gpu_util_pct", C_GPU, "GPU"), ("cpu_util_pct", C_CPU, "CPU")):
         t, y = _series(cols, name)
         ax1.plot(t, y, color=c, linewidth=1.8, label=lab)
@@ -143,18 +188,16 @@ def main() -> int:
             ax.spines[spn].set_visible(False)
     fig.savefig(out, dpi=150, bbox_inches="tight")
 
-    # --- per-node table ---
     rows = []
     for name, s, e, d in windows:
-        gpu_m, gpu_p = _agg(cols, epoch0, "gpu_util_pct", s, e)
-        cpu_m, _ = _agg(cols, epoch0, "cpu_util_pct", s, e)
-        pw_m, pw_p = _agg(cols, epoch0, "power_w", s, e)
-        vr_m, vr_p = _agg(cols, epoch0, "vram_used_mb", s, e)
-        energy = (pw_m or 0) * d
+        gpu_m, gpu_p = _agg(cols, "gpu_util_pct", s, e)
+        cpu_m, _ = _agg(cols, "cpu_util_pct", s, e)
+        pw_m, pw_p = _agg(cols, "power_w", s, e)
+        _, vr_p = _agg(cols, "vram_used_mb", s, e)
         rows.append({"node": name, "dur_s": round(d, 1),
-                     "gpu_mean_%": _r(gpu_m), "gpu_peak_%": _r(gpu_p),
-                     "cpu_mean_%": _r(cpu_m), "power_mean_W": _r(pw_m), "power_peak_W": _r(pw_p),
-                     "vram_peak_GB": _r((vr_p or 0) / 1024, 2), "energy_J": _r(energy, 0)})
+                     "gpu_mean_%": _r(gpu_m), "gpu_peak_%": _r(gpu_p), "cpu_mean_%": _r(cpu_m),
+                     "power_mean_W": _r(pw_m), "power_peak_W": _r(pw_p),
+                     "vram_peak_GB": _r((vr_p or 0) / 1024, 2), "energy_J": _r((pw_m or 0) * d, 0)})
 
     csv_out = f"{base}.per_node.csv"
     with open(csv_out, "w", newline="") as f:
@@ -162,8 +205,7 @@ def main() -> int:
         w.writeheader(); w.writerows(rows)
 
     hdr = f"{'node':<26}{'dur':>6}{'GPU%avg':>9}{'GPU%pk':>8}{'CPU%avg':>9}{'W avg':>7}{'W pk':>7}{'VRAMpk':>8}{'energy':>9}"
-    print("\n" + hdr)
-    print("-" * len(hdr))
+    print("\n" + hdr + "\n" + "-" * len(hdr))
     for r in rows:
         print(f"{r['node']:<26}{r['dur_s']:>6}{_s(r['gpu_mean_%']):>9}{_s(r['gpu_peak_%']):>8}"
               f"{_s(r['cpu_mean_%']):>9}{_s(r['power_mean_W']):>7}{_s(r['power_peak_W']):>7}"
