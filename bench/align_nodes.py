@@ -111,6 +111,8 @@ def main() -> int:
     ap.add_argument("--run", default=None, help="result.json run index or experiment_id (default: last)")
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("--title", default="Per-node resource usage — AMD APU")
+    ap.add_argument("--min-node-sec", type=float, default=1.0,
+                    help="hide nodes shorter than this from the chart + table (default 1.0)")
     args = ap.parse_args()
     if not args.trace and not args.result:
         raise SystemExit("give --trace (preferred) or --result")
@@ -121,20 +123,20 @@ def main() -> int:
         raise SystemExit("this CSV has no epoch column — recapture with the current monitor_resources.py")
     epoch0, epochN = epochs[0], epochs[-1]
 
-    subtitle = ""
     if args.trace:
         windows = _windows_from_trace(args.trace, epoch0, epochN)
-        if not windows:
-            raise SystemExit("no trace entries overlap this capture — was the workflow running during it?")
-        subtitle = f"aligned by absolute trace timestamps · {len(windows)} nodes"
+        src = "aligned by absolute trace timestamps"
     else:
         runs = json.loads(open(args.result).read())
         run = _pick_run(runs if isinstance(runs, list) else [runs], args.run)
         windows = _windows_from_result(run)
-        if not windows:
-            raise SystemExit("no node windows in that run")
-        subtitle = (f"run {run.get('experiment_id','?')} · \"{run.get('task_instruction','')}\" · "
-                    f"reconstructed from durations")
+        src = f"run {run.get('experiment_id','?')} — reconstructed from durations"
+    if not windows:
+        raise SystemExit("no node windows overlap this capture — was the workflow running during it?")
+    windows = [w for w in windows if w[3] >= args.min_node_sec]  # drop sub-second noise nodes
+    if not windows:
+        raise SystemExit(f"no nodes ≥ {args.min_node_sec}s")
+    subtitle = f"{src} · {len(windows)} nodes ≥ {args.min_node_sec:g}s"
 
     base = os.path.splitext(args.csv)[0]
     out = args.out or f"{base}.per_node.png"
@@ -145,19 +147,28 @@ def main() -> int:
                          "figure.facecolor": "white", "axes.facecolor": "white"})
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 8.5), sharex=True,
                                         gridspec_kw={"hspace": 0.16})
-    fig.suptitle(args.title, x=0.5, y=0.99, fontsize=14, fontweight="bold")
-    fig.text(0.5, 0.955, subtitle, ha="center", fontsize=9, color=MUTED)
+    fig.subplots_adjust(top=0.85)
+    fig.suptitle(args.title, x=0.5, y=0.995, fontsize=14, fontweight="bold")
+    fig.text(0.5, 0.945, subtitle, ha="center", fontsize=9, color=MUTED)
 
-    def band(ax, labels=False):
-        for i, (name, s, e, d) in enumerate(windows):
+    def _disp(n):
+        return n.replace("get_item_info_no_sam3d", "get_item_info").replace("update_item_info_2", "update_item")
+
+    # numbered legend under the subtitle — the chart carries only the numbers, so labels
+    # never collide however many/short the nodes are.
+    legend = "    ".join(f"{i}·{_disp(n)}" for i, (n, *_) in enumerate(windows, 1))
+    fig.text(0.5, 0.925, legend, ha="center", fontsize=8, color=MUTED, wrap=True)
+
+    def band(ax, numbers=False):
+        for i, (name, s, e, d) in enumerate(windows, 1):
             rs, re = s - epoch0, e - epoch0
-            ax.axvspan(rs, re, color=(GRID if i % 2 == 0 else "#f1f5f9"), alpha=0.7, lw=0)
-            if labels:
-                ax.axvline(rs, color="#cbd5e1", lw=0.6)
-                ax.text((rs + re) / 2, 104, name, rotation=45, ha="left", va="bottom",
-                        fontsize=7.5, color=MUTED)
+            ax.axvspan(rs, re, color=(GRID if i % 2 else "#f1f5f9"), alpha=0.7, lw=0)
+            if numbers:
+                ax.axvline(rs, color="#cbd5e1", lw=0.5)
+                ax.text((rs + re) / 2, 102, str(i), ha="center", va="bottom",
+                        fontsize=8.5, fontweight="bold", color=MUTED)
 
-    band(ax1, labels=True)
+    band(ax1, numbers=True)
     for name, c, lab in (("gpu_util_pct", C_GPU, "GPU"), ("cpu_util_pct", C_CPU, "CPU")):
         t, y = _series(cols, name)
         ax1.plot(t, y, color=c, linewidth=1.8, label=lab)
@@ -194,22 +205,25 @@ def main() -> int:
         cpu_m, _ = _agg(cols, "cpu_util_pct", s, e)
         pw_m, pw_p = _agg(cols, "power_w", s, e)
         _, vr_p = _agg(cols, "vram_used_mb", s, e)
+        _, ram_p = _agg(cols, "ram_used_mb", s, e)
         rows.append({"node": name, "dur_s": round(d, 1),
                      "gpu_mean_%": _r(gpu_m), "gpu_peak_%": _r(gpu_p), "cpu_mean_%": _r(cpu_m),
                      "power_mean_W": _r(pw_m), "power_peak_W": _r(pw_p),
-                     "vram_peak_GB": _r((vr_p or 0) / 1024, 2), "energy_J": _r((pw_m or 0) * d, 0)})
+                     "vram_peak_GB": _r((vr_p or 0) / 1024, 2), "ram_peak_GB": _r((ram_p or 0) / 1024, 2),
+                     "energy_J": _r((pw_m or 0) * d, 0)})
 
     csv_out = f"{base}.per_node.csv"
     with open(csv_out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader(); w.writerows(rows)
 
-    hdr = f"{'node':<26}{'dur':>6}{'GPU%avg':>9}{'GPU%pk':>8}{'CPU%avg':>9}{'W avg':>7}{'W pk':>7}{'VRAMpk':>8}{'energy':>9}"
+    hdr = (f"{'node':<26}{'dur':>6}{'GPU%avg':>9}{'GPU%pk':>8}{'CPU%avg':>9}{'W avg':>7}{'W pk':>7}"
+           f"{'VRAMpk':>8}{'RAMpk':>8}{'energy':>9}")
     print("\n" + hdr + "\n" + "-" * len(hdr))
     for r in rows:
         print(f"{r['node']:<26}{r['dur_s']:>6}{_s(r['gpu_mean_%']):>9}{_s(r['gpu_peak_%']):>8}"
               f"{_s(r['cpu_mean_%']):>9}{_s(r['power_mean_W']):>7}{_s(r['power_peak_W']):>7}"
-              f"{_s(r['vram_peak_GB']):>8}{_s(r['energy_J']):>9}")
+              f"{_s(r['vram_peak_GB']):>8}{_s(r['ram_peak_GB']):>8}{_s(r['energy_J']):>9}")
     print(f"\nwrote {out}\nwrote {csv_out}")
     return 0
 
