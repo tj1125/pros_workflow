@@ -70,3 +70,6 @@ build/
 # --- OtherServer scratch copy: model weights + caches ---
 OtherServer/pros_workflow/models/
 OtherServer/pros_workflow/.cache/
+
+# bench capture outputs (keep the tools, not the raw runs)
+bench/results/

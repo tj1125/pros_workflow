@@ -6,22 +6,34 @@ energy per run** — then render it as one at-a-glance figure. Pure stdlib for s
 matplotlib only for the plot. NPU (XDNA2) is reported as 0 % because this pipeline does
 not use it (roadmap item).
 
-## Capture a run
+## Capture a full run (recommended)
+
+`record.sh` records the **whole machine for the entire task** — system-wide, so it covers
+the workflow, A2A servers and Ollama together — then plots automatically. Start it,
+trigger your task, press Enter when the task finishes:
 
 ```bash
-# A) monitor while you run the task in another terminal; Ctrl+C to stop:
-python bench/monitor_resources.py -o results/grasp_run1
-
-# B) wrap a command — monitors until it exits:
-python bench/monitor_resources.py -o results/grasp_run1 \
-    --command "python -m grasp_agent" --label "grasp :8007"
-
-# C) fixed duration:
-python bench/monitor_resources.py -o results/grasp_run1 --duration 120
+bash bench/record.sh grasp_full "Full grasp task — AMD Strix Halo"
+# -> monitoring… run the task… press Enter to stop
+# writes bench/results/grasp_full.{csv,summary.json,png}
 ```
 
-Writes `grasp_run1.csv` (one row per sample) and `grasp_run1.summary.json` (peaks / means
-/ energy). Prints a peak/efficiency table on stop.
+### Other capture modes (`monitor_resources.py` directly)
+
+```bash
+# A) background start / stop by killing it (record.sh wraps this):
+python bench/monitor_resources.py -o results/run1 &
+MON=$!;  # ... run the task ...  ;  kill $MON
+
+# B) wrap a single command — monitors until it exits:
+python bench/monitor_resources.py -o results/run1 --command "python -m grasp_agent"
+
+# C) fixed duration:
+python bench/monitor_resources.py -o results/run1 --duration 120
+```
+
+Writes `<out>.csv` (one row per sample) and `<out>.summary.json` (peaks / means / energy).
+Prints a peak/efficiency table on stop.
 
 ## Plot
 
