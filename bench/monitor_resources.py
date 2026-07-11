@@ -118,7 +118,9 @@ def main() -> int:
     signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
 
     csv_path = f"{args.out}.csv"
-    cols = ["t_sec", "wall", "gpu_util_pct", "vram_used_mb", "gtt_used_mb", "power_w", "cpu_util_pct", "ram_used_mb"]
+    # `epoch` (wall-clock seconds) lets a run be aligned to the workflow's per-node
+    # timestamps (result.json started_at + node_latency) — see bench/align_nodes.py.
+    cols = ["t_sec", "epoch", "wall", "gpu_util_pct", "vram_used_mb", "gtt_used_mb", "power_w", "cpu_util_pct", "ram_used_mb"]
     rows: list[list] = []
 
     prev_cpu = _cpu_busy_total()
@@ -155,8 +157,8 @@ def main() -> int:
             prev_p = power_w
             prev_t = now
 
-        rows.append([round(t, 3), time.strftime("%H:%M:%S"), gpu, _r(vram_mb), _r(gtt_mb),
-                     _r(power_w, 2), _r(cpu_pct, 1), _r(ram_mb)])
+        rows.append([round(t, 3), round(time.time(), 3), time.strftime("%H:%M:%S"), gpu,
+                     _r(vram_mb), _r(gtt_mb), _r(power_w, 2), _r(cpu_pct, 1), _r(ram_mb)])
 
         if args.duration and t >= args.duration:
             break

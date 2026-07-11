@@ -44,6 +44,31 @@ python bench/plot_resources.py results/grasp_run1.csv \
 #    time axis, with a headline strip of peak VRAM, avg power, energy, NPU=0%.
 ```
 
+## Per-node breakdown (align to the workflow nodes)
+
+To see the CPU/GPU/power/memory state **during each workflow node**, align the capture
+with the Commander's `result.json`. Each node's window is reconstructed from `started_at`
++ cumulative `node_latency_sec`, matched to the samples by their `epoch` column (both use
+the machine clock). Capture with the current `monitor_resources.py` (it records `epoch`)
+and the workflow run must overlap the capture in time.
+
+```bash
+python bench/align_nodes.py results/grasp_run1.csv \
+    --result workflow/result/result.json          # default: last run in the file
+    --title "Per-node resources — AMD Strix Halo"
+```
+
+Outputs an annotated figure (node bands over the panels) and a per-node table
+(`…​.per_node.csv` + printed), e.g.:
+
+```
+node                         dur  GPU%avg  GPU%pk  CPU%avg  W avg   W pk  VRAMpk   energy
+reason                       8.0     99.9   100.0     16.6  130.9  150.1   21.24   1047.0
+car_grasp                    6.0    100.0   100.0     14.6  129.3  149.1   21.24    776.0
+```
+
+so you can point at, say, `reason_node` and state its GPU %, average watts and energy.
+
 ## What to actually show AMD
 
 Raw latency vs an RTX 3090 is the wrong headline (a small iGPU loses on raw speed). Lead
