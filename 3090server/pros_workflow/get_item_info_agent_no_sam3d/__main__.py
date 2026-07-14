@@ -10,7 +10,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -24,7 +23,7 @@ _AGENT_SERVICES_ROOT = Path(__file__).parent.parent
 if str(_AGENT_SERVICES_ROOT) not in sys.path:
     sys.path.insert(0, str(_AGENT_SERVICES_ROOT))
 
-from tool.runtime.env import load_env
+from tool.runtime.env import load_env, require_env
 
 load_env()  # populate EXTERNAL_IP (and INF_* URLs) from 3090server/pros_workflow/.env
 
@@ -34,7 +33,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PORT = 8006
-EXTERNAL_IP = os.getenv("EXTERNAL_IP", "140.116.82.226")
+EXTERNAL_IP = require_env("EXTERNAL_IP")
 
 agent_card = AgentCard(
     name="Get Item Info Agent No SAM3D",

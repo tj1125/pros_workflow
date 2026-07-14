@@ -35,6 +35,25 @@ def find_project_env() -> Path:
     return SERVER_ROOT / ".env"
 
 
+class MissingConfigError(RuntimeError):
+    """Raised when a required environment variable is not set."""
+
+
+def require_env(name: str) -> str:
+    """Return ``os.environ[name]``, raising if it is unset or blank.
+
+    Call after :func:`load_env`. There is deliberately no fallback: a stale
+    built-in default would silently point an AgentCard at the wrong host.
+    """
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise MissingConfigError(
+            f"{name} is required but not set. Add it to {find_project_env()} "
+            f"or pass it inline: {name}=<value> python -m ..."
+        )
+    return value
+
+
 def _expand(value: str, parsed: dict[str, str]) -> str:
     """Expand ${VAR}/$VAR using os.environ first, then values parsed so far."""
 
