@@ -21,12 +21,9 @@ class BrainDecision(BaseModel):
 
     reasoning: str = Field(description="Short reasoning about the current scene and chosen action")
     call_module: Literal[
-        "nav_agent",
-        "major_nav_node",
-        "grasp_agent",
-        "car_approach_agent",
-        "DONE",
-    ] = Field(description="The agent module to invoke, or DONE if the task is complete")
+        "nav_to_next_candidate_goal_pose",
+        "grasp_pipeline",
+    ] = Field(description="The pipeline to invoke")
     module_params: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -101,26 +98,24 @@ class Brain:
         viewpoint_status = self._current_viewpoint_status(state, current_rank)
 
         text_content = (
-            "## Task\n"
+            "Task\n"
             f"Target: {target_text}\n"
             f"Target instance: {instance_key}\n"
-            f"Done policy: {task.get('done_policy', '') or 'Complete the requested robot task safely.'}\n\n"
-            "## Current State\n"
+            "\nCurrent State\n"
             f"Current viewpoint rank: {current_rank}\n"
             f"Next viewpoint available: {next_rank_available}\n"
             f"Last navigation: arrived={nav_arrived}, message={nav_message or 'none'}\n"
             f"Last grasp: success={grasp_success}, pose_ready={pose_ready}\n"
             f"Last approach: success={approach_success}, phase={approach_phase}, arm_success={arm_success}\n"
             f"Recent failure: {failure_hint or 'none'}\n\n"
-            f"## This Viewpoint (rank {current_rank}) — authoritative for the switch decision\n"
+            f"This Viewpoint (rank {current_rank}) — authoritative for the switch decision\n"
             f"{viewpoint_status}\n\n"
-            "## Current Observation\n"
+            "Current Observation\n"
             f"{observation.get('description', 'Camera image unavailable.')}\n\n"
-            "## Recent Action History (all viewpoints; context only — never switch because a DIFFERENT viewpoint failed)\n"
+            "Recent Action History (all viewpoints; context only — never switch because a DIFFERENT viewpoint failed)\n"
             f"{history_summary}\n\n"
             "Decide the next action. Output exactly one JSON object with this schema:\n"
-            '{"reasoning":"short reason","call_module":"major_nav_node|grasp_agent|car_approach_agent|DONE","module_params":{}}\n'
-            "Use DONE only when the task success criteria and done policy are satisfied."
+            '{"reasoning":"short reason","call_module":"nav_to_next_candidate_goal_pose|grasp_pipeline","module_params":{}}'
         )
 
         image_b64 = ""

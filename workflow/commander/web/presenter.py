@@ -69,11 +69,9 @@ def _progress_message_from_update(
     if node_name == "reason_node":
         decision = state_update.get("decision", merged_state.get("decision", {})) or {}
         module = str(decision.get("call_module", "") or "")
-        if module == "DONE":
-            return "已完成推理，任務達成結束條件。接下來返回 home。"
-        if module in {"nav_agent", "major_nav_agent", "major_nav_node"}:
+        if module == "nav_to_next_candidate_goal_pose":
             return "已完成推理，決定調整導航位置。接下來準備下一個導航候選點。"
-        if module in {"grasp_agent", "approach_agent", "car_approach_agent"}:
+        if module == "grasp_pipeline":
             return "已完成推理，決定進入抓取/靠近流程。接下來更新目標資訊。"
         return "已完成推理。接下來依照模型決策執行下一個節點。"
 

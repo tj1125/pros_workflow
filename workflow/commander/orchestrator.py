@@ -160,7 +160,7 @@ class Orchestrator(ChatFlowMixin, PickFlowMixin):
         workflow.add_conditional_edges(
             "reason_node",
             self._route_decision,
-            {"major_nav_node": "update_item_info_1_node", "car_grasp_node": "update_item_info_2_node", "end": "nav_home_node"},
+            {"major_nav_node": "update_item_info_1_node", "car_grasp_node": "update_item_info_2_node"},
         )
         workflow.add_conditional_edges(
             "update_item_info_1_node",

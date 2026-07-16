@@ -143,7 +143,7 @@ class PickFlowMixin:
             normalized_task=normalized_task,
             task_type="pick_and_place",
             success_criteria=["目標物已被抓取", "手臂與夾爪收尾完成", "任務完成後返回 home"],
-            done_policy="When approach_result.success is true and arm_result.success is true, the task can be marked DONE and routed home.",
+            done_policy="",
         )
         status = "INPUT_RECEIVED"
         print(f"\n任務已確認：{normalized_task}")
@@ -669,7 +669,7 @@ class PickFlowMixin:
         ``_PRE_MOVE_FAILURE_BACKSTOP_LIMIT`` consecutive such failures, force a
         switch — provided another ranked viewpoint exists. Every other case
         (post-movement failures, feasible-looking views) is left to the VLM."""
-        if decision.call_module not in {"grasp_agent", "car_approach_agent"}:
+        if decision.call_module != "grasp_pipeline":
             return decision
         failures = self._consecutive_pre_move_failures_at_viewpoint(state)
         if failures < _PRE_MOVE_FAILURE_BACKSTOP_LIMIT:
@@ -686,7 +686,7 @@ class PickFlowMixin:
                 f"Backstop: {failures} consecutive before-the-car-moves grasp failures at viewpoint "
                 f"rank {current_rank}; switching viewpoint instead of retrying."
             ),
-            call_module="major_nav_node",
+            call_module="nav_to_next_candidate_goal_pose",
             module_params=params,
         )
 
@@ -718,15 +718,14 @@ class PickFlowMixin:
         return False
 
 
-    def _route_decision(self, state: CommanderState) -> Literal["major_nav_node", "car_grasp_node", "end"]:
+    def _route_decision(self, state: CommanderState) -> Literal["major_nav_node", "car_grasp_node"]:
         module = (state.get("decision", {}) or {}).get("call_module", "")
-        if module == "DONE" or state.get("task_complete", False):
-            return "end"
-        if module in {"nav_agent", "major_nav_agent", "major_nav_node"}:
+        if module == "nav_to_next_candidate_goal_pose":
             return "major_nav_node"
-        if module in {"grasp_agent", "approach_agent", "car_approach_agent"}:
-            return "car_grasp_node"
-        return "end"
+        # Fail safe to the grasp pipeline: the VLM is allowed to emit only the
+        # two pipeline names, but an empty or unexpected value must not trigger
+        # navigation to another candidate viewpoint.
+        return "car_grasp_node"
 
     async def _major_nav_node(self, state: CommanderState) -> Dict[str, Any]:
         started = time.time()
@@ -995,4 +994,3 @@ class PickFlowMixin:
             return json.loads(stdout.decode().strip() or "{}")
         except json.JSONDecodeError:
             return {"success": False, "plan_ready": False, "message": "Invalid nav_move_runner output", "events": []}
-
