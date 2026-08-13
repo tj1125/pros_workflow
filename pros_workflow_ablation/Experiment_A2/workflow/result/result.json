@@ -1,0 +1,320 @@
+[
+  {
+    "experiment_id": "A2_001",
+    "experiment": "A2",
+    "ablation": "ranked_goal_poses_single_nearest",
+    "ablation_description": "remove multi-candidate stand-off + ranking + fail-and-switch; keep only the single goal pose whose docking position is nearest the target in the ROS map XY plane",
+    "mode": "single_nearest_goal_pose",
+    "context_id": "3940166b40a04325891fbb1b9daeacb1",
+    "scene_id": "",
+    "task_instruction": "pick doll",
+    "start_node": "get_item_info_no_sam3d_node",
+    "end_node": "END",
+    "generated_at": "2026-07-07T15:41:16.023383+00:00",
+    "task_success": false,
+    "total_time_from_get_item_info_to_END": 268.2516,
+    "node_sequence": [
+      "get_item_info_no_sam3d_node",
+      "nav_move_node",
+      "observe_node",
+      "reason_node",
+      "update_item_info_2_node",
+      "car_grasp_node",
+      "car_approach_node",
+      "update_memory_node",
+      "observe_node",
+      "reason_node",
+      "update_item_info_2_node",
+      "car_grasp_node",
+      "car_approach_node",
+      "update_memory_node",
+      "observe_node",
+      "reason_node",
+      "update_item_info_1_node",
+      "major_nav_node",
+      "nav_home_node",
+      "goodbye_node",
+      "END"
+    ],
+    "node_latency_sec": {
+      "get_item_info_no_sam3d_node": 12.981,
+      "nav_move_node": 67.1435,
+      "observe_node": 6.5153,
+      "reason_node": 28.5248,
+      "update_item_info_2_node": 1.9596,
+      "car_grasp_node": 10.9559,
+      "car_approach_node": 92.2537,
+      "update_memory_node": 0.0001,
+      "update_item_info_1_node": 0.5087,
+      "major_nav_node": 0.0,
+      "nav_home_node": 47.4073,
+      "goodbye_node": 0.0017
+    },
+    "node_visit_count": {
+      "get_item_info_no_sam3d_node": 1,
+      "nav_move_node": 1,
+      "observe_node": 3,
+      "reason_node": 3,
+      "update_item_info_2_node": 2,
+      "car_grasp_node": 2,
+      "car_approach_node": 2,
+      "update_memory_node": 2,
+      "update_item_info_1_node": 1,
+      "major_nav_node": 1,
+      "nav_home_node": 1,
+      "goodbye_node": 1
+    },
+    "reason_actions": [
+      "car_approach_agent",
+      "car_approach_agent",
+      "major_nav_node"
+    ],
+    "ranked_goal_count": 1,
+    "tried_goal_count": 1,
+    "success_goal_rank": null,
+    "vlm_latency_sec": 28.5245,
+    "a2a_latency_sec": {
+      "get_item_info_agent": 12.981,
+      "grasp_agent": 10.9559
+    },
+    "nav_success": true,
+    "nav_time_sec": 67.1435,
+    "memory_update_count": 2,
+    "ablation_selection": {
+      "variable": "ranked_goal_poses",
+      "mode": "single_nearest_goal_pose",
+      "env_flag": "ABLATION_SINGLE_NEAREST_GOAL",
+      "single_nearest_goal": true,
+      "perception_group_count": 4,
+      "selection_metric": "min_euclidean_docking_to_target_ros_map_xy",
+      "applied": true,
+      "selected_perception_rank": 4,
+      "selected_orientation_group": 7,
+      "selected_distance_m": 0.5893,
+      "selected_best_goal_pose_ros_map": [
+        -4.416764705844281,
+        4.171071096499663
+      ],
+      "selected_best_confidence": 0.18261778354644775,
+      "dropped_group_count": 3
+    },
+    "grasp_success": true,
+    "grasp_pose_ready": true,
+    "grasp_candidate_count": {
+      "num_candidate_grasps": 18,
+      "num_valid_grasps": 18
+    },
+    "approach_success": false,
+    "arm_success": false,
+    "final_status": "APPROACH_FAILED",
+    "failure_reason": "arm_failed"
+  },
+  {
+    "experiment_id": "A2_002",
+    "experiment": "A2",
+    "ablation": "ranked_goal_poses_full_baseline",
+    "ablation_description": "remove multi-candidate stand-off + ranking + fail-and-switch; keep only the single goal pose whose docking position is nearest the target in the ROS map XY plane",
+    "mode": "full_ranked_candidates",
+    "context_id": "3ed948324786486a82da34c1683d4847",
+    "scene_id": "",
+    "task_instruction": "pick doll",
+    "start_node": "get_item_info_no_sam3d_node",
+    "end_node": "END",
+    "generated_at": "2026-07-07T16:27:21.989364+00:00",
+    "task_success": false,
+    "total_time_from_get_item_info_to_END": 10.5426,
+    "node_sequence": [
+      "get_item_info_no_sam3d_node",
+      "nav_home_node",
+      "goodbye_node",
+      "END"
+    ],
+    "node_latency_sec": {
+      "get_item_info_no_sam3d_node": 1.9005,
+      "nav_home_node": 8.6404,
+      "goodbye_node": 0.0017
+    },
+    "node_visit_count": {
+      "get_item_info_no_sam3d_node": 1,
+      "nav_home_node": 1,
+      "goodbye_node": 1
+    },
+    "reason_actions": [],
+    "ranked_goal_count": 0,
+    "tried_goal_count": 0,
+    "success_goal_rank": null,
+    "vlm_latency_sec": 0.0,
+    "a2a_latency_sec": {
+      "get_item_info_agent": 1.9005,
+      "grasp_agent": 0.0
+    },
+    "nav_success": false,
+    "nav_time_sec": 0.0,
+    "memory_update_count": 0,
+    "ablation_selection": {
+      "variable": "ranked_goal_poses",
+      "mode": "full_ranked_candidates",
+      "env_flag": "ABLATION_SINGLE_NEAREST_GOAL"
+    },
+    "grasp_success": null,
+    "grasp_pose_ready": null,
+    "grasp_candidate_count": {
+      "num_candidate_grasps": null,
+      "num_valid_grasps": null
+    },
+    "approach_success": null,
+    "arm_success": null,
+    "final_status": "ITEM_INFO_FAILED",
+    "failure_reason": "item_info_failed"
+  },
+  {
+    "experiment_id": "A2_003",
+    "experiment": "A2",
+    "ablation": "ranked_goal_poses_single_nearest",
+    "ablation_description": "remove multi-candidate stand-off + ranking + fail-and-switch; keep only the single goal pose whose docking position is nearest the target in the ROS map XY plane",
+    "mode": "single_nearest_goal_pose",
+    "context_id": "3ed948324786486a82da34c1683d4847",
+    "scene_id": "",
+    "task_instruction": "pick doll",
+    "start_node": "get_item_info_no_sam3d_node",
+    "end_node": "END",
+    "generated_at": "2026-07-07T16:28:16.872467+00:00",
+    "task_success": false,
+    "total_time_from_get_item_info_to_END": 23.6357,
+    "node_sequence": [
+      "get_item_info_no_sam3d_node",
+      "nav_move_node",
+      "observe_node",
+      "END"
+    ],
+    "node_latency_sec": {
+      "get_item_info_no_sam3d_node": 12.4831,
+      "nav_move_node": 9.0458,
+      "observe_node": 2.1068
+    },
+    "node_visit_count": {
+      "get_item_info_no_sam3d_node": 1,
+      "nav_move_node": 1,
+      "observe_node": 1
+    },
+    "reason_actions": [],
+    "ranked_goal_count": 1,
+    "tried_goal_count": 1,
+    "success_goal_rank": null,
+    "vlm_latency_sec": 0.0,
+    "a2a_latency_sec": {
+      "get_item_info_agent": 12.4831,
+      "grasp_agent": 0.0
+    },
+    "nav_success": false,
+    "nav_time_sec": 9.0458,
+    "memory_update_count": 0,
+    "ablation_selection": {
+      "variable": "ranked_goal_poses",
+      "mode": "single_nearest_goal_pose",
+      "env_flag": "ABLATION_SINGLE_NEAREST_GOAL",
+      "single_nearest_goal": true,
+      "perception_group_count": 4,
+      "selection_metric": "min_euclidean_docking_to_target_ros_map_xy",
+      "applied": true,
+      "selected_perception_rank": 4,
+      "selected_orientation_group": 8,
+      "selected_distance_m": 0.6319,
+      "selected_best_goal_pose_ros_map": [
+        -4.57372238414529,
+        4.4148924146671025
+      ],
+      "selected_best_confidence": 0.5086089372634888,
+      "dropped_group_count": 3
+    },
+    "grasp_success": null,
+    "grasp_pose_ready": null,
+    "grasp_candidate_count": {
+      "num_candidate_grasps": null,
+      "num_valid_grasps": null
+    },
+    "approach_success": null,
+    "arm_success": null,
+    "final_status": "NAV_FAILED",
+    "failure_reason": "navigation_failed"
+  },
+  {
+    "experiment_id": "A2_004",
+    "experiment": "A2",
+    "ablation": "ranked_goal_poses_single_nearest",
+    "ablation_description": "remove multi-candidate stand-off + ranking + fail-and-switch; keep only the single goal pose whose docking position is nearest the target in the ROS map XY plane",
+    "mode": "single_nearest_goal_pose",
+    "context_id": "e940e8449ac54c64abf8a5bbf7be442a",
+    "scene_id": "",
+    "task_instruction": "pick doll",
+    "start_node": "get_item_info_no_sam3d_node",
+    "end_node": "END",
+    "generated_at": "2026-07-07T16:30:15.640996+00:00",
+    "task_success": false,
+    "total_time_from_get_item_info_to_END": 78.3816,
+    "node_sequence": [
+      "get_item_info_no_sam3d_node",
+      "nav_move_node",
+      "observe_node",
+      "reason_node",
+      "update_item_info_2_node",
+      "END"
+    ],
+    "node_latency_sec": {
+      "get_item_info_no_sam3d_node": 7.6247,
+      "nav_move_node": 56.1775,
+      "observe_node": 1.0692,
+      "reason_node": 8.7607,
+      "update_item_info_2_node": 4.7495
+    },
+    "node_visit_count": {
+      "get_item_info_no_sam3d_node": 1,
+      "nav_move_node": 1,
+      "observe_node": 1,
+      "reason_node": 1,
+      "update_item_info_2_node": 1
+    },
+    "reason_actions": [
+      "car_approach_agent"
+    ],
+    "ranked_goal_count": 1,
+    "tried_goal_count": 1,
+    "success_goal_rank": null,
+    "vlm_latency_sec": 8.7607,
+    "a2a_latency_sec": {
+      "get_item_info_agent": 7.6247,
+      "grasp_agent": 0.0
+    },
+    "nav_success": true,
+    "nav_time_sec": 56.1775,
+    "memory_update_count": 0,
+    "ablation_selection": {
+      "variable": "ranked_goal_poses",
+      "mode": "single_nearest_goal_pose",
+      "env_flag": "ABLATION_SINGLE_NEAREST_GOAL",
+      "single_nearest_goal": true,
+      "perception_group_count": 4,
+      "selection_metric": "min_euclidean_docking_to_target_ros_map_xy",
+      "applied": true,
+      "selected_perception_rank": 4,
+      "selected_orientation_group": 7,
+      "selected_distance_m": 0.65,
+      "selected_best_goal_pose_ros_map": [
+        -4.321280220071236,
+        4.0749564567215355
+      ],
+      "selected_best_confidence": 0.650612473487854,
+      "dropped_group_count": 3
+    },
+    "grasp_success": null,
+    "grasp_pose_ready": null,
+    "grasp_candidate_count": {
+      "num_candidate_grasps": null,
+      "num_valid_grasps": null
+    },
+    "approach_success": null,
+    "arm_success": null,
+    "final_status": "FAILED",
+    "failure_reason": "unknown"
+  }
+]

@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>workflow_bringup</name>
+  <version>0.0.0</version>
+  <description>Bring up the VLM_RL ROS runtime stack.</description>
+  <maintainer email="vlm@project.local">VLM Team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>arm_control_pkg</exec_depend>
+  <exec_depend>car_control_pkg</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav_goal_bridge_pkg</exec_depend>
+  <exec_depend>rosbridge_server</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

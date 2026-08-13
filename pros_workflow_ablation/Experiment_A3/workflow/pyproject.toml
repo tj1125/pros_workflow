@@ -1,0 +1,43 @@
+[project]
+name = "vlm-rl-grasp-system"
+version = "1.0.0"
+description = "Multi-agent active perception grasping system using LangGraph and A2A protocol"
+readme = { text = "VLM_RL workflow runtime", content-type = "text/markdown" }
+requires-python = ">=3.10, <3.14"
+dependencies = [
+    # A2A SDK
+    "a2a-sdk==0.3.0",
+    # LangGraph + LangChain
+    "langgraph>=0.3.18",
+    "langchain-core>=0.3.0",
+    "langchain-google-genai>=2.0.10",
+    "langchain-openai>=0.1.0",
+    # HTTP client (for A2A Client calls to RTX 3090)
+    "httpx>=0.28.1",
+    # Async / server
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.2",
+    "starlette>=0.46.2",
+    "sse-starlette>=2.3.6",
+    # CLI
+    "click>=8.1.8",
+    # Data validation
+    "pydantic>=2.10.6",
+    # Environment
+    "python-dotenv>=1.1.0",
+    "PyYAML>=6.0.1",
+    # ROS / Rosbridge WebSocket client (for Unity integration)
+    "websockets>=12.0",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+]
+
+[project.scripts]
+vlm-rl = "main:main"
+vlm-rl-web = "web_main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["commander", "agents"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

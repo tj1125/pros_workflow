@@ -1,0 +1,32 @@
+camera:
+  camera_name: "Camera_Car"
+  intrinsics_path: "../data/camera_parameter/Intrinsics/Camera_Car.yaml"
+
+models:
+  yolo_weights: "../../models/yolov26/yolov26_best.pt"
+  sam_seg_checkpoint: "../../models/segmentation/sam_vit_b_01ec64.pth"
+  graspgen_root: "../../get_item_info_agent/vendor/graspgen_runtime"
+  gripper_config: "../../models/graspgen_checkpoints/graspgen_robotiq_2f_140.yml"
+
+runtime:
+  device: "cuda"
+  sam_model_type: "vit_b"
+  depth_scale: 1000.0
+  yolo_conf_threshold: 0.25
+  min_depth_m: 0.19
+  max_depth_m: 3.0
+  # Mirror depth-derived camera points so camera +X becomes -X before grasp inference.
+  mirror_depth_camera_x: true
+  object_point_stride: 1
+  scene_point_stride: 4
+  object_voxel_size_m: 0.002
+  scene_voxel_size_m: 0.01
+  grasp_threshold: -1.0
+  num_grasps: 800
+  topk_num_grasps: 400
+  gripper_midpoint_camera_xyz: [0.0, -0.0824, 0.023]
+  max_grasp_local_z: 0.03
+  max_grasp_pitch_deg: 45.0
+  collision_threshold: 0.002
+  max_collision_scene_points: 8192
+  num_collision_samples: 2000

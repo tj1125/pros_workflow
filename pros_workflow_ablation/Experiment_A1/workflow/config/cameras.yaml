@@ -1,0 +1,23 @@
+# cameras.yaml — Unity scene camera registry
+# Add or remove cameras here without changing code.
+
+cameras:
+  - name: Camera_Car        # mounted on the robot car (forward-facing)
+    description: 車上手臂第一人稱視角前視相機
+    role: car
+  - name: Camera_Room1_12   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機12
+    role: room
+    rgb_topic: /camera_room1_12/color/image_raw/compressed
+  - name: Camera_Room1_13   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機13
+    role: room
+    rgb_topic: /camera_room1_13/color/image_raw/compressed
+  - name: Camera_Room1_14   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機14
+    role: room
+    rgb_topic: /camera_room1_14/color/image_raw/compressed
+  - name: Camera_Room1_15   # fixed overhead camera covering the whole room
+    description: 客廳全視角俯瞰相機15
+    role: room
+    rgb_topic: /camera_room1_15/color/image_raw/compressed

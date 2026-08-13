@@ -1,0 +1,26 @@
+image_width: 1280
+image_height: 720
+camera_name: Camera_Room1_1
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [676.08365,   0.     , 638.9498 ,
+           0.     , 675.9607 , 359.66894,
+           0.     ,   0.     ,   1.     ]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.000858, -0.000863, -0.000053, 0.000339, 0.000000]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1., 0., 0.,
+         0., 1., 0.,
+         0., 0., 1.]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [674.56433,   0.     , 639.06611,   0.     ,
+           0.     , 674.86597, 359.13674,   0.     ,
+           0.     ,   0.     ,   1.     ,   0.     ]

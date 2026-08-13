@@ -1,0 +1,239 @@
+[
+  {
+    "experiment_id": "A3_001",
+    "experiment": "A3",
+    "ablation": "no_item_info_fixed_offset_feasible_goals",
+    "ablation_description": "remove object size / yaw / grasp-direction grouping / ranked goal poses; push a fixed stand-off (default 0.6 m) out from the target center in 8 directions and keep only the points with no black/occupied cell within the robot radius (default 0.25 m) on the ROS keepout map (white+gray allowed; infeasible directions dropped)",
+    "mode": "fixed_distance_no_item_info",
+    "context_id": "f2318301c89a4465bec222d6ece572d6",
+    "scene_id": "",
+    "task_instruction": "pick cup",
+    "start_node": "get_item_info_no_sam3d_node",
+    "end_node": "END",
+    "generated_at": "2026-07-07T15:12:51.938784+00:00",
+    "task_success": false,
+    "total_time_from_get_item_info_to_END": 93.4377,
+    "node_sequence": [
+      "get_item_info_no_sam3d_node",
+      "nav_move_node",
+      "observe_node",
+      "reason_node",
+      "update_item_info_1_node",
+      "major_nav_node",
+      "nav_home_node",
+      "goodbye_node"
+    ],
+    "node_latency_sec": {
+      "get_item_info_no_sam3d_node": 0.3401,
+      "nav_move_node": 59.4783,
+      "observe_node": 11.0261,
+      "reason_node": 8.211,
+      "update_item_info_1_node": 5.8072,
+      "major_nav_node": 0.0,
+      "nav_home_node": 8.5736,
+      "goodbye_node": 0.0014
+    },
+    "node_visit_count": {
+      "get_item_info_no_sam3d_node": 1,
+      "nav_move_node": 1,
+      "observe_node": 1,
+      "reason_node": 1,
+      "update_item_info_1_node": 1,
+      "major_nav_node": 1,
+      "nav_home_node": 1,
+      "goodbye_node": 1
+    },
+    "reason_actions": [
+      "major_nav_node"
+    ],
+    "ranked_goal_count": 1,
+    "tried_goal_count": 1,
+    "success_goal_rank": null,
+    "vlm_latency_sec": 8.211,
+    "a2a_latency_sec": {},
+    "nav_success": false,
+    "nav_time_sec": 59.4783,
+    "memory_update_count": 0,
+    "goal_pose_mode": "ablation_fixed_offset",
+    "ablation_goal_settings": {
+      "mode": "fixed_offset",
+      "directions": 8,
+      "start_deg": 0.0,
+      "distance_m": 0.6,
+      "robot_radius_m": 0.25,
+      "black_threshold": 50,
+      "sector_centroid_r_min_m": 0.4,
+      "sector_centroid_r_max_m": 1.5
+    },
+    "grasp_success": false,
+    "grasp_pose_ready": false,
+    "grasp_candidate_count": {
+      "num_candidate_grasps": null,
+      "num_valid_grasps": null
+    },
+    "approach_success": false,
+    "arm_success": false,
+    "final_status": "FAILED",
+    "failure_reason": "navigation failed"
+  },
+  {
+    "experiment_id": "A3_002",
+    "experiment": "A3",
+    "ablation": "no_item_info_fixed_offset_feasible_goals",
+    "ablation_description": "remove object size / yaw / grasp-direction grouping / ranked goal poses; push a fixed stand-off (default 0.6 m) out from the target center in 8 directions and keep only the points with no black/occupied cell within the robot radius (default 0.25 m) on the ROS keepout map (white+gray allowed; infeasible directions dropped)",
+    "mode": "fixed_distance_no_item_info",
+    "context_id": "6156962c0f73415bb5230bf1394b39fc",
+    "scene_id": "",
+    "task_instruction": "pick doll",
+    "start_node": "get_item_info_no_sam3d_node",
+    "end_node": "END",
+    "generated_at": "2026-07-07T15:32:27.733196+00:00",
+    "task_success": false,
+    "total_time_from_get_item_info_to_END": 123.8053,
+    "node_sequence": [
+      "get_item_info_no_sam3d_node",
+      "nav_move_node",
+      "observe_node",
+      "reason_node",
+      "update_item_info_2_node",
+      "car_grasp_node",
+      "car_approach_node",
+      "update_memory_node"
+    ],
+    "node_latency_sec": {
+      "get_item_info_no_sam3d_node": 0.2873,
+      "nav_move_node": 63.8906,
+      "observe_node": 0.8821,
+      "reason_node": 10.5354,
+      "update_item_info_2_node": 0.4901,
+      "car_grasp_node": 10.2875,
+      "car_approach_node": 37.4323,
+      "update_memory_node": 0.0
+    },
+    "node_visit_count": {
+      "get_item_info_no_sam3d_node": 1,
+      "nav_move_node": 1,
+      "observe_node": 1,
+      "reason_node": 1,
+      "update_item_info_2_node": 1,
+      "car_grasp_node": 1,
+      "car_approach_node": 1,
+      "update_memory_node": 1
+    },
+    "reason_actions": [
+      "car_approach_agent"
+    ],
+    "ranked_goal_count": 3,
+    "tried_goal_count": 1,
+    "success_goal_rank": null,
+    "vlm_latency_sec": 10.5354,
+    "a2a_latency_sec": {
+      "grasp_agent": 10.2875,
+      "car_approach_agent": 37.4323
+    },
+    "nav_success": true,
+    "nav_time_sec": 63.8906,
+    "memory_update_count": 1,
+    "goal_pose_mode": "ablation_fixed_offset",
+    "ablation_goal_settings": {
+      "mode": "fixed_offset",
+      "directions": 8,
+      "start_deg": 0.0,
+      "distance_m": 0.6,
+      "robot_radius_m": 0.25,
+      "black_threshold": 50,
+      "sector_centroid_r_min_m": 0.4,
+      "sector_centroid_r_max_m": 1.5
+    },
+    "grasp_success": true,
+    "grasp_pose_ready": true,
+    "grasp_candidate_count": {
+      "num_candidate_grasps": 53,
+      "num_valid_grasps": 53
+    },
+    "approach_success": false,
+    "arm_success": false,
+    "final_status": "FAILED",
+    "failure_reason": "approach failed (subprocess_failed)"
+  },
+  {
+    "experiment_id": "A3_003",
+    "experiment": "A3",
+    "ablation": "no_item_info_fixed_offset_feasible_goals",
+    "ablation_description": "remove object size / yaw / grasp-direction grouping / ranked goal poses; push a fixed stand-off (default 0.6 m) out from the target center in 8 directions and keep only the points with no black/occupied cell within the robot radius (default 0.25 m) on the ROS keepout map (white+gray allowed; infeasible directions dropped)",
+    "mode": "fixed_distance_no_item_info",
+    "context_id": "4a449fd607e4485c9249b8077130f145",
+    "scene_id": "",
+    "task_instruction": "pick apple",
+    "start_node": "get_item_info_no_sam3d_node",
+    "end_node": "END",
+    "generated_at": "2026-07-07T15:35:28.323167+00:00",
+    "task_success": false,
+    "total_time_from_get_item_info_to_END": 132.2053,
+    "node_sequence": [
+      "get_item_info_no_sam3d_node",
+      "nav_move_node",
+      "observe_node",
+      "reason_node",
+      "update_item_info_2_node",
+      "car_grasp_node",
+      "car_approach_node",
+      "update_memory_node"
+    ],
+    "node_latency_sec": {
+      "get_item_info_no_sam3d_node": 0.3347,
+      "nav_move_node": 61.7898,
+      "observe_node": 3.1405,
+      "reason_node": 8.7456,
+      "update_item_info_2_node": 2.8981,
+      "car_grasp_node": 6.3079,
+      "car_approach_node": 48.9887,
+      "update_memory_node": 0.0
+    },
+    "node_visit_count": {
+      "get_item_info_no_sam3d_node": 1,
+      "nav_move_node": 1,
+      "observe_node": 1,
+      "reason_node": 1,
+      "update_item_info_2_node": 1,
+      "car_grasp_node": 1,
+      "car_approach_node": 1,
+      "update_memory_node": 1
+    },
+    "reason_actions": [
+      "car_approach_agent"
+    ],
+    "ranked_goal_count": 3,
+    "tried_goal_count": 1,
+    "success_goal_rank": null,
+    "vlm_latency_sec": 8.7456,
+    "a2a_latency_sec": {
+      "grasp_agent": 6.3079,
+      "car_approach_agent": 48.9887
+    },
+    "nav_success": true,
+    "nav_time_sec": 61.7898,
+    "memory_update_count": 1,
+    "goal_pose_mode": "ablation_fixed_offset",
+    "ablation_goal_settings": {
+      "mode": "fixed_offset",
+      "directions": 8,
+      "start_deg": 0.0,
+      "distance_m": 0.6,
+      "robot_radius_m": 0.25,
+      "black_threshold": 50,
+      "sector_centroid_r_min_m": 0.4,
+      "sector_centroid_r_max_m": 1.5
+    },
+    "grasp_success": true,
+    "grasp_pose_ready": true,
+    "grasp_candidate_count": {
+      "num_candidate_grasps": 72,
+      "num_valid_grasps": 72
+    },
+    "approach_success": false,
+    "arm_success": false,
+    "final_status": "FAILED",
+    "failure_reason": "approach failed (subprocess_failed)"
+  }
+]

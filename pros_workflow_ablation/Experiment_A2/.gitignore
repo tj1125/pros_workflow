@@ -1,0 +1,49 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv_linux/
+logs/
+*.jsonl
+*.log
+.venv/
+dist/
+*.egg-info/
+=*
+
+# Local thesis draft
+thesis/
+
+# LaTeX build artifacts
+thesis/*.aux
+thesis/*.fdb_latexmk
+thesis/*.fls
+thesis/*.log
+thesis/*.out
+thesis/*.pdf
+thesis/*.synctex.gz
+thesis/*.toc
+thesis/*.xdv
+
+# Ignore server-level models
+3090server/VLM_RL/models/*
+!3090server/VLM_RL/models/.gitkeep
+
+# 忽略 pre-compiled libraries
+3090server/VLM_RL/get_item_info_agent/vendor/pydeps/
+
+# 忽略大型參考資料夾
+參考用/
+
+# UV 與 macOS 系統檔案
+.uv_python/
+.DS_Store
+.container_env.sh
+
+# Ignore model checkpoints in RL_train
+RL_train/**/checkpoints/
+RL_train/**/*.pt
+RL_train/**/*.pth
+RL_train/**/*.safetensors
+RL_train/**/*.ckpt
+RL_train/**/dinov3/

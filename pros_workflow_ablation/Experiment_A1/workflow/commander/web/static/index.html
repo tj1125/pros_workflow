@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VLM 居家機器人</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="brand-mark">H</span>
+      <strong>VLM 居家機器人</strong>
+    </div>
+    <div class="header-actions">
+      <span class="status-tag">系統運行中 <code id="session">starting...</code></span>
+    </div>
+  </header>
+  <main>
+    <section class="chat">
+      <div class="chat-workspace">
+        <div id="candidate-menu" class="candidate-menu" hidden>
+          <h3>候選照片</h3>
+          <div id="candidate-list" class="candidate-list"></div>
+        </div>
+        <div class="conversation">
+          <div id="messages" class="messages"></div>
+          <div class="input-container">
+            <form id="chat-form">
+              <input id="message-input" autocomplete="off" placeholder="對居家機器人下達指令..." />
+              <button id="send-button" type="submit" aria-label="送出" title="送出">
+                <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 12L20 4L16 20L12 13L4 12Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+	    <aside>
+	      <section class="panel">
+	        <h3>任務流程監控</h3>
+	        <div id="task">準備就緒，等待任務指令。</div>
+	      </section>
+	      <section class="timeline" id="timeline"></section>
+	    </aside>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
