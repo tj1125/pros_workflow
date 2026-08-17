@@ -214,11 +214,15 @@ Thesis for Master of Science Degree\par}
 
 具體而言，從一句自然語言指令到實際機器人動作之間仍有多個未被直接指定的中間步驟。使用者可能只說「幫我拿桌上的杯子」，但機器人必須進一步判斷目標物是哪一個、物體是否在視野內、應導航到哪個位置觀察、手臂是否可達、抓取姿態是否會碰撞，以及失敗時應如何重新嘗試。這些問題同時涉及語意理解、三維幾何、路徑規劃、感測不確定性與低階控制，並非單一模型或單一控制節點即可完整處理。若直接要求 VLM 輸出速度、關節角度或夾爪控制等低階命令，則會面臨控制精度、安全性與物理可行性難以保證的問題；若只採用固定流程，則又難以應對遮擋、目標不在初始視野、導航失敗或抓取不可行等居家場景常見情況。
 
-基於上述限制，本研究的動機是將傳統「單一機器人依固定流程完成任務」的設計，重新表述為「單一機器人由多個專責代理人共同協作完成任務」。在此觀點下，機器人仍是執行服務的實體，但其能力被拆解為多個功能明確的 agents，例如物體定位與Size Dimension 估計 agent、導航 agent、抓取姿態生成 agent、車體靠近與手臂控制 agent 等。VLM 不直接控制馬達或關節，而是根據目前任務狀態、觀察結果與歷史紀錄，選擇下一個應被觸發的 agent；需要精確幾何、安全檢查與硬體控制的部分，則交由專門模組處理。此設計使語言模型能發揮語意理解與流程決策能力，同時避免讓其直接承擔連續控制與物理可行性判斷。
+基於上述限制，本研究的動機是將傳統「單一機器人依固定流程完成任務」的設計，重新表述為「單一機器人由多個專責代理人共同協作完成任務」。在此觀點下，機器人仍是執行服務的實體，但其能力被拆解為多個功能明確的 agents。VLM 不直接控制馬達或關節，而是根據目前任務狀態、觀察結果與歷史紀錄選擇下一個應被觸發的 agent；需要精確幾何、安全檢查與硬體控制的部分，則交由專門模組處理。此設計使語言模型能發揮語意理解與流程決策能力，同時避免讓其直接承擔連續控制與物理可行性判斷。
 
-本論文提出一套以 VLM 與代理人架構為核心之居家服務機器人系統，將高階語意理解與低階機器人控制明確解耦。在任務協調層面，本研究使用 LangGraph 維護長任務狀態，使系統能記錄目前目標、導航結果、車載觀察、抓取結果與失敗原因，並在觀察不足或執行失敗時回到合適節點重新估計或切換策略。對於 GraspGen、SAM （Segment Anything Model）與Size Dimension 估計等需要較高算力的推論服務，則透過 A2A（Agent-to-Agent）協議以獨立代理人方式整合，使不同功能模組能獨立部署、呼叫與替換。此外，居家環境中的影像、語音與室內狀態具有高度私密性，因此本研究將 VLM 決策與主要任務流程設計為可於本地端或受控環境中執行，以降低對外部雲端服務的依賴。
+基於此動機，本研究考慮一個居家移動抓取情境：機器人由預先定義的 home pose 出發，而目標物可能位於其初始視野之外。使用者以自然語言指定目標後，系統必須辨識欲操作的物體、選擇可行的觀察與抓取位置、導航至目標附近、執行抓取，並返回 home pose。在執行過程中，機器人可能遭遇目標遮擋、導航誤差、抓取姿態不可行或觀察資訊不足等情況；因此，workflow 必須能重新估計任務狀態，或切換至其他候選視角後再繼續執行。
 
-為具體說明此架構的運作方式，本研究以移動抓取任務作為代表性情境。系統首先透過環境相機取得目標物的全域位置與尺寸資訊，並據此規劃適合觀察與抓取的車體停靠點，使機器人能直接導航至合適位置，避免抵達後反覆調整底盤。當機器人抵達目標附近後，系統進一步啟用車載第一人稱相機進行近距離觀察，由 VLM 判斷當前視角是否足以進入抓取流程，或是否需要切換至其他停靠位置以取得更完整的場景資訊。在抓取流程中，系統結合 GraspGen 候選抓取姿態與 PyBullet 可達性及碰撞檢查，以降低執行時發生碰撞或不可達的風險。機器人控制層基於 ROS2（Robot Operating System 2）實現，並整合 Unity 數位孿生環境進行系統驗證。未來工作將進一步擴充更多居家任務設定，並將此代理人式流程推進至實體環境驗證。
+本論文提出一套以 VLM 與代理人架構為核心之居家服務機器人系統，將高階語意理解與低階機器人控制明確解耦。在任務協調層面，本研究使用 LangGraph 維護長任務狀態，並在觀察不足或執行失敗時支援重新估計與策略切換；需要較高算力的推論服務則以獨立模組整合。考量居家情境的資料私密性，VLM 決策與主要任務流程設計為可於本地端或受控環境中執行，以降低對外部雲端服務的依賴。
+
+為具體說明此架構的運作方式，本研究以移動抓取任務作為代表性情境。系統先根據環境資訊規劃候選停靠點，並在機器人抵達目標附近後，由 VLM 依當前觀察判斷是否進入抓取流程或切換至其他候選位置。機器人控制層基於 ROS2（Robot Operating System 2）實現，並整合 Unity 數位孿生環境進行系統驗證。
+
+實驗結果顯示，在 $200$ 次移動抓取消融實驗中，完整系統達到 $90\%$ 的任務成功率；相較之下，移除 VLM 觀察決策、候選 goal\_pose 排序或物體尺寸估計後，成功率分別下降至 $78\%$、$44\%$ 與 $68\%$。此結果顯示，各功能模組的協同運作能提升整體任務成功率，並支持所提出代理人架構在居家移動抓取任務中的可行性與可靠性。
 
 \section{Related Works}
 
@@ -374,11 +378,27 @@ GraspGen 的另一個重點是 on-generator training。傳統 grasp discriminato
 
 \subsubsection{System Overview}
 
-本章說明本研究如何將使用者的自然語言請求轉換為可執行的移動抓取任務。整體系統建立於 Unity 數位孿生環境中，並以 LangGraph 管理任務流程，以 A2A（Agent-to-Agent）協議整合需要較高運算資源的推論服務。系統將任務拆解為多個具有明確功能的 agents，分別負責任務分類、目標物鎖定、候選導航點產生、導航、VLM 決策、抓取姿態生成、車體接近、手臂執行與執行歷程記錄。部分流程依照預先定義的任務邏輯執行，而在需要根據車載影像與任務狀態判斷下一步行為時，系統則由 VLM 在有限的 agent action set 中選擇下一個應被呼叫的功能模組。ROS2 則位於數位孿生環境與控制流程之間，負責感測器資料傳輸、導航任務執行，以及將控制命令傳送至 Unity 中的車輪與機械手臂，使 agent workflow 的決策能轉換為數位孿生環境中的實際機器人動作。
+本章說明本研究如何將使用者的自然語言請求轉換為可執行的移動抓取任務。整體系統建立於 Unity 數位孿生環境中，並以 LangGraph 管理任務流程，以 A2A（Agent-to-Agent）協議整合需要較高運算資源的推論服務。系統將任務拆解為多個具有明確功能的 agents，分別負責任務分類、目標物鎖定、候選導航點產生、導航、VLM 決策、抓取姿態生成、車體接近、手臂執行與執行歷程記錄。部分流程依照預先定義的任務邏輯執行，而在需要根據車載影像與任務狀態判斷下一步行為時，系統則由 VLM 在有限的 agent action set 中選擇下一個應被呼叫的功能模組。ROS2 則位於數位孿生環境與控制流程之間，負責感測器資料傳輸、導航任務執行，以及將控制命令傳送至 Unity 中的車輪與機械手臂，使 agent workflow 的決策能轉換為數位孿生環境中的實際機器人動作。系統由使用者請求開始，依任務類型分流至一般對話或移動抓取任務；移動抓取任務則經由目標選定、候選停靠點規劃、導航、視角判斷與抓取等步驟完成，其整體流程如圖~\ref{fig:system-workflow} 所示。
+
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=\linewidth]{figure/system/high_level_workflow.png}
+    \caption{系統流程圖。}
+    \label{fig:system-workflow}
+\end{figure}
+
+為呈現各節點與條件路由的細部關係，以 LangGraph 建構之流程如圖~\ref{fig:langgraph-flow} 所示。
+
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=\linewidth]{figure/system/langgraph_flow_new.png}
+    \caption{以 LangGraph 建構之流程圖。}
+    \label{fig:langgraph-flow}
+\end{figure}
 
 為了使機器人能取得整體居家場景資訊，本研究在環境中架設多台環境相機，作為全域感知來源。系統透過這些相機觀察房間中的可抓取物件，並結合 YOLO 偵測結果、相機標定資訊與多視角幾何，估計物體在世界座標中的位置。此設計使機器人即使尚未從車載相機看到目標物，也能先根據環境相機取得目標物的大致位置、Size Dimension 與候選導航點。相對地，安裝於機械手臂上的第一人稱相機則負責近距離觀察。當機器人導航至目標附近後，第一人稱相機會提供當前視角下的即時影像，使 VLM 能判斷目標物是否清楚可見、是否受到遮擋，以及目前位置是否適合進入抓取流程。除此之外，第一人稱相機也能提供更近距離的目標物影像與深度資訊，作為後續目標確認、抓取姿態生成與手臂執行前幾何判斷的重要依據。
 
-整體任務由使用者輸入開始。系統首先透過 task classifier 判斷輸入屬於 general chat 或 specific robot task。若輸入只是一般對話，系統會進入 general chat 分支並產生回覆，不會觸發機器人控制流程；若輸入為具體機器人任務，則進入 pick workflow。進入 pick workflow 後，系統會根據使用者請求與目前場景中的物體資訊鎖定 target instance。若場景中存在多個同類物體，系統需進一步確認使用者欲操作的實際目標，以避免自然語言描述造成的歧義。
+整體任務由使用者輸入開始。系統首先透過 task classifier 判斷輸入屬於 General Chat 或 specific robot task。若輸入只是一般對話，系統會進入 General Chat 分支並產生回覆，不會觸發機器人控制流程；若輸入為具體機器人任務，則進入 Mobile Manipulation workflow。進入 Mobile Manipulation workflow 後，系統會根據使用者請求與目前場景中的物體資訊鎖定 target instance。若場景中存在多個同類物體，系統需進一步確認使用者欲操作的實際目標，以避免自然語言描述造成的歧義。
 
 目標物鎖定後，系統會呼叫 Size Dimension 估計 agent，根據多相機定位結果、目標物影像資訊、Size Dimension、地圖可行性與抓取需求，產生多個可供 Nav2 使用的候選 goal\_poses。這些候選點會被排序為 ranked goal\_poses，使系統能優先嘗試較適合觀察與抓取的位置。當候選 goal\_pose 被選定後，導航模組會透過 ROS2/Nav2 執行移動任務。機器人抵達目標附近後，系統再由第一人稱相機取得近距離觀察，並將影像、導航結果、目標資訊與執行歷程提供給 VLM。VLM 會在有限的 agent action set 中選擇下一步，例如進入抓取姿態生成、切換至下一個導航候選點、執行車體接近與手臂抓取，或結束任務。
 
@@ -388,7 +408,7 @@ GraspGen 的另一個重點是 on-generator training。傳統 grasp discriminato
 \begin{equation}
     c_t=\arg\max_{c\in\{\textsc{General},\textsc{Specific}\}}p_\theta(c\mid u_t,\mathcal{O}),
 \end{equation}
-其中 $\mathcal{O}$ 為目前可抓取物件清單與其別名資訊；若模型或外部服務不可用，系統仍保留以關鍵動詞與物件名稱為基礎的 fallback 判斷。整體 pick workflow 可視為共享任務狀態上的狀態轉移過程，第 $i$ 個 agent 只讀取與自身相關的部分狀態，產生局部更新後寫回共享狀態：
+其中 $\mathcal{O}$ 為目前可抓取物件清單與其別名資訊；若模型或外部服務不可用，系統仍保留以關鍵動詞與物件名稱為基礎的 fallback 判斷。整體 Mobile Manipulation workflow 可視為共享任務狀態上的狀態轉移過程，第 $i$ 個 agent 只讀取與自身相關的部分狀態，產生局部更新後寫回共享狀態：
 \begin{equation}
     s_{t+1}=F_i(s_t)=s_t\oplus \Delta_i, \qquad \Delta_i=f_i(P_i(s_t)),
 \end{equation}
@@ -396,18 +416,18 @@ GraspGen 的另一個重點是 on-generator training。傳統 grasp discriminato
 
 \begin{algorithmblock}{System-level task routing}
 \item Receive the user utterance and append it to the dialogue state.
-\item Classify the utterance as general chat or a specific robot task.
-\item If the utterance is general chat, generate a conversational reply and store the chat turn.
-\item If the utterance is a specific task, resolve the target object and initialize the pick workflow.
-\item During the pick workflow, keep updating the shared task state after every agent execution.
+\item Classify the utterance as General Chat or a specific robot task.
+\item If the utterance is General Chat, generate a conversational reply and store the General Chat turn.
+\item If the utterance is a specific task, resolve the target object and initialize the Mobile Manipulation workflow.
+\item During the Mobile Manipulation workflow, keep updating the shared task state after every agent execution.
 \item Terminate the workflow when the task succeeds, the user exits, or no feasible recovery remains.
 \end{algorithmblock}
 
-此外，系統在輸入端同時支援一般對話與機器人任務：對話開始時由 greeting\_node 向使用者問候並進入等待，使用者輸入後 human\_reply\_node 接收訊息並交由 task\_classification\_node 判斷其屬於 general chat 或 specific robot task。若為一般對話（例如問候、閒聊或詢問系統狀態），系統會進入 general chat 分支，由 ai\_reply\_node 產生自然語言回覆、chat\_memory\_node 記錄該輪對話以維持上下文，再回到 human\_reply\_node 等待下一次輸入，此分支不會觸發物體定位、導航與抓取等機器人控制流程；若使用者結束對話，則由 goodbye\_node 產生結束回覆並結束 session。只有當輸入被判定為 specific robot task 時，系統才會進入下節說明的 pick workflow。
+此外，系統在輸入端同時支援一般對話與機器人任務：對話開始時由 greeting\_node 向使用者問候並進入等待，使用者輸入後 human\_reply\_node 接收訊息並交由 task\_classification\_node 判斷其屬於 General Chat 或 specific robot task。若為一般對話（例如問候、閒聊或詢問系統狀態），系統會進入 General Chat 分支，由 ai\_reply\_node 產生自然語言回覆、chat\_memory\_node 記錄該輪對話以維持上下文，再回到 human\_reply\_node 等待下一次輸入，此分支不會觸發物體定位、導航與抓取等機器人控制流程；若使用者結束對話，則由 goodbye\_node 產生結束回覆並結束 session。只有當輸入被判定為 specific robot task 時，系統才會進入下節說明的 Mobile Manipulation workflow。
 
 \subsubsection{Specific Robot Task}
 
-當 Task Classifier 判斷使用者輸入屬於 specific robot task 時，系統會將該輸入導向機器人任務分支。本研究目前以 pick task 作為主要任務情境，也就是使用者以自然語言要求機器人拿取指定物體。與 general chat 不同，specific robot task 不只是產生文字回覆，而是會啟動後續的 agents workflow，將使用者請求逐步轉換為可由機器人執行的任務流程。
+當 Task Classifier 判斷使用者輸入屬於 specific robot task 時，系統會將該輸入導向機器人任務分支。本研究目前以 Mobile Manipulation task 作為主要任務情境，也就是使用者以自然語言要求機器人拿取指定物體。與 General Chat 不同，specific robot task 不只是產生文字回覆，而是會啟動後續的 agents workflow，將使用者請求逐步轉換為可由機器人執行的任務流程。
 
 進入 specific robot task 後，系統首先會解析使用者請求中的目標描述，並根據目前場景資訊尋找符合需求的目標物。若場景中只有一個符合條件的物體，系統可直接將其作為任務目標；若存在多個同類物體，系統則需進一步確認使用者欲操作的實際目標，以避免自然語言描述造成的歧義。目標確認完成後，workflow 會接續呼叫對應 agents 取得 Size Dimension，並產生可供機器人導航與觀察的候選位置。
 
@@ -457,13 +477,13 @@ Unity 數位孿生環境中的感測資料與控制命令主要透過 ROS2 傳�
 
 \subsection{Agents}
 
-本節說明本研究 pick workflow 中各個自建 agents 的功能與角色，並進一步介紹各 agents 在任務中的具體責任。表~\ref{tab:agent_roles} 摘要本研究使用的主要 agents 與 workflow nodes，後續小節將依照任務執行順序，分別說明各 agents 的設計方式與其在整體移動抓取流程中的作用。
+本節說明本研究 Mobile Manipulation workflow 中各個自建 agents 的功能與角色，並進一步介紹各 agents 在任務中的具體責任。表~\ref{tab:agent_roles} 摘要本研究使用的主要 agents 與 workflow nodes，後續小節將依照任務執行順序，分別說明各 agents 的設計方式與其在整體移動抓取流程中的作用。
 
 \begingroup
 \scriptsize
 \setlength{\tabcolsep}{2pt}
 \begin{longtable}{@{}P{0.26\textwidth}P{0.31\textwidth}P{0.35\textwidth}@{}}
-\caption{Main agents and workflow nodes used in the chat and pick workflows.}\label{tab:agent_roles}\\
+\caption{Main agents and workflow nodes used in the General Chat and Mobile Manipulation workflows.}\label{tab:agent_roles}\\
 \toprule
 Node & Main input/output & Workflow role \\
 \midrule
@@ -472,11 +492,11 @@ Node & Main input/output & Workflow role \\
 Node & Main input/output & Workflow role \\
 \midrule
 \endhead
-\texttt{greeting\_node} & Session start / greeting message & Greet the user and enter the chat loop. \\
-\texttt{human\_reply\_node} & User message / branch decision & Take the user's reply and route to general chat, task classification, or ending. \\
-\texttt{task\_classification\_node} & User utterance and object aliases / task intent & Route the input to general chat or the pick (robot task) workflow. \\
-\texttt{ai\_reply\_node} & Chat context / chat response & Generate a general-chat reply with the LLM. \\
-\texttt{chat\_memory\_node} & Latest chat turn / updated chat history & Store the conversation turn and loop back for the next user input. \\
+\texttt{greeting\_node} & Session start / greeting message & Greet the user and enter the General Chat loop. \\
+\texttt{human\_reply\_node} & User message / branch decision & Take the user's reply and route to General Chat, task classification, or ending. \\
+\texttt{task\_classification\_node} & User utterance and object aliases / task intent & Route the input to General Chat or the Mobile Manipulation (robot task) workflow. \\
+\texttt{ai\_reply\_node} & General Chat context / General Chat response & Generate a General Chat reply with the LLM. \\
+\texttt{chat\_memory\_node} & Latest General Chat turn / updated General Chat history & Store the General Chat turn and loop back for the next user input. \\
 \texttt{goodbye\_node} & End signal / closing message & Produce the closing response and end the session. \\
 \midrule
 \texttt{input\_node} & User request and object list / requested object & Resolve the target object class or related object option. \\
@@ -495,9 +515,9 @@ Node & Main input/output & Workflow role \\
 \end{longtable}
 \endgroup
 
-\begin{algorithmblock}{Complete pick workflow}
-\item Classify the user utterance. If it is general chat, answer conversationally and wait for the next utterance.
-\item For a pick task, parse the requested object and read the latest world position data.
+\begin{algorithmblock}{Complete Mobile Manipulation workflow}
+\item Classify the user utterance. If it is General Chat, answer conversationally and wait for the next utterance.
+\item For a Mobile Manipulation task, parse the requested object and read the latest world position data.
 \item Lock the target instance. If multiple instances match, ask the user to select one using the candidate views.
 \item Send the selected instance and room-camera evidence to the item-information agent.
 \item Generate ranked goal\_poses and navigate to the highest-ranked feasible candidate.
@@ -752,7 +772,7 @@ car\_approach\_node 是抓取 pipeline 中將候選 grasp pose 轉換為實際�
 
 \paragraph{major\_nav\_node}
 
-在 pick workflow 中，系統不假設第一個候選 goal\_pose 一定能完成任務。若機器人抵達目前候選點後，車載相機觀察結果不佳，例如目標物未出現在畫面中、受到遮擋，或 VLM 判斷目前視角不適合進入抓取流程，系統便會切換至下一個候選 goal\_pose。
+在 Mobile Manipulation workflow 中，系統不假設第一個候選 goal\_pose 一定能完成任務。若機器人抵達目前候選點後，車載相機觀察結果不佳，例如目標物未出現在畫面中、受到遮擋，或 VLM 判斷目前視角不適合進入抓取流程，系統便會切換至下一個候選 goal\_pose。
 
 此流程由 major\_nav\_node 負責。major\_nav\_node 會從 ranked goal\_poses 中選取下一個尚未嘗試的候選點，並將其更新為新的 navigation goal。接著，workflow 會再次呼叫 nav\_move\_node，使機器人依照新的 goal\_pose 導航至下一個停靠位置。令排序後的候選點為 $G=\{g^{(1)},\ldots,g^{(K)}\}$、目前嘗試第 $k$ 個，則切換更新為 $k\leftarrow k+1,\; g_t\leftarrow g^{(k)}$。
 
@@ -760,7 +780,7 @@ car\_approach\_node 是抓取 pipeline 中將候選 grasp pose 轉換為實際�
 
 \subsubsection{執行歷程記錄}
 
-在本研究的 pick workflow 中，update\_memory\_node 的目的是將最近一次導航、觀察或抓取嘗試整理成下一輪決策可用的執行歷程摘要。由於任務可能經歷多次候選點切換與抓取嘗試，若系統不記錄先前結果，就可能在相同視角或相同失敗條件下重複執行相同動作。因此，update\_memory\_node 會將最近一次執行的 action、VLM reasoning、執行結果、成功與否，以及關鍵失敗資訊整理後寫入 history buffer，並供後續 reason node 建立 prompt 時使用。執行歷程可表示為有界歷史序列
+在本研究的 Mobile Manipulation workflow 中，update\_memory\_node 的目的是將最近一次導航、觀察或抓取嘗試整理成下一輪決策可用的執行歷程摘要。由於任務可能經歷多次候選點切換與抓取嘗試，若系統不記錄先前結果，就可能在相同視角或相同失敗條件下重複執行相同動作。因此，update\_memory\_node 會將最近一次執行的 action、VLM reasoning、執行結果、成功與否，以及關鍵失敗資訊整理後寫入 history buffer，並供後續 reason node 建立 prompt 時使用。執行歷程可表示為有界歷史序列
 \begin{equation}
     m_{t+1}=\operatorname{Keep}_{K}\left(m_t\cup\{(a_t,r_t,e_t,\eta_t)\}\right),
 \end{equation}
@@ -946,7 +966,7 @@ coffee & 桌上 & (0.998, 0.448, 7.423) & (0, 90.046, 0) \\
 
 第一個平台負責需要較高運算資源的幾何與抓取推論，相關服務部署在 NVIDIA GeForce RTX 3090 的運算平台上。此平台以 A2A server 形式提供Size Dimension 估計與抓取姿態生成服務，集中執行 \texttt{get\_item\_info\_agent\_no\_sam3d} 與 \texttt{grasp\_agent}，並輸出 Size Dimension、ranked goal\_poses 與 6-DoF grasp pose。將此類高成本推論集中於獨立平台，可避免主控端承擔大型模型與抓取生成所需的運算負載。
 
-第二個平台負責語意推論，相關 VLM/LLM 服務部署在 Mac mini M4 Pro 上，並透過 Ollama 提供 task classifier、general chat 與 reason node 所需之模型推論服務。
+第二個平台負責語意推論，相關 VLM/LLM 服務部署在 Mac mini M4 Pro 上，並透過 Ollama 提供 task classifier、General Chat 與 reason node 所需之模型推論服務。
 
 第三個平台為系統主控平台，主要 workflow 與即時控制流程部署在 AMD Ryzen AI 7 350 平台上，負責上述幾何／抓取推論與語意推論服務以外的流程，包含 Unity 數位孿生環境、ROS2/Nav2 導航控制，以及與感測、定位和機器人控制緊密相關的模組。
 
@@ -956,7 +976,7 @@ coffee & 桌上 & (0.998, 0.448, 7.423) & (0, 90.046, 0) \\
 本研究實驗主流程使用的模型可分為高層語意決策、物件偵測與分割、Size Dimension 估計、抓取姿態生成四類，以下依模組分別說明從程式與設定檔中可確認的模型、版本與用途。為避免混淆，本章只將 A0--A3 主流程實際呼叫的 no-SAM3D item-info 與 grasp agent 列為實驗模型；legacy SAM3D/full 3D pipeline 雖仍保留於程式庫中，但未納入本章消融結果分析。
 
 \begin{itemize}
-  \item \textbf{Ollama}：高層語意決策與對話相關之模型皆透過 Ollama 的 OpenAI-compatible API 提供。其中，車載影像觀察後的 VLM reason node 與一般聊天對話皆使用 \texttt{gemma3:12b}；task classifier 則使用 \texttt{qwen2.5-coder:3b}，用於判斷使用者輸入屬於 general chat 或 specific robot task。
+  \item \textbf{Ollama}：高層語意決策與對話相關之模型皆透過 Ollama 的 OpenAI-compatible API 提供。其中，車載影像觀察後的 VLM reason node 與一般聊天對話皆使用 \texttt{gemma3:12b}；task classifier 則使用 \texttt{qwen2.5-coder:3b}，用於判斷使用者輸入屬於 General Chat 或 specific robot task。
   \item \textbf{YOLO}：目標物偵測模型採用 Ultralytics YOLO26~\cite{ultralytics_yolo}，並以 Roboflow 平台進行訓練。訓練時使用 Train from COCO Pretrained Weights 設定，使模型以 COCO 預訓練權重作為初始化，再針對本研究所需之居家物件資料集進行微調。訓練完成後，模型在 valid set 上的偵測表現如表~\ref{tab:yolo-metrics} 所示。
   \item \textbf{SAM}：影像分割模型採用 Segment Anything Model（SAM）~\cite{sam}，並使用 ViT-Base backbone 進行 bounding box prompt segmentation。系統會將 YOLO 偵測到的 bounding box 作為 SAM 的 prompt，進一步產生目標物 mask。
   \item \textbf{GraspGen}：抓取姿態生成採用 GraspGen runtime~\cite{graspgen}，根據 target point cloud 與 scene point cloud 產生多組 6-DoF grasp candidates，並透過 collision filtering 移除可能與場景碰撞的候選姿態。實驗中每次取樣 800 個 grasp candidates，並保留前 400 個候選進行後續篩選。GraspGen 在產生與篩選抓取姿態時，需要依據指定的夾爪幾何參數判斷候選姿態是否可執行；本研究使用 Robotiq 2F-140 夾爪設定，其描述夾爪的開口範圍、寬度、深度、接近方向與接觸區域等資訊。這些參數會影響候選 grasp pose 的尺度判斷與碰撞檢查結果，因此決定哪些抓取姿態會被保留下來作為後續執行候選。
@@ -988,18 +1008,41 @@ mAP@50 & Precision & Recall & F1-score \\
 
 \begin{itemize}
   \item \textbf{A0（完整系統，our method）}：保留第三章所述之 VLM observe--reason 決策、多候選 ranked goal\_poses、Size Dimension 估計與 GraspGen 抓取 pipeline，作為完整方法基線。
-  \item \textbf{A1（w/o VLM）}：移除 VLM 車載觀察與高層決策，改以固定流程對每個 ranked goal\_pose 依序執行一次接近與抓取；若失敗便切換至下一個 ranked goal\_pose，重複此流程直到夾取成功或所有 ranked goal\_pose 皆嘗試完畢。
-  \item \textbf{A2（w/o ranked goal\_poses）}：仍保留Size Dimension 估計所產生的多個候選 goal\_pose，但移除其排序與失敗換點機制；在這些候選各自的停靠位置中，僅保留在 ROS 地圖 XY 平面上「停靠位置距目標中心最近」的一個，作為唯一停靠點。由於只剩單一候選，第一次接近或抓取失敗後即無法再透過 major navigation 切換至其他停靠點或觀察視角。
-  \item \textbf{A3（w/o Size Dimension estimation）}：移除Size Dimension 估計，不呼叫 item-info A2A 服務估計物體尺寸、yaw、grasp direction 與候選品質。改為僅依目標中心與 ROS keepout map 產生候選停靠點：以目標中心為原點，朝外推一段固定距離（即 stand-off，預設 $0.6$ m），在 $8$ 個等分方向（每隔 $45^{\circ}$）各取一個候選點，並捨棄在 keepout map 上車體無法停放（footprint 範圍內含障礙）的方向。保留下來的候選點其排序僅依方向角的固定幾何順序給定（rank 即方向先後，並非如 A0 依抓取可行性與品質排序），車體朝向則一律面向目標中心。
+  \item \textbf{A1（w/o VLM）}：移除 VLM 車載觀察與高層決策，改以固定流程對每個 ranked goal\_pose 依序執行一次接近與抓取；若失敗便切換至下一個 ranked goal\_pose，重複此流程直到夾取成功或所有 ranked goal\_pose 皆嘗試完畢。其流程如圖~\ref{fig:ablation-a1} 所示。
+  \item \textbf{A2（w/o ranked goal\_poses）}：仍保留Size Dimension 估計所產生的多個候選 goal\_pose，但移除其排序與失敗換點機制；在這些候選各自的停靠位置中，僅保留在 ROS 地圖 XY 平面上「停靠位置距目標中心最近」的一個，作為唯一停靠點。由於只剩單一候選，第一次接近或抓取失敗後即無法再透過 major navigation 切換至其他停靠點或觀察視角。其流程如圖~\ref{fig:ablation-a2} 所示。
+  \item \textbf{A3（w/o Size Dimension estimation）}：移除Size Dimension 估計，不呼叫 item-info A2A 服務估計物體尺寸、yaw、grasp direction 與候選品質。改為僅依目標中心與 ROS keepout map 產生候選停靠點：以目標中心為原點，朝外推一段固定距離（即 stand-off，預設 $0.6$ m），在 $8$ 個等分方向（每隔 $45^{\circ}$）各取一個候選點，並捨棄在 keepout map 上車體無法停放（footprint 範圍內含障礙）的方向。保留下來的候選點其排序僅依方向角的固定幾何順序給定（rank 即方向先後，並非如 A0 依抓取可行性與品質排序），車體朝向則一律面向目標中心。其流程如圖~\ref{fig:ablation-a3} 所示。
 \end{itemize}
 
 四組條件皆保留相同任務目標、物件集合、實驗場景與成功判定方式，使結果差異主要反映被移除機制對閉環流程的影響。
+
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=\linewidth]{figure/system/A1.png}
+    \caption{消融實驗 A1 流程圖。}
+    \label{fig:ablation-a1}
+\end{figure}
+
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=\linewidth]{figure/system/A2.png}
+    \caption{消融實驗 A2 流程圖。}
+    \label{fig:ablation-a2}
+\end{figure}
+
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=\linewidth]{figure/system/A3.png}
+    \caption{消融實驗 A3 流程圖。}
+    \label{fig:ablation-a3}
+\end{figure}
 
 \subsubsection{Measurement of System Performance}
 
 本研究針對五種日常物件進行測試，包含 apple、doll、box、coffee 與 cup。每一組實驗條件對每個物件執行 $10$ 次 trial，因此每組條件共 $50$ 次 trial。四組消融設定 A0--A3 合計 $200$ 次 trial。實驗結果由 workflow 自動輸出的結構化結果紀錄彙整而來，每筆紀錄包含任務最終狀態、任務耗時、節點執行序列、候選 goal\_pose 使用數、導航結果、抓取結果、接近結果與失敗原因。
 
-令第 $i$ 次 trial 的任務成功指標為 $S_i\in\{0,1\}$，其中 $S_i=1$ 表示該 trial 的最終任務狀態判定為成功。在總 trial 數為 $N$ 的條件下，任務成功率定義為
+本研究將 Task Success 定義為：機器人成功抓取使用者指定的目標物，並在持續持有該物體的情況下返回預設的 home pose。亦即，任務完成須同時滿足目標物辨識正確、抓取成功，以及返航完成三項條件。若抓取錯誤物體、抓取後物體掉落、無法返回 home pose，或流程因候選 goal\_pose 耗盡而終止，皆判定為任務失敗。
+
+令第 $i$ 次 trial 的任務成功指標為 $S_i\in\{0,1\}$，其中 $S_i=1$ 表示該 trial 滿足上述 Task Success 定義；其餘情況則令 $S_i=0$。在總 trial 數為 $N$ 的條件下，任務成功率定義為
 \begin{equation}
     R_{\mathrm{task}}=\frac{1}{N}\sum_{i=1}^{N}S_i.
 \end{equation}
